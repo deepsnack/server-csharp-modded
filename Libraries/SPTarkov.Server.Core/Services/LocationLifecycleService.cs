@@ -509,7 +509,10 @@ public class LocationLifecycleService(
             // Update raid data with new location data
             var profileActivityRaidData = profileActivityService.GetProfileActivityRaidData(sessionId);
             profileActivityRaidData.LocationTransit = request.LocationTransit;
-            profileActivityRaidData.RaidConfiguration?.Location = locationName;
+            if (profileActivityRaidData.RaidConfiguration != null)
+            {
+                profileActivityRaidData.RaidConfiguration.Location = locationName;
+            }
         }
 
         if (!isPmc)

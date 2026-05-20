@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using SPTarkov.DI.Annotations;
@@ -29,6 +30,62 @@ public class SaveServer(
 )
 {
     protected const string profileFilepath = "user/profiles/";
+
+    /// <summary>
+    /// 根据SessionId获取用户名
+    /// </summary>
+    public string? GetUsernameBySessionId(MongoId sessionId)
+    {
+        if (profiles.TryGetValue(sessionId, out var profile) && profile.ProfileInfo != null)
+        {
+            return profile.ProfileInfo.Username;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 根据用户名获取SessionId
+    /// </summary>
+    public MongoId? GetSessionIdByUsername(string username)
+    {
+        foreach (var kvp in profiles)
+        {
+            if (kvp.Value.ProfileInfo?.Username == username)
+            {
+                return kvp.Key;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 获取profile文件路径（优先使用用户名命名，如果没有用户名则使用MongoId）
+    /// </summary>
+    private string GetProfileFilePath(MongoId sessionId)
+    {
+        var username = GetUsernameBySessionId(sessionId);
+        if (!string.IsNullOrEmpty(username))
+        {
+            // 清理用户名中的非法文件名字符
+            var safeUsername = SanitizeFileName(username);
+            return Path.Combine(profileFilepath, $"{safeUsername}.json");
+        }
+        return Path.Combine(profileFilepath, $"{sessionId}.json");
+    }
+
+    /// <summary>
+    /// 清理文件名中的非法字符
+    /// </summary>
+    private string SanitizeFileName(string fileName)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sanitized = new StringBuilder(fileName);
+        foreach (var c in invalidChars)
+        {
+            sanitized.Replace(c, '_');
+        }
+        return sanitized.ToString();
+    }
 
     // onLoad = require("../bindings/SaveLoad");
     [Obsolete("This will be removed in the next version of SPT")]
@@ -76,11 +133,19 @@ public class SaveServer(
         var stopwatch = Stopwatch.StartNew();
         foreach (var file in files)
         {
-            // Only allow files that fit the criteria of being a mongo id be parsed
+            // 支持MongoId格式和用户名格式的文件名
             var filename = Path.GetFileNameWithoutExtension(file);
+            var filePath = fileUtil.StripExtension(file);
+            
+            // 如果文件名是有效的MongoId
             if (MongoId.IsValidMongoId(filename))
             {
-                await LoadProfileAsync(fileUtil.StripExtension(file));
+                await LoadProfileAsync(filePath);
+            }
+            else
+            {
+                // 尝试作为用户名文件加载（文件名不是有效的MongoId）
+                await LoadProfileByUsernameAsync(filePath, filename);
             }
         }
 
@@ -88,6 +153,60 @@ public class SaveServer(
         if (logger.IsLogEnabled(LogLevel.Debug))
         {
             logger.Debug($"{files.Count()} Profiles took: {stopwatch.ElapsedMilliseconds}ms to load.");
+        }
+    }
+
+    /// <summary>
+    /// 通过用户名加载profile文件
+    /// </summary>
+    private async Task LoadProfileByUsernameAsync(string filePath, string username)
+    {
+        try
+        {
+            var profile = jsonUtil.DeserializeFromFile<SptProfile>(filePath);
+            
+            // 从文件内容中获取MongoId
+            // 检查ProfileId是否有值且不为空
+            if (profile?.ProfileInfo?.ProfileId.HasValue == true && !profile.ProfileInfo.ProfileId.Value.IsEmpty)
+            {
+                // 从可空类型中获取非空的MongoId作为sessionId
+                var sessionId = profile.ProfileInfo.ProfileId.Value;
+                
+                // 验证profile是否有效并执行数据迁移
+                var jsonNode = JsonNode.Parse(jsonUtil.Serialize(profile));
+                if (jsonNode is JsonObject jsonObj)
+                {
+                    var validatedProfile = profileValidatorService.MigrateAndValidateProfile(jsonObj);
+                    if (validatedProfile.ProfileInfo?.InvalidOrUnloadableProfile ?? false)
+                    {
+                        logger.Warning($"Profile {username} has validation errors");
+                        profile.ProfileInfo.InvalidOrUnloadableProfile = true;
+                    }
+                    // sessionId已经是非空MongoId，可以安全作为字典键
+                    profiles[sessionId] = validatedProfile;
+                }
+                else
+                {
+                    // sessionId已经是非空MongoId，可以安全作为字典键
+                    profiles[sessionId] = profile;
+                }
+                
+                // Run callbacks
+                foreach (var callback in saveLoadRouters)
+                {
+                    profiles[sessionId] = callback.HandleLoad(GetProfile(sessionId));
+                }
+                
+                logger.Info($"Loaded profile: {username} (SessionId: {sessionId})");
+            }
+            else
+            {
+                logger.Warning($"Profile file {username}.json does not contain valid MongoId in info.id");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Failed to load profile {username}: {ex.Message}");
         }
     }
 
@@ -291,7 +410,8 @@ public class SaveServer(
         Stopwatch start;
         try
         {
-            var filePath = Path.Combine(profileFilepath, $"{sessionID}.json");
+            // 使用用户名作为文件名（如果可用）
+            var filePath = GetProfileFilePath(sessionID);
 
             // Run pre-save callbacks before we save into json
             foreach (var callback in onBeforeSaveCallbacks)
@@ -335,17 +455,27 @@ public class SaveServer(
     /// <returns> True if successful </returns>
     public bool RemoveProfile(MongoId sessionID)
     {
-        var file = Path.Combine(profileFilepath, $"{sessionID}.json");
+        // 获取用户名（用于删除用户名命名的文件）
+        var username = GetUsernameBySessionId(sessionID);
+        
+        // 尝试删除MongoId命名的文件
+        var mongoIdFile = Path.Combine(profileFilepath, $"{sessionID}.json");
+        fileUtil.DeleteFile(mongoIdFile);
+        
+        // 尝试删除用户名命名的文件
+        if (!string.IsNullOrEmpty(username))
+        {
+            var safeUsername = SanitizeFileName(username);
+            var usernameFile = Path.Combine(profileFilepath, $"{safeUsername}.json");
+            fileUtil.DeleteFile(usernameFile);
+        }
+
         if (profiles.ContainsKey(sessionID))
         {
             profiles.TryRemove(sessionID, out _);
-            if (!fileUtil.DeleteFile(file))
-            {
-                logger.Error($"Unable to delete file, not found: {file}");
-            }
         }
 
-        return !fileUtil.FileExists(file);
+        return true;
     }
 
     /// <summary>

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Launcher;
@@ -71,6 +73,9 @@ public class LauncherV2Controller(
     /// <returns></returns>
     public async Task<bool> Register(RegisterData info)
     {
+        if (!CoreConfig.Features.AllowRegistration)
+            return false;
+
         foreach (var (_, profile) in saveServer.GetProfiles())
         {
             if (info.Username == profile.ProfileInfo!.Username)
@@ -139,6 +144,7 @@ public class LauncherV2Controller(
             ScavengerId = scavId,
             Aid = hashUtil.GenerateAccountId(),
             Username = info.Username,
+            Password = EncryptPassword(info.Password ?? string.Empty),
             IsWiped = true,
             Edition = info.Edition,
         };
@@ -155,13 +161,27 @@ public class LauncherV2Controller(
     {
         foreach (var (sessionId, profile) in saveServer.GetProfiles())
         {
-            if (info.Username == profile.ProfileInfo!.Username)
-            {
+            if (info.Username != profile.ProfileInfo!.Username)
+                continue;
+
+            var storedPassword = profile.ProfileInfo.Password ?? string.Empty;
+            var inputPassword = info.Password ?? string.Empty;
+
+            // Legacy profiles with no stored password: allow login
+            if (string.IsNullOrEmpty(storedPassword))
                 return sessionId;
-            }
+
+            return storedPassword == EncryptPassword(inputPassword) ? sessionId : MongoId.Empty();
         }
 
         return MongoId.Empty();
+    }
+
+    protected string EncryptPassword(string password)
+    {
+        using var sha256 = SHA256.Create();
+        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+        return BitConverter.ToString(hashBytes).Replace("-", string.Empty);
     }
 
     public SptProfile GetProfile(MongoId sessionId)

@@ -93,6 +93,9 @@ public record Info
     [JsonPropertyName("username")]
     public string? Username { get; set; }
 
+    [JsonPropertyName("password")]
+    public string? Password { get; set; }
+
     [JsonPropertyName("wipe")]
     public bool? IsWiped { get; set; }
 

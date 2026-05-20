@@ -217,18 +217,30 @@ public class ImporterUtil(ISptLogger<ImporterUtil> logger, FileUtil fileUtil, Js
         }
         else
         {
+            var cleanPropertyName = fileUtil.StripExtension(propertyName);
+            var lowerFileName = cleanPropertyName.ToLowerInvariant();
+            
+            // 尝试多种匹配方式：
+            // 1. 直接小写匹配（原有逻辑，保持向后兼容）
+            // 2. 将 snake_case 移除下划线后小写匹配（email_mapping -> emailmapping）
             var matchedProperty = type.GetProperties()
                 .FirstOrDefault(prop =>
                     string.Equals(
                         prop.Name.ToLowerInvariant(),
-                        fileUtil.StripExtension(propertyName).ToLowerInvariant(),
+                        lowerFileName,
+                        StringComparison.Ordinal
+                    )
+                    ||
+                    string.Equals(
+                        prop.Name.ToLowerInvariant(),
+                        lowerFileName.Replace("_", ""),
                         StringComparison.Ordinal
                     )
                 );
 
             if (matchedProperty == null)
             {
-                throw new Exception($"Unable to find property '{fileUtil.StripExtension(propertyName)}' for type '{type.Name}'");
+                throw new Exception($"Unable to find property '{cleanPropertyName}' for type '{type.Name}'");
             }
 
             propertyType = matchedProperty.PropertyType;

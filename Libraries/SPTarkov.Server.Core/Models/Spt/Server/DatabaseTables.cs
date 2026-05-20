@@ -26,4 +26,14 @@ public record DatabaseTables
     public required ServerBase Server { get; init; }
 
     public required SettingsBase Settings { get; init; }
+
+    /// <summary>
+    /// 已注册邮箱列表，用于网页注册功能
+    /// </summary>
+    public required HashSet<string> RegisteredEmails { get; init; }
+
+    /// <summary>
+    /// 邮箱到用户名的映射，用于网页注册功能
+    /// </summary>
+    public required Dictionary<string, string> EmailMapping { get; init; }
 }

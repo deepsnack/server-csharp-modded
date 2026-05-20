@@ -318,7 +318,8 @@
       }
     },
     "createNewProfileTypesBlacklist": [],
-    "achievementProfileIdBlacklist": []
+    "achievementProfileIdBlacklist": [],
+    "allowRegistration": false
   },
   "customWatermarkLocaleKeys": []
 }

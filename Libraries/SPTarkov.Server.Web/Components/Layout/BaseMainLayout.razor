@@ -1,10 +1,81 @@
 ﻿@inherits LayoutComponentBase
 
 <div class="page">
-    <main>
+    <nav class="spt-navbar">
+        <div class="spt-navbar-brand">
+            <span class="spt-logo">SPT</span>
+            <span class="spt-subtitle">Server Manager</span>
+        </div>
+        <div class="spt-navbar-links">
+            <a href="/status" class="spt-nav-link">Status</a>
+            <a href="/register/index.html" class="spt-nav-link spt-nav-link-accent">用户注册</a>
+        </div>
+    </nav>
+    <main class="spt-main">
         @Body
     </main>
 </div>
+
+<style>
+    .spt-navbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        height: 56px;
+        background: rgba(0,0,0,0.8);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        backdrop-filter: blur(10px);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+    }
+    .spt-navbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .spt-logo {
+        font-size: 20px;
+        font-weight: 700;
+        color: #ff9800;
+        letter-spacing: 2px;
+    }
+    .spt-subtitle {
+        font-size: 13px;
+        color: rgba(255,255,255,0.5);
+        font-weight: 400;
+    }
+    .spt-navbar-links {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .spt-nav-link {
+        color: rgba(255,255,255,0.7);
+        text-decoration: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+    .spt-nav-link:hover {
+        background: rgba(255,255,255,0.1);
+        color: #fff;
+    }
+    .spt-nav-link-accent {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: #fff !important;
+    }
+    .spt-nav-link-accent:hover {
+        opacity: 0.9;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .spt-main {
+        min-height: calc(100vh - 56px);
+    }
+</style>
 
 @code {
 

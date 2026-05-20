@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
@@ -67,9 +69,10 @@ public class LauncherController(
     }
 
     /// <summary>
+    /// Get account info by session id without re-verifying password
     /// </summary>
     /// <param name="sessionId">Session/Player id</param>
-    /// <returns></returns>
+    /// <returns>Account information</returns>
     public Info? Find(MongoId sessionId)
     {
         return saveServer.GetProfiles().TryGetValue(sessionId, out var profile) ? profile.ProfileInfo : null;
@@ -79,18 +82,52 @@ public class LauncherController(
     /// </summary>
     /// <param name="info"></param>
     /// <returns></returns>
-    public MongoId Login(LoginRequestData? info)
+    public async Task<MongoId> LoginAsync(LoginRequestData? info)
     {
+        MongoId result = MongoId.Empty();
+
         foreach (var (sessionId, profile) in saveServer.GetProfiles())
         {
             var account = profile.ProfileInfo;
-            if (info?.Username == account?.Username)
+            if (info?.Username != account?.Username)
             {
-                return sessionId;
+                continue;
             }
+
+            // 获取存储的密码和用户输入的密码
+
+            var storedPassword = account?.Password ?? string.Empty;
+            var inputPassword = info?.Password ?? string.Empty;
+
+            // 如果存储的密码为空，允许登录并将首次输入的密码加密后保存到存档（兼容旧存档和新创建的存档）
+            if (string.IsNullOrEmpty(storedPassword))
+            {
+                if (!string.IsNullOrEmpty(inputPassword))
+                {
+                    // 使用 SHA256 算法加密用户输入的密码并保存
+                    account.Password = EncryptPassword(inputPassword);
+                    await saveServer.SaveAsync();
+                }
+                result = sessionId;
+                break;
+            }
+
+            // 存储的密码不为空，验证密码正确性
+            // 对用户输入的密码进行加密后与存储的密码进行比较
+            var encryptedInputPassword = EncryptPassword(inputPassword);
+            if (storedPassword == encryptedInputPassword)
+            {
+                result = sessionId;
+            }
+            else
+            {
+                // 密码不正确，保持结果为空（登录失败）
+                result = MongoId.Empty();
+            }
+            break;
         }
 
-        return MongoId.Empty();
+        return result;
     }
 
     /// <summary>
@@ -99,6 +136,9 @@ public class LauncherController(
     /// <returns></returns>
     public async Task<MongoId> Register(RegisterData info)
     {
+        if (!CoreConfig.Features.AllowRegistration)
+            return MongoId.Empty();
+
         foreach (var (_, profile) in saveServer.GetProfiles())
         {
             if (info.Username == profile.ProfileInfo?.Username)
@@ -118,12 +158,17 @@ public class LauncherController(
     {
         var profileId = new MongoId();
         var scavId = new MongoId();
+        
+        // 使用 SHA256 算法对密码进行加密
+        var encryptedPassword = EncryptPassword(info.Password);
+        
         var newProfileDetails = new Info
         {
             ProfileId = profileId,
             ScavengerId = scavId,
             Aid = hashUtil.GenerateAccountId(),
             Username = info.Username,
+            Password = encryptedPassword,
             IsWiped = true,
             Edition = info.Edition,
         };
@@ -136,12 +181,34 @@ public class LauncherController(
     }
 
     /// <summary>
+    /// 使用 SHA256 算法对密码进行加密
+    /// </summary>
+    /// <param name="password">原始密码</param>
+    /// <returns>加密后的密码（十六进制字符串）</returns>
+    protected string EncryptPassword(string password)
+    {
+        // 使用 SHA256 算法创建哈希对象
+        using var sha256 = SHA256.Create();
+        
+        // 将密码字符串转换为字节数组
+        var passwordBytes = Encoding.UTF8.GetBytes(password);
+        
+        // 计算密码的哈希值
+        var hashBytes = sha256.ComputeHash(passwordBytes);
+        
+        // 将哈希字节数组转换为十六进制字符串
+        var hashString = BitConverter.ToString(hashBytes).Replace("-", string.Empty);
+        
+        return hashString;
+    }
+
+    /// <summary>
     /// </summary>
     /// <param name="info"></param>
     /// <returns></returns>
-    public MongoId ChangeUsername(ChangeRequestData info)
+    public async Task<MongoId> ChangeUsernameAsync(ChangeRequestData info)
     {
-        var sessionID = Login(info);
+        var sessionID = await LoginAsync(info);
 
         if (!sessionID.IsEmpty)
         {
@@ -151,19 +218,32 @@ public class LauncherController(
         return sessionID;
     }
 
+    public async Task<MongoId> ChangePasswordAsync(ChangeRequestData info)
+    {
+        var sessionId = await LoginAsync(info);
+
+        if (!sessionId.IsEmpty)
+        {
+            saveServer.GetProfile(sessionId).ProfileInfo!.Password = EncryptPassword(info.Change ?? string.Empty);
+            await saveServer.SaveAsync();
+        }
+
+        return sessionId;
+    }
+
     /// <summary>
     ///     Handle launcher requesting profile be wiped
     /// </summary>
     /// <param name="info">Registration data</param>
     /// <returns>Session id</returns>
-    public MongoId Wipe(RegisterData info)
+    public async Task<MongoId> WipeAsync(RegisterData info)
     {
         if (!CoreConfig.AllowProfileWipe)
         {
             return MongoId.Empty();
         }
 
-        var sessionId = Login(info);
+        var sessionId = await LoginAsync(info);
 
         if (!sessionId.IsEmpty)
         {
@@ -173,6 +253,7 @@ public class LauncherController(
 
             // Clear any data modders may have stored
             profileDataService.ClearProfileData(sessionId);
+            await saveServer.SaveAsync();
         }
 
         return sessionId;
@@ -213,6 +294,7 @@ public class LauncherController(
     }
 
     /// <summary>
+    /// Group all mods used by profile grouped by mod name
     /// </summary>
     /// <param name="profileMods"></param>
     /// <returns></returns>
@@ -234,9 +316,6 @@ public class LauncherController(
         var result = new List<ModDetails>();
         foreach (var (modName, modDatas) in modsGroupedByName)
         {
-            var modVersions = modDatas.Select(x => x.Version);
-            // var highestVersion = MaxSatisfying(modVersions, "*"); ?? TODO: Node used SemVer here
-
             var chosenVersion = modDatas.FirstOrDefault(x => x.Name == modName); // && x.Version == highestVersion
             if (chosenVersion is null)
             {

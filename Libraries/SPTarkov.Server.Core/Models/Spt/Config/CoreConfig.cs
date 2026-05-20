@@ -109,6 +109,12 @@ public record CoreConfig : BaseConfig
     /// </summary>
     [JsonPropertyName("customWatermarkLocaleKeys")]
     public List<string>? CustomWatermarkLocaleKeys { get; set; }
+
+    /// <summary>
+    ///     SMTP 邮件配置
+    /// </summary>
+    [JsonPropertyName("smtpConfig")]
+    public SmtpConfig? SmtpConfig { get; set; }
 }
 
 public record BsgLogging
@@ -271,6 +277,12 @@ public record ServerFeatures
     /// </summary>
     [JsonPropertyName("achievementProfileIdBlacklist")]
     public required HashSet<string>? AchievementProfileIdBlacklist { get; set; }
+
+    /// <summary>
+    ///     Allow profile registration through the launcher API. Set to false to require web registration.
+    /// </summary>
+    [JsonPropertyName("allowRegistration")]
+    public bool AllowRegistration { get; set; }
 }
 
 public record ChatbotFeatures
@@ -301,4 +313,46 @@ public record CommandoFeatures
 {
     [JsonPropertyName("giveCommandEnabled")]
     public bool GiveCommandEnabled { get; set; }
+}
+
+/// <summary>
+/// SMTP 邮件配置
+/// </summary>
+public record SmtpConfig
+{
+    /// <summary>
+    /// SMTP 服务器地址
+    /// </summary>
+    [JsonPropertyName("server")]
+    public required string Server { get; set; }
+
+    /// <summary>
+    /// SMTP 服务器端口
+    /// </summary>
+    [JsonPropertyName("port")]
+    public required int Port { get; set; }
+
+    /// <summary>
+    /// 是否使用 SSL
+    /// </summary>
+    [JsonPropertyName("useSsl")]
+    public required bool UseSsl { get; set; }
+
+    /// <summary>
+    /// SMTP 用户名
+    /// </summary>
+    [JsonPropertyName("username")]
+    public required string Username { get; set; }
+
+    /// <summary>
+    /// SMTP 密码
+    /// </summary>
+    [JsonPropertyName("password")]
+    public required string Password { get; set; }
+
+    /// <summary>
+    /// 发件人邮箱地址
+    /// </summary>
+    [JsonPropertyName("senderEmail")]
+    public required string SenderEmail { get; set; }
 }
