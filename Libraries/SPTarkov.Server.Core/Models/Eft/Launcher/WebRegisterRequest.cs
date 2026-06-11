@@ -38,4 +38,10 @@ public record WebRegisterRequest : IRequestData
     /// </summary>
     [JsonPropertyName("edition")]
     public string? Edition { get; set; }
+
+    /// <summary>
+    /// 注册激活码（选填）：有效时锁定为码绑定的版本，注册成功后码失效
+    /// </summary>
+    [JsonPropertyName("activationCode")]
+    public string? ActivationCode { get; set; }
 }

@@ -346,3 +346,14 @@ select option { background: #15130d; color: var(--bone); }
     *, *::before, *::after { animation: none !important; }
     .form-group { opacity: 1; transform: none; }
 }
+
+/* ---- 实时校验提示（N2/N3） ---- */
+.field-hint {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 12px;
+    font-family: "Share Tech Mono", monospace;
+    letter-spacing: 0.5px;
+}
+.field-hint.ok { color: #7dc97f; }
+.field-hint.err { color: #e06c5b; }

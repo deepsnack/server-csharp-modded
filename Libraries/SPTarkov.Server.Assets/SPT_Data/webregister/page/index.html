@@ -51,6 +51,7 @@
                 <div class="form-group" style="--i:3">
                     <label for="username">用户名 <span class="ftag">CALLSIGN · 3-20</span></label>
                     <input type="text" id="username" name="username" placeholder="callsign" required>
+                    <span id="usernameHint" class="field-hint" style="display:none;"></span>
                 </div>
 
                 <div class="form-group" style="--i:4">
@@ -64,6 +65,12 @@
                 </div>
 
                 <div class="form-group" style="--i:6">
+                    <label for="activationCode">激活码 <span class="ftag">ACTIVATION · 选填</span></label>
+                    <input type="text" id="activationCode" name="activationCode" placeholder="XXXX-XXXX-XXXX（无码可留空）" autocomplete="off">
+                    <span id="activationHint" class="field-hint" style="display:none;"></span>
+                </div>
+
+                <div class="form-group" style="--i:7">
                     <label for="version">选择版本 <span class="ftag">EDITION</span></label>
                     <div class="select-wrap">
                         <select id="version" name="version" required>
@@ -73,7 +80,7 @@
                     <span id="versionLockNote" class="version-lock-note" style="display:none;">⚿ 版本已由管理员锁定</span>
                 </div>
 
-                <div class="form-group" style="--i:7">
+                <div class="form-group" style="--i:8">
                     <button type="submit" id="registerBtn" class="register-btn">
                         <span class="btn-label">注&nbsp;册</span>
                         <span class="btn-sub">ENLIST</span>

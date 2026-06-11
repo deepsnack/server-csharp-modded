@@ -28,6 +28,8 @@ public class WebRegisterController(
     HttpResponseUtil httpResponseUtil,
     SaveServer saveServer,
     HashUtil hashUtil,
+    Services.RegisterActivationCodeService activationCodeService,
+    Services.LastLoginService lastLoginService,
     ISptLogger<WebRegisterController> logger
 )
 {
@@ -461,11 +463,34 @@ public class WebRegisterController(
                 };
             }
 
-            // 检查是否为预注册用户；若命中则强制使用锁定版本，忽略客户端传来的版本值
+            // 激活码（N2）：优先级最高，有效时锁定为码绑定的版本（可为普通用户不可见的版本），
+            // 先原子占用（防并发重复用），注册失败时回滚。仍需邮箱验证（上方已校验）。
+            var activationCode = request.ActivationCode?.Trim();
+            var usingActivationCode = !string.IsNullOrEmpty(activationCode);
+            if (usingActivationCode)
+            {
+                var (claimed, codeEdition, codeMessage) = activationCodeService.TryRedeem(
+                    activationCode!,
+                    request.Email!,
+                    request.Username!
+                );
+                if (!claimed)
+                {
+                    return new WebRegisterResponse { Success = false, Message = codeMessage };
+                }
+
+                request = request with { Edition = codeEdition };
+            }
+
+            // 检查是否为预注册用户；若命中则强制使用锁定版本，忽略客户端传来的版本值（激活码优先级更高）
             var preRegistrations = LoadPreRegistrations();
             var emailKey = request.Email!.ToLowerInvariant();
             var isPreRegistered = preRegistrations.TryGetValue(emailKey, out var lockedVersion);
-            if (isPreRegistered)
+            if (usingActivationCode)
+            {
+                // 版本已由激活码锁定，跳过预注册/白名单判断
+            }
+            else if (isPreRegistered)
             {
                 request = request with { Edition = lockedVersion };
             }
@@ -487,6 +512,11 @@ public class WebRegisterController(
             // 否则视为残留的幽灵索引（手动删档或注册中途失败留下），自动清理并放行
             if (saveServer.GetProfiles().Values.Any(p => p.ProfileInfo?.Username == request.Username))
             {
+                if (usingActivationCode)
+                {
+                    activationCodeService.ReleaseCode(activationCode!);
+                }
+
                 return new WebRegisterResponse
                 {
                     Success = false,
@@ -499,6 +529,11 @@ public class WebRegisterController(
 
             if (profileId.IsEmpty)
             {
+                if (usingActivationCode)
+                {
+                    activationCodeService.ReleaseCode(activationCode!);
+                }
+
                 return new WebRegisterResponse
                 {
                     Success = false,
@@ -1290,6 +1325,252 @@ public class WebRegisterController(
         {
             logger.Error($"[WebRegister] Failed to save admin_config.json: {ex.Message}", ex);
         }
+    }
+
+    // ==================== N3：账户名实时校验 ====================
+
+    /// <summary>
+    /// 实时检查用户名是否可用（注册页输入防抖调用；提交时后端仍做最终查重兜底竞态）。
+    /// </summary>
+    [HttpGet("check-username")]
+    public object CheckUsername([FromQuery] string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return new { success = false, available = false, message = "用户名不能为空" };
+        }
+
+        var taken = saveServer.GetProfiles().Values.Any(p => p.ProfileInfo?.Username == username);
+        return new { success = true, available = !taken, message = taken ? "该账户名已被占用" : "该账户名可用" };
+    }
+
+    // ==================== N2：注册激活码（用户端） ====================
+
+    /// <summary>
+    /// 校验激活码有效性（不消耗）；有效时返回锁定版本，注册页据此锁定版本选择。
+    /// </summary>
+    [HttpPost("check-activation-code")]
+    public object CheckActivationCode([FromBody] System.Text.Json.JsonElement request)
+    {
+        var code = request.TryGetProperty("code", out var codeProp) ? codeProp.GetString() : null;
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return new { success = false, valid = false, message = "激活码不能为空" };
+        }
+
+        var (valid, edition, message) = activationCodeService.ValidateCode(code);
+        return new { success = true, valid, edition, message };
+    }
+
+    // ==================== N1：管理员账号管理（搜索 + 删除） ====================
+
+    /// <summary>
+    /// 按用户名/邮箱/profileId 模糊搜索账号。
+    /// </summary>
+    [HttpGet("admin/accounts")]
+    public object AdminSearchAccounts([FromQuery] string? query, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var q = query?.Trim() ?? string.Empty;
+        var results = new List<object>();
+        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        {
+            var username = profile.ProfileInfo?.Username ?? string.Empty;
+            var email = GetEmailByUsername(username) ?? string.Empty;
+            var idString = sessionId.ToString();
+
+            if (
+                q.Length > 0
+                && !username.Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !email.Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !idString.Contains(q, StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                continue;
+            }
+
+            var lastLogin = lastLoginService.Get(sessionId);
+            results.Add(
+                new
+                {
+                    profileId = idString,
+                    username,
+                    email,
+                    edition = profile.ProfileInfo?.Edition,
+                    lastLogin = lastLogin.HasValue ? DateTimeOffset.FromUnixTimeSeconds(lastLogin.Value).UtcDateTime : (DateTime?)null,
+                }
+            );
+        }
+
+        return new { success = true, accounts = results };
+    }
+
+    /// <summary>
+    /// 删除账号：存档文件真删除（force 绕过软重置）+ 释放邮箱记录 + 移除映射，使该邮箱可重新注册。
+    /// </summary>
+    [HttpDelete("admin/accounts/{profileId}")]
+    public object AdminDeleteAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return new { success = false, message = "profileId 无效" };
+        }
+
+        var sessionId = new MongoId(profileId);
+        if (!saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
+        {
+            return new { success = false, message = "账号不存在" };
+        }
+
+        var username = profile.ProfileInfo?.Username ?? string.Empty;
+        var email = GetEmailByUsername(username);
+
+        // 1. 删除存档（内存 + 两种命名的磁盘文件；force 确保软重置开启时也是真删除）
+        saveServer.RemoveProfile(sessionId, force: true);
+
+        // 2. 释放邮箱：从已注册列表移除 + 删除用户名映射，该邮箱即可重新注册
+        if (!string.IsNullOrEmpty(email))
+        {
+            RemoveRegisteredEmail(email);
+        }
+
+        if (!string.IsNullOrEmpty(username))
+        {
+            RemoveEmailMapping(username);
+        }
+
+        // 3. 清理登录时间侧存储
+        lastLoginService.Remove(sessionId);
+
+        logger.Warning($"[WebRegister] 管理员删除账号: {username} ({email ?? "无邮箱"}) profileId={profileId}");
+        return new { success = true, message = $"账号 {username} 已删除，邮箱已释放" };
+    }
+
+    // ==================== N2：注册激活码（管理端） ====================
+
+    [HttpGet("admin/activation-codes")]
+    public object AdminListActivationCodes([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, codes = activationCodeService.ListCodes() };
+    }
+
+    [HttpPost("admin/activation-codes")]
+    public object AdminCreateActivationCodes(
+        [FromBody] System.Text.Json.JsonElement request,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var edition = request.TryGetProperty("edition", out var e) ? e.GetString() : null;
+        if (string.IsNullOrWhiteSpace(edition))
+        {
+            return new { success = false, message = "必须指定绑定版本" };
+        }
+
+        var count = request.TryGetProperty("count", out var c) && c.TryGetInt32(out var n) ? n : 1;
+        var note = request.TryGetProperty("note", out var noteProp) ? noteProp.GetString() : null;
+        DateTime? expiresAt = null;
+        if (request.TryGetProperty("expiresAt", out var exp) && exp.ValueKind == JsonValueKind.String && DateTime.TryParse(exp.GetString(), out var parsed))
+        {
+            expiresAt = parsed.ToUniversalTime();
+        }
+
+        var created = activationCodeService.CreateCodes(edition, count, note, expiresAt);
+        return new { success = true, codes = created };
+    }
+
+    [HttpDelete("admin/activation-codes/{code}")]
+    public object AdminRevokeActivationCode(string code, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return activationCodeService.RevokeCode(code)
+            ? new { success = true, message = "激活码已作废" }
+            : new { success = false, message = "激活码不存在或已使用/已作废" };
+    }
+
+    [HttpGet("admin/activation-codes/logs")]
+    public object AdminGetActivationLogs([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new
+        {
+            success = true,
+            retentionDays = activationCodeService.RetentionDays,
+            logs = activationCodeService.GetLogs(),
+        };
+    }
+
+    [HttpGet("admin/activation-codes/logs/export")]
+    public IActionResult AdminExportActivationLogs([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new UnauthorizedResult();
+        }
+
+        var csv = activationCodeService.ExportLogsCsv();
+        return new FileContentResult(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv)).ToArray(), "text/csv")
+        {
+            FileDownloadName = $"activation-log-{DateTime.UtcNow:yyyyMMddHHmmss}.csv",
+        };
+    }
+
+    [HttpDelete("admin/activation-codes/logs")]
+    public object AdminClearActivationLogs(
+        [FromQuery] string? before,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        DateTime? cutoff = DateTime.TryParse(before, out var parsed) ? parsed.ToUniversalTime() : null;
+        var removed = activationCodeService.ClearLogs(cutoff);
+        return new { success = true, message = $"已删除 {removed} 条日志" };
+    }
+
+    [HttpPost("admin/activation-codes/log-retention")]
+    public object AdminSetActivationLogRetention(
+        [FromBody] System.Text.Json.JsonElement request,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var days = request.TryGetProperty("days", out var d) && d.TryGetInt32(out var n) ? n : 0;
+        activationCodeService.RetentionDays = days;
+        return new { success = true, retentionDays = activationCodeService.RetentionDays, message = days <= 0 ? "日志将不限时保存" : $"日志保留 {days} 天" };
     }
 }
 

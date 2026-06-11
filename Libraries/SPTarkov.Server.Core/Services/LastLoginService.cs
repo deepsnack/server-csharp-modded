@@ -89,4 +89,13 @@ public class LastLoginService(FileUtil fileUtil, JsonUtil jsonUtil)
     {
         return Map.TryGetValue(sessionId.ToString(), out var t) ? t : null;
     }
+
+    /// <summary>移除某账号的登录记录（账号删除时清理）。</summary>
+    public void Remove(MongoId sessionId)
+    {
+        if (Map.TryRemove(sessionId.ToString(), out _))
+        {
+            Save();
+        }
+    }
 }

@@ -104,6 +104,62 @@
                     <tbody id="preregBody"></tbody>
                 </table>
             </section>
+
+            <!-- 账号管理区（N1） -->
+            <section class="section">
+                <h2><span class="sec-no">03</span> 账号管理 <span class="sec-en">ACCOUNT CONTROL</span></h2>
+                <p class="section-desc">按用户名 / 邮箱 / profileId 搜索账号。删除账号 = 存档彻底删除 + 邮箱释放（可重新注册）。</p>
+                <div class="preregister-form">
+                    <input type="text" id="accountQuery" placeholder="搜索用户名 / 邮箱 / profileId">
+                    <button class="primary-btn" onclick="searchAccounts()">搜索</button>
+                </div>
+                <div id="accountMessage" class="message"></div>
+                <table id="accountTable" class="preg-table">
+                    <thead>
+                        <tr><th>用户名</th><th>邮箱</th><th>版本</th><th>最后登录</th><th>操作</th></tr>
+                    </thead>
+                    <tbody id="accountBody"></tbody>
+                </table>
+            </section>
+
+            <!-- 激活码管理区（N2） -->
+            <section class="section">
+                <h2><span class="sec-no">04</span> 注册激活码 <span class="sec-en">ACTIVATION CODES</span></h2>
+                <p class="section-desc">创建绑定特定版本（含普通玩家不可见版本）的激活码。用户注册时输码锁定版本，注册成功后码即失效。</p>
+                <div class="preregister-form">
+                    <div class="select-wrap">
+                        <select id="codeEdition">
+                            <option value="">绑定版本</option>
+                        </select>
+                    </div>
+                    <input type="number" id="codeCount" placeholder="数量" min="1" max="500" value="1" style="max-width:80px;">
+                    <input type="text" id="codeNote" placeholder="备注（选填）">
+                    <button class="primary-btn" onclick="createActivationCodes()">创建</button>
+                </div>
+                <div id="codeMessage" class="message"></div>
+                <table id="codeTable" class="preg-table">
+                    <thead>
+                        <tr><th>激活码</th><th>版本</th><th>状态</th><th>使用邮箱</th><th>使用人</th><th>使用时间</th><th>备注</th><th>操作</th></tr>
+                    </thead>
+                    <tbody id="codeBody"></tbody>
+                </table>
+
+                <h3 class="sub-heading">使用日志 <span class="sec-en">AUDIT LOG</span></h3>
+                <div class="preregister-form">
+                    <span class="section-desc" style="margin:0;">保留期（天，0=不限时）：</span>
+                    <input type="number" id="logRetention" min="0" value="0" style="max-width:80px;">
+                    <button class="primary-btn" onclick="saveLogRetention()">保存</button>
+                    <button class="primary-btn" onclick="exportActivationLogs()">导出 CSV</button>
+                    <button class="delete-btn" onclick="clearActivationLogs()">清空日志</button>
+                </div>
+                <div id="logMessage" class="message"></div>
+                <table id="logTable" class="preg-table">
+                    <thead>
+                        <tr><th>时间</th><th>事件</th><th>激活码</th><th>版本</th><th>邮箱</th><th>用户名</th></tr>
+                    </thead>
+                    <tbody id="logBody"></tbody>
+                </table>
+            </section>
         </div>
 
     </div>

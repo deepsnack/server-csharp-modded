@@ -220,3 +220,14 @@ select option { background: #15130d; color: var(--bone); }
     .preregister-form .primary-btn { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
+
+/* ---- 激活码区子标题（N2） ---- */
+.sub-heading {
+    margin: 28px 0 10px;
+    font-family: "Oswald", sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    color: #c9c2b6;
+}
+.sub-heading .sec-en { font-size: 11px; color: #6f6a5f; margin-left: 8px; }

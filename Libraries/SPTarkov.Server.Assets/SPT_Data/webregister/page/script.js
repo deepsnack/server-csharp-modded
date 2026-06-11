@@ -1,21 +1,124 @@
 let countdownTimer = null;
 let countdownSeconds = 60;
+let usernameTaken = false;       // N3：实时查重结果，占用时禁止提交
+let usernameCheckTimer = null;
+let activationTimer = null;
+let activationValid = false;     // N2：当前输入的激活码是否有效
+let preRegLockVersion = null;    // 预注册锁定的版本
+let codeLockVersion = null;      // 激活码锁定的版本（优先级高于预注册）
 
 document.addEventListener('DOMContentLoaded', function() {
     loadAvailableVersions();
     document.getElementById('sendCodeBtn').addEventListener('click', sendVerificationCode);
     document.getElementById('registerForm').addEventListener('submit', handleRegister);
     document.getElementById('email').addEventListener('blur', checkPreRegistered);
+    // N3：用户名实时查重（防抖 400ms）
+    document.getElementById('username').addEventListener('input', function() {
+        clearTimeout(usernameCheckTimer);
+        usernameCheckTimer = setTimeout(checkUsernameAvailable, 400);
+    });
+    // N2：激活码实时校验（防抖 500ms），命中即锁定版本
+    document.getElementById('activationCode').addEventListener('input', function() {
+        clearTimeout(activationTimer);
+        activationTimer = setTimeout(checkActivationCode, 500);
+    });
 });
+
+// N3：实时查重用户名；占用→红色提示+禁用注册按钮（提交时后端仍兜底最终查重）
+function checkUsernameAvailable() {
+    const username = document.getElementById('username').value.trim();
+    const hint = document.getElementById('usernameHint');
+
+    if (!username || username.length < 3) {
+        usernameTaken = false;
+        hint.style.display = 'none';
+        updateRegisterBtn();
+        return;
+    }
+
+    fetch('/register/api/check-username?username=' + encodeURIComponent(username))
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            usernameTaken = !data.available;
+            hint.textContent = data.message;
+            hint.className = 'field-hint ' + (data.available ? 'ok' : 'err');
+            hint.style.display = 'inline';
+            updateRegisterBtn();
+        })
+        .catch(() => { /* 网络异常不拦截，提交时后端兜底 */ });
+}
+
+// N2：实时校验激活码；有效→锁定为码绑定的版本（优先级高于预注册）
+function checkActivationCode() {
+    const code = document.getElementById('activationCode').value.trim();
+    const hint = document.getElementById('activationHint');
+
+    if (!code) {
+        activationValid = false;
+        codeLockVersion = null;
+        hint.style.display = 'none';
+        applyVersionLock();
+        return;
+    }
+
+    fetch('/register/api/check-activation-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+    })
+    .then(r => r.json())
+    .then(data => {
+        activationValid = !!data.valid;
+        codeLockVersion = data.valid ? data.edition : null;
+        hint.textContent = data.valid ? ('✔ ' + data.message + '（版本锁定: ' + data.edition + '）') : ('✖ ' + data.message);
+        hint.className = 'field-hint ' + (data.valid ? 'ok' : 'err');
+        hint.style.display = 'inline';
+        applyVersionLock();
+    })
+    .catch(() => {
+        activationValid = false;
+        codeLockVersion = null;
+        hint.style.display = 'none';
+        applyVersionLock();
+    });
+}
+
+// 统一应用版本锁定：激活码 > 预注册 > 自由选择
+function applyVersionLock() {
+    const vsel = document.getElementById('version');
+    const note = document.getElementById('versionLockNote');
+    const locked = codeLockVersion || preRegLockVersion;
+
+    if (locked) {
+        // 锁定版本可能不在普通玩家白名单内（隐藏版本），下拉缺失则动态补入
+        const exists = Array.prototype.some.call(vsel.options, function(o) { return o.value === locked; });
+        if (!exists) {
+            const opt = document.createElement('option');
+            opt.value = locked;
+            opt.textContent = locked;
+            vsel.appendChild(opt);
+        }
+        vsel.value = locked;
+        vsel.disabled = true;
+        note.textContent = codeLockVersion ? '⚿ 版本已由激活码锁定' : '⚿ 版本已由管理员锁定';
+        note.style.display = 'inline';
+    } else {
+        vsel.disabled = false;
+        note.style.display = 'none';
+    }
+}
+
+function updateRegisterBtn() {
+    document.getElementById('registerBtn').disabled = usernameTaken;
+}
 
 function checkPreRegistered() {
     const email = document.getElementById('email').value.trim();
-    const vsel = document.getElementById('version');
-    const note = document.getElementById('versionLockNote');
 
     if (!email || !validateEmail(email)) {
-        vsel.disabled = false;
-        note.style.display = 'none';
+        preRegLockVersion = null;
+        applyVersionLock();
         return;
     }
 
@@ -26,30 +129,12 @@ function checkPreRegistered() {
     })
     .then(r => r.json())
     .then(data => {
-        if (data.preRegistered && data.lockedVersion) {
-            // 管理员锁定的版本可能不在普通玩家白名单内（预注册无视限制），
-            // 此时下拉里没有对应 option，直接赋值会静默失败导致 version 为空、
-            // 提交时误报"请选择版本"。若缺失则动态补入该选项再选中。
-            const exists = Array.prototype.some.call(vsel.options, function(o) {
-                return o.value === data.lockedVersion;
-            });
-            if (!exists) {
-                const opt = document.createElement('option');
-                opt.value = data.lockedVersion;
-                opt.textContent = data.lockedVersion;
-                vsel.appendChild(opt);
-            }
-            vsel.value = data.lockedVersion;
-            vsel.disabled = true;
-            note.style.display = 'inline';
-        } else {
-            vsel.disabled = false;
-            note.style.display = 'none';
-        }
+        preRegLockVersion = (data.preRegistered && data.lockedVersion) ? data.lockedVersion : null;
+        applyVersionLock();
     })
     .catch(() => {
-        vsel.disabled = false;
-        note.style.display = 'none';
+        preRegLockVersion = null;
+        applyVersionLock();
     });
 }
 
@@ -141,8 +226,12 @@ function handleRegister(event) {
     const password = document.getElementById('password').value;
     const confirmPassword = document.getElementById('confirmPassword').value;
     const version = document.getElementById('version').value;
+    const activationCode = document.getElementById('activationCode').value.trim();
 
     if (!validateForm(email, verificationCode, username, password, confirmPassword, version)) return;
+
+    if (usernameTaken) { showMessage('该账户名已被占用，请更换', 'error'); return; }
+    if (activationCode && !activationValid) { showMessage('激活码无效，请检查或清空激活码', 'error'); return; }
 
     const registerBtn = document.getElementById('registerBtn');
     registerBtn.disabled = true;
@@ -151,7 +240,7 @@ function handleRegister(event) {
     fetch('/register/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, verificationCode, username, password, edition: version })
+        body: JSON.stringify({ email, verificationCode, username, password, edition: version, activationCode: activationCode || null })
     })
     .then(response => {
         if (!response.ok) throw new Error('注册失败');
@@ -161,6 +250,14 @@ function handleRegister(event) {
         if (data.success) {
             showMessage('注册成功！请使用您的账号在启动器中登录。', 'success');
             document.getElementById('registerForm').reset();
+            usernameTaken = false;
+            activationValid = false;
+            codeLockVersion = null;
+            preRegLockVersion = null;
+            document.getElementById('usernameHint').style.display = 'none';
+            document.getElementById('activationHint').style.display = 'none';
+            applyVersionLock();
+            updateRegisterBtn();
             if (countdownTimer) {
                 clearInterval(countdownTimer);
                 const sendCodeBtn = document.getElementById('sendCodeBtn');
