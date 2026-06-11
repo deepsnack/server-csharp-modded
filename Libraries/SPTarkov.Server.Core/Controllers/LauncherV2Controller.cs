@@ -167,9 +167,15 @@ public class LauncherV2Controller(
             var storedPassword = profile.ProfileInfo.Password ?? string.Empty;
             var inputPassword = info.Password ?? string.Empty;
 
-            // Legacy profiles with no stored password: allow login
+            // Legacy profiles with no stored password: allow login and set first input as password (same as V1)
             if (string.IsNullOrEmpty(storedPassword))
+            {
+                if (!string.IsNullOrEmpty(inputPassword))
+                {
+                    profile.ProfileInfo.Password = EncryptPassword(inputPassword);
+                }
                 return sessionId;
+            }
 
             return storedPassword == EncryptPassword(inputPassword) ? sessionId : MongoId.Empty();
         }

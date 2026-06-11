@@ -46,6 +46,10 @@ public class LauncherStaticRouter(LauncherCallbacks launcherCallbacks, JsonUtil 
                 async (url, info, sessionID, _) => await launcherCallbacks.RemoveProfile(url, info, sessionID)
             ),
             new RouteAction<EmptyRequestData>(
+                "/launcher/profile/session/check",
+                async (url, info, sessionID, _) => await launcherCallbacks.SessionCheck(url, info, sessionID)
+            ),
+            new RouteAction<EmptyRequestData>(
                 "/launcher/profile/compatibleTarkovVersion",
                 async (_, _, _, _) => await launcherCallbacks.GetCompatibleTarkovVersion()
             ),

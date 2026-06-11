@@ -78,6 +78,14 @@ public class LauncherCallbacks(
         return new ValueTask<string>(httpResponseUtil.NoBody("pong!"));
     }
 
+    /// <summary>
+    /// 校验当前会话是否仍有效（不复检密码）；响应格式与原 mod 版保持一致（OK/FAILED）
+    /// </summary>
+    public ValueTask<string> SessionCheck(string url, EmptyRequestData _, MongoId sessionID)
+    {
+        return new ValueTask<string>(launcherController.Find(sessionID) is null ? "FAILED" : "OK");
+    }
+
     public ValueTask<string> RemoveProfile(string url, RemoveProfileData info, MongoId sessionID)
     {
         // 先删除用户的邮箱记录
