@@ -35,7 +35,9 @@ public class TradeHelper(
     ICloner cloner
 )
 {
-    protected static readonly Lock buyLock = new();
+    // per-session 购买锁：不同玩家购买互不阻塞（原 TradeHelperLockPatch transpiler 内联；
+    // 同一 session 内仍串行，保证库存扣减/限购检查的原子性）
+    protected static readonly KeyedLockRegistry<MongoId> buyLocks = new();
 
     /// <summary>
     ///     Buy item from flea or trader
@@ -53,7 +55,7 @@ public class TradeHelper(
         ItemEventRouterResponse output
     )
     {
-        lock (buyLock)
+        lock (buyLocks.Get(sessionID))
         {
             List<Item> offerItems = [];
             Action<int>? buyCallback;
