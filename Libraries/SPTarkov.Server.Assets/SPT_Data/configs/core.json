@@ -322,7 +322,8 @@
     "allowRegistration": false,
     "autoRepairProfiles": true,
     "lazyProfileLoad": false,
-    "fleaTraderCache": true
+    "fleaTraderCache": true,
+    "botSerialGeneration": false
   },
   "customWatermarkLocaleKeys": []
 }

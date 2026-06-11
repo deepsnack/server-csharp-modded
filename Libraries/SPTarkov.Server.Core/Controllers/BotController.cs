@@ -41,6 +41,10 @@ public class BotController(
     protected readonly BotConfig botConfig = configServer.GetConfig<BotConfig>();
     protected readonly PmcConfig pmcConfig = configServer.GetConfig<PmcConfig>();
 
+    // 串行刷怪开关（原 SPT-Optimizations BotSerial 内联；默认关=保持上游并行）：
+    // 串行可显著压低生成期内存峰值/线程争用，代价是生成耗时变长，属服主权衡项
+    protected readonly bool botSerialGeneration = configServer.GetConfig<CoreConfig>().Features.BotSerialGeneration;
+
     /// <summary>
     ///     Return the number of bot load-out varieties to be generated
     /// </summary>
@@ -192,6 +196,25 @@ public class BotController(
         var raidSettings = GetMostRecentRaidSettings(sessionId);
         var allPmcsHaveSameNameAsPlayer = randomUtil.GetChance100(pmcConfig.AllPMCsHavePlayerNameWithRandomPrefixChance);
 
+        // 串行模式：波次间顺序生成（开关默认关，走下方上游并行路径）
+        if (botSerialGeneration)
+        {
+            var serialResults = new List<BotBase?>();
+            foreach (var condition in request.Conditions)
+            {
+                var details = GetBotGenerationDetailsForWave(condition, pmcProfile, allPmcsHaveSameNameAsPlayer, raidSettings);
+                serialResults.AddRange(GenerateBotWave(sessionId, condition, details));
+            }
+
+            stopwatch.Stop();
+            if (logger.IsLogEnabled(LogLevel.Debug))
+            {
+                logger.Debug($"Took {stopwatch.ElapsedMilliseconds}ms to GenerateMultipleBotsAndCache() (serial)");
+            }
+
+            return serialResults;
+        }
+
         // Split each bot wave into its own task
         var waveGenerationTasks = request.Conditions.Select(condition =>
             Task.Run(() =>
@@ -252,14 +275,33 @@ public class BotController(
             );
         }
 
-        var generatedBots = Enumerable
-            .Range(0, botGenerationDetails.BotCountToGenerate)
-            .AsParallel() // Parallelize above range of values so they can each generate a bot
-            .Select(i => TryGenerateSingleBot(sessionId, botGenerationDetails, i))
-            .Where(bot =>
-                bot is not null
-            ) // Skip failed bots
-        ; // Materialise parallel query into data
+        IEnumerable<BotBase?> generatedBots;
+        if (botSerialGeneration)
+        {
+            // 串行模式：逐个 bot 顺序生成并即时物化（保证每个 bot 只生成一次，天然串行）
+            var serialBots = new List<BotBase?>(Math.Max(0, botGenerationDetails.BotCountToGenerate));
+            for (var i = 0; i < botGenerationDetails.BotCountToGenerate; i++)
+            {
+                var bot = TryGenerateSingleBot(sessionId, botGenerationDetails, i);
+                if (bot is not null)
+                {
+                    serialBots.Add(bot);
+                }
+            }
+
+            generatedBots = serialBots;
+        }
+        else
+        {
+            generatedBots = Enumerable
+                .Range(0, botGenerationDetails.BotCountToGenerate)
+                .AsParallel() // Parallelize above range of values so they can each generate a bot
+                .Select(i => TryGenerateSingleBot(sessionId, botGenerationDetails, i))
+                .Where(bot =>
+                    bot is not null
+                ) // Skip failed bots
+            ; // Materialise parallel query into data
+        }
 
         if (logger.IsLogEnabled(LogLevel.Debug))
         {

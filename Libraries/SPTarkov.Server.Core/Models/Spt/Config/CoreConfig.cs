@@ -305,6 +305,14 @@ public record ServerFeatures
     /// </summary>
     [JsonPropertyName("fleaTraderCache")]
     public bool FleaTraderCache { get; set; } = true;
+
+    /// <summary>
+    ///     Generate bot waves serially instead of in parallel. Lowers memory spikes and
+    ///     thread contention during generation at the cost of longer generation time.
+    ///     Default off (upstream parallel behaviour).
+    /// </summary>
+    [JsonPropertyName("botSerialGeneration")]
+    public bool BotSerialGeneration { get; set; }
 }
 
 public record ChatbotFeatures
