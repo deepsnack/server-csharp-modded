@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>战斗通行证 · Battle Pass</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <!-- 登录 -->
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">战斗通行证</h1>
+            <p class="brand-sub">BATTLE&nbsp;PASS&nbsp;//&nbsp;OPERATOR&nbsp;ACCESS</p>
+            <div class="field">
+                <label>账号</label>
+                <input id="login-username" type="text" autocomplete="username" placeholder="账号" />
+            </div>
+            <div class="field">
+                <label>密码</label>
+                <input id="login-password" type="password" autocomplete="current-password" placeholder="密码" />
+            </div>
+            <button id="login-btn" class="btn primary">接入 / LOGIN</button>
+            <p id="login-msg" class="msg"></p>
+        </div>
+    </section>
+
+    <!-- 主界面 -->
+    <section id="main-view" class="view hidden">
+        <header class="topbar">
+            <div class="season-info">
+                <span class="season-name" id="season-name">—</span>
+                <span class="season-timer" id="season-timer"></span>
+            </div>
+            <div class="level-block">
+                <div class="level-badge">LV <span id="bp-level">1</span></div>
+                <div class="xp-bar"><div class="xp-fill" id="xp-fill"></div><span class="xp-text" id="xp-text"></span></div>
+                <span class="premium-flag" id="premium-flag">免费轨</span>
+            </div>
+            <div class="user-block">
+                <span id="bp-username"></span>
+                <a class="btn ghost small" href="titles.html">我的称号</a>
+                <button id="logout-btn" class="btn ghost small">登出</button>
+            </div>
+        </header>
+
+        <main class="content">
+            <!-- 奖励轨 -->
+            <div class="rail-wrap">
+                <div class="rail-labels">
+                    <div class="rail-label free">免费轨</div>
+                    <div class="rail-label premium">付费轨</div>
+                </div>
+                <div class="rail-scroll" id="rail"></div>
+            </div>
+
+            <!-- 满级循环奖励（双轨 · 逐轮可领） -->
+            <div id="cycle-section" class="cycle-section hidden">
+                <div class="cycle-head">
+                    <h2>♾️ 循环奖励</h2>
+                    <span id="cycle-sub" class="cycle-sub"></span>
+                </div>
+                <div class="cycle-preview">
+                    <div class="cycle-track">
+                        <span class="cyc-lbl free">免费轨每轮</span>
+                        <div id="cycle-free-cell" class="cyc-cell"></div>
+                        <button id="cycle-free-all" class="btn ghost small" type="button">一键领取（免费）</button>
+                    </div>
+                    <div class="cycle-track">
+                        <span class="cyc-lbl premium">付费轨每轮</span>
+                        <div id="cycle-premium-cell" class="cyc-cell"></div>
+                        <button id="cycle-premium-all" class="btn ghost small" type="button">一键领取（付费）</button>
+                    </div>
+                </div>
+                <div id="cycle-rounds" class="cycle-rounds"></div>
+            </div>
+
+            <!-- 任务 + 兑换 -->
+            <aside class="side">
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>任务</h2>
+                        <div class="task-tools">
+                            <button id="refresh-daily" class="t-reroll" type="button">刷新每日</button>
+                            <span class="rerolls" id="rerolls"></span>
+                        </div>
+                    </div>
+                    <div id="task-list" class="task-list"></div>
+                </div>
+                <div class="panel">
+                    <div class="panel-head"><h2>兑换激活码</h2></div>
+                    <div class="redeem">
+                        <input id="redeem-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" />
+                        <button id="redeem-btn" class="btn primary small">兑换</button>
+                    </div>
+                    <p id="redeem-msg" class="msg"></p>
+                </div>
+            </aside>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="script.js"></script>
+</body>
+</html>

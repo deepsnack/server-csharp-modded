@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证任务管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">通行证任务</h1>
+            <p class="brand-sub">QUEST&nbsp;EDITOR</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="tasks-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">通行证任务管理</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 管理后台</a>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content task-layout">
+            <!-- 左侧：任务列表 -->
+            <aside class="task-list panel">
+                <div class="panel-head"><h2>任务模板</h2><button id="new-task-btn" class="btn primary small">＋ 新建任务</button></div>
+                <div id="task-rows"></div>
+                <div class="refresh-box">
+                    <div class="refresh-title">活跃任务刷新</div>
+                    <div class="refresh-row">
+                        <select id="refresh-scope">
+                            <option value="daily">每日</option>
+                            <option value="weekly">每周</option>
+                            <option value="season">赛季</option>
+                            <option value="all">全部</option>
+                        </select>
+                    </div>
+                    <input id="refresh-profile" placeholder="Profile ID（留空批量）" />
+                    <button id="refresh-active-tasks" class="btn ghost small">刷新任务</button>
+                </div>
+            </aside>
+
+            <!-- 右侧：编辑器 -->
+            <section class="task-editor panel" id="editor-panel">
+                <div class="panel-head"><h2 id="editor-title">任务编辑器</h2></div>
+                <div class="form-body">
+
+                    <!-- 类型卡片 -->
+                    <div class="type-cards" id="type-cards">
+                        <button class="type-card" data-ct="Kills">
+                            <span class="tc-icon">🎯</span><span class="tc-label">击杀</span><span class="tc-desc">击杀指定阵营/条件敌人</span>
+                        </button>
+                        <button class="type-card" data-ct="Exploration">
+                            <span class="tc-icon">🚪</span><span class="tc-label">撤离/生还</span><span class="tc-desc">进入地图并成功撤离</span>
+                        </button>
+                        <button class="type-card" data-ct="HandoverItem">
+                            <span class="tc-icon">📦</span><span class="tc-label">上交物品</span><span class="tc-desc">上交指定物品给商人</span>
+                        </button>
+                        <button class="type-card" data-ct="FindItem">
+                            <span class="tc-icon">🔍</span><span class="tc-label">寻找物品</span><span class="tc-desc">在战局中找到指定物品</span>
+                        </button>
+                        <button class="type-card" data-ct="PlaceItem">
+                            <span class="tc-icon">📍</span><span class="tc-label">安放物品</span><span class="tc-desc">在某地安放/放置物品</span>
+                        </button>
+                        <button class="type-card" data-ct="VisitZone">
+                            <span class="tc-icon">🗺️</span><span class="tc-label">到达地点</span><span class="tc-desc">去某地图的指定区域</span>
+                        </button>
+                    </div>
+
+                    <!-- 基本信息 -->
+                    <div class="form-row">
+                        <div class="form-col grow">
+                            <label>任务 ID</label>
+                            <div class="input-btn-row">
+                                <input id="f-id" placeholder="唯一标识，留空可自动生成" />
+                                <button id="gen-id-btn" class="btn ghost small" title="按 scope + 类型自动生成">&#x21bb; 自动生成</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-row two-col">
+                        <div class="form-col"><label>标题</label><input id="f-title" placeholder="任务标题" /></div>
+                        <div class="form-col"><label>描述</label><input id="f-desc" placeholder="一句话描述" /></div>
+                    </div>
+                    <div class="form-row four-col">
+                        <div class="form-col">
+                            <label>范围</label>
+                            <select id="f-scope"><option value="daily">每日</option><option value="weekly">每周</option><option value="season">赛季</option></select>
+                        </div>
+                        <div class="form-col">
+                            <label>轮换</label>
+                            <select id="f-rotation"><option value="random">随机池</option><option value="fixed">固定常驻</option></select>
+                        </div>
+                        <div class="form-col">
+                            <label>BP 经验</label><input id="f-xp" type="number" value="500" />
+                        </div>
+                        <div class="form-col">
+                            <label>权重（随机池）</label><input id="f-weight" type="number" value="1" />
+                        </div>
+                    </div>
+
+                    <!-- 目标配置（按类型动态显示） -->
+                    <div id="target-section" class="target-section"></div>
+
+                    <!-- Kills 细粒度选项（仅 Kills 显示） -->
+                    <details class="fine" id="kills-fine" style="display:none">
+                        <summary>细粒度击杀条件（可选）</summary>
+                        <div class="form-body">
+                            <label>目标阵营</label>
+                            <select id="f-target"><option value="Any">任意</option><option value="Savage">Scav</option><option value="AnyPmc">任意 PMC</option><option value="Bear">BEAR</option><option value="Usec">USEC</option><option value="Boss">Boss</option></select>
+                            <label>武器 tpl（逗号分隔）</label><input id="f-weapons" placeholder="如 5448bd6b4bdc2dfc2f8b4569" />
+                            <label>武器口径（逗号）</label><input id="f-calibers" placeholder="Caliber762x39" />
+                            <label>命中部位（逗号，如 Head,Chest）</label><input id="f-bodyparts" placeholder="Head / Chest / Stomach…" />
+                            <label>Scav 角色（逗号，target=Savage 时生效）</label><input id="f-savageroles" placeholder="bossKilla, marksman" />
+                            <div style="display:flex;gap:8px">
+                                <div style="flex:1">
+                                    <label>距离比较 / 阈值(米)</label>
+                                    <div style="display:flex;gap:4px">
+                                        <select id="f-distcompare" style="width:70px"><option value="">不限</option><option value="&gt;=">≥</option><option value="&lt;=">≤</option></select>
+                                        <input id="f-distval" type="number" placeholder="如 100" style="flex:1" />
+                                    </div>
+                                </div>
+                                <div style="flex:1">
+                                    <label>时段从/到（游戏时）</label>
+                                    <div style="display:flex;gap:4px">
+                                        <input id="f-daytimefrom" type="number" placeholder="from" /><input id="f-daytimeto" type="number" placeholder="to" />
+                                    </div>
+                                </div>
+                            </div>
+                            <label>敌人穿戴装备 tpl（逗号）</label><input id="f-enemyequip" />
+                            <label>玩家自身装备 tpl（逗号）</label><input id="f-playerequip" />
+                            <label>武器改装件 tpl（逗号）</label><input id="f-weaponmods" />
+                        </div>
+                    </details>
+
+                    <div class="form-actions">
+                        <button id="save-task" class="btn primary">保存任务</button>
+                        <button id="delete-task" class="btn del" style="display:none">删除</button>
+                        <button id="clear-task" class="btn ghost">清空表单</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="tasks.js"></script>
+</body>
+</html>

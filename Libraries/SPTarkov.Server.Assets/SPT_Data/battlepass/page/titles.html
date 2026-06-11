@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>我的称号 · Battle Pass</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <!-- 登录 -->
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">我的称号</h1>
+            <p class="brand-sub">BATTLE&nbsp;PASS&nbsp;//&nbsp;TITLES</p>
+            <div class="field">
+                <label>账号</label>
+                <input id="login-username" type="text" autocomplete="username" placeholder="账号" />
+            </div>
+            <div class="field">
+                <label>密码</label>
+                <input id="login-password" type="password" autocomplete="current-password" placeholder="密码" />
+            </div>
+            <button id="login-btn" class="btn primary">接入 / LOGIN</button>
+            <p id="login-msg" class="msg"></p>
+        </div>
+    </section>
+
+    <!-- 称号界面 -->
+    <section id="titles-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">我的称号</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证</a>
+            </nav>
+            <div class="user-block">
+                <span id="bp-username"></span>
+                <button id="logout-btn" class="btn ghost small">登出</button>
+            </div>
+        </header>
+
+        <main class="content single">
+            <div class="panel">
+                <div class="panel-head">
+                    <h2>已拥有称号</h2>
+                    <button id="unequip-btn" class="btn ghost small">卸下当前</button>
+                </div>
+                <p class="hint">点击「佩戴」即可在游戏内（及支持的 mod，如 Fika）展示该称号。每次只能佩戴一个。</p>
+                <div id="title-grid" class="title-grid"></div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="titles.js"></script>
+</body>
+</html>

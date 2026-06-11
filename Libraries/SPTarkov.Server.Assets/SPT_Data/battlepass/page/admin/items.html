@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>物品管控 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">物品管控</h1>
+            <p class="brand-sub">ITEM&nbsp;CONTROL</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="items-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">物品获取管控</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <a class="tab" href="flea.html">跳蚤黑名单 →</a>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <div class="items-admin">
+                <!-- 左：搜索 -->
+                <div class="panel">
+                    <div class="panel-head"><h2>物品搜索</h2></div>
+                    <div class="form-body">
+                        <div class="search-row">
+                            <input id="q" placeholder="名称 / tpl（24位）" />
+                            <select id="q-source">
+                                <option value="all">全部</option>
+                                <option value="vanilla">仅原版</option>
+                                <option value="mod">仅 Mod</option>
+                            </select>
+                            <button id="search-btn" class="btn primary small">搜索</button>
+                        </div>
+                        <div id="search-rows" class="search-rows"></div>
+                    </div>
+                </div>
+
+                <!-- 右：获取图谱 + 编辑 -->
+                <div class="panel">
+                    <div class="panel-head"><h2 id="graph-title">获取图谱</h2></div>
+                    <div id="graph-body" class="form-body">
+                        <p class="hint">在左侧搜索并选择一个物品，查看其所有获取途径并增删。</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="items.js"></script>
+</body>
+</html>
