@@ -26,6 +26,7 @@ public class SaveServer(
     ProfileValidatorService profileValidatorService,
     BackupService backupService,
     ProfileAutoRepairService profileAutoRepairService,
+    SoftResetService softResetService,
     ISptLogger<SaveServer> logger,
     ConfigServer configServer
 )
@@ -324,6 +325,9 @@ public class SaveServer(
     public void AddProfile(SptProfile profileDetails)
     {
         profiles.TryAdd(profileDetails.ProfileInfo!.ProfileId!.Value, profileDetails);
+
+        // 软重置：角色重建时合并 sidecar 保留统计（原 AddProfileSoftResetPatch 内联；无 sidecar 时空操作）
+        softResetService.MergePreservedStatsIfPending(profileDetails);
     }
 
     /// <summary>
@@ -460,6 +464,19 @@ public class SaveServer(
     /// <returns> True if successful </returns>
     public bool RemoveProfile(MongoId sessionID)
     {
+        // 软重置（原 RemoveProfileSoftResetPatch 内联）：开启时把"删除存档"改为保留账号身份的进度擦除。
+        // 与 mod 版不同：擦除后的档保留在内存（树内全量加载，无 LazyProfile header 可重注册），
+        // 落盘走 SaveProfileAsync 的用户名命名路径。
+        if (softResetService.Enabled && profiles.TryGetValue(sessionID, out var profileToReset) && profileToReset.ProfileInfo is not null)
+        {
+            softResetService.CaptureSidecar(sessionID, profileToReset);
+            softResetService.WipeProfileContent(profileToReset);
+            profileToReset.ProfileInfo.IsWiped = true;
+            SaveProfileAsync(sessionID).GetAwaiter().GetResult();
+            logger.Warning($"[SoftReset] profile {sessionID} soft-reset instead of deleted (identity preserved, progress wiped)");
+            return true;
+        }
+
         // 获取用户名（用于删除用户名命名的文件）
         var username = GetUsernameBySessionId(sessionID);
         

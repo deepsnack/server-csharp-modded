@@ -20,7 +20,8 @@ public class InRaidHelper(
     InventoryHelper inventoryHelper,
     ConfigServer configServer,
     ICloner cloner,
-    DatabaseService databaseService
+    DatabaseService databaseService,
+    SecureContainerGuardService secureContainerGuardService
 )
 {
     protected static readonly FrozenSet<string> PocketSlots = ["pocket1", "pocket2", "pocket3", "pocket4"];
@@ -71,6 +72,9 @@ public class InRaidHelper(
             throw new InRaidHelperException(message);
         }
 
+        // 安全箱守卫：重建库存前备份服务端安全箱（原 SecureContainerGuard SetInventoryPatch Prefix 内联）
+        var secureContainerBackup = secureContainerGuardService.BackupSecureContainer(serverProfile);
+
         // Store insurance (as removeItem() removes insured items)
         var insured = cloner.Clone(serverProfile.InsuredItems);
         if (insured is null)
@@ -107,6 +111,9 @@ public class InRaidHelper(
 
         serverProfile.Inventory.FastPanel = postRaidProfile.Inventory.FastPanel; // Quick access items bar
         serverProfile.InsuredItems = insured;
+
+        // 安全箱守卫：客户端上报空箱异常时恢复备份（原 SetInventoryPatch Postfix 内联）
+        secureContainerGuardService.RestoreIfAnomalous(sessionId, serverProfile, postRaidProfile, secureContainerBackup);
     }
 
     /// <summary>
