@@ -95,6 +95,10 @@ public static class Program
         Console.OutputEncoding = Encoding.UTF8;
         SetConsoleOutputMode();
 
+        // 提升线程池最小线程数，缓解 ItemEvent/并行存档/WebSocket 广播突发时的线程注入节流（原 SPT-Performance ThreadPoolBoost 内联）
+        var cpuCount = Environment.ProcessorCount;
+        ThreadPool.SetMinThreads(Math.Max(64, cpuCount * 4), Math.Max(64, cpuCount * 2));
+
         // Some users don't know how to create a shortcut...
         if (!IsRunFromInstallationFolder())
         {

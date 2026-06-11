@@ -1,5 +1,6 @@
 ﻿using System.Net;
 using System.Net.Sockets;
+using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
@@ -11,6 +12,7 @@ public class SptLoggerMiddleware(
     RequestDelegate next,
     ServerLocalisationService serverLocalisationService,
     ConfigServer configServer,
+    SaveServer saveServer,
     ISptLogger<SptLoggerMiddleware> logger
 )
 {
@@ -55,31 +57,66 @@ public class SptLoggerMiddleware(
     /// <param name="isLocalRequest">Is this local request</param>
     protected void LogRequest(HttpContext context, IPAddress clientIp, bool isLocalRequest, bool isWSRequest)
     {
+        string text;
         if (isWSRequest)
         {
-            if (isLocalRequest)
-            {
-                logger.Info(serverLocalisationService.GetText("websocket_request", context.Request.Path.Value));
-            }
-            else
-            {
-                logger.Info(
-                    serverLocalisationService.GetText("websocket_request_ip", new { ip = clientIp, url = context.Request.Path.Value })
-                );
-            }
+            text = isLocalRequest
+                ? serverLocalisationService.GetText("websocket_request", context.Request.Path.Value)
+                : serverLocalisationService.GetText("websocket_request_ip", new { ip = clientIp, url = context.Request.Path.Value });
         }
         else
         {
-            if (isLocalRequest)
+            text = isLocalRequest
+                ? serverLocalisationService.GetText("client_request", context.Request.Path.Value)
+                : serverLocalisationService.GetText("client_request_ip", new { ip = clientIp, url = context.Request.Path.Value });
+        }
+
+        logger.Info(text + BuildIdentitySuffix(context));
+    }
+
+    /// <summary>
+    ///     请求日志追加玩家身份后缀 ` [账号:X | 角色:Y]`（原 SPT-ProfileCore LogIdentity 内联）。
+    ///     sessionId 从 PHPSESSID cookie 或 SessionId 头解析；查不到身份时返回空串。
+    /// </summary>
+    protected string BuildIdentitySuffix(HttpContext context)
+    {
+        try
+        {
+            if (!context.Request.Cookies.TryGetValue("PHPSESSID", out var sessionIdString))
             {
-                logger.Info(serverLocalisationService.GetText("client_request", context.Request.Path.Value));
+                sessionIdString = context.Request.Headers.TryGetValue("SessionId", out var headerValues)
+                    ? headerValues.FirstOrDefault()
+                    : null;
             }
-            else
+
+            if (string.IsNullOrEmpty(sessionIdString) || !MongoId.IsValidMongoId(sessionIdString))
             {
-                logger.Info(
-                    serverLocalisationService.GetText("client_request_ip", new { ip = clientIp, url = context.Request.Path.Value })
-                );
+                return string.Empty;
             }
+
+            if (!saveServer.GetProfiles().TryGetValue(new MongoId(sessionIdString), out var profile))
+            {
+                return string.Empty;
+            }
+
+            var username = profile.ProfileInfo?.Username;
+            var nickname = profile.CharacterData?.PmcData?.Info?.Nickname;
+
+            var parts = new List<string>();
+            if (!string.IsNullOrEmpty(username))
+            {
+                parts.Add($"账号: {username}");
+            }
+            if (!string.IsNullOrEmpty(nickname))
+            {
+                parts.Add($"角色: {nickname}");
+            }
+
+            return parts.Count == 0 ? string.Empty : $" [{string.Join(" | ", parts)}]";
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 

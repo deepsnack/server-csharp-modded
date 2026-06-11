@@ -25,6 +25,19 @@ public class HttpServer(
             return;
         }
 
+        // SessionId 头回退：无 PHPSESSID cookie 但带 SessionId 请求头时回填 Cookie 头，
+        // 下游所有 cookie 读取点行为保持一致（原 SPT-ProfileCore SessionHeader 内联）
+        if (!context.Request.Cookies.ContainsKey("PHPSESSID") && context.Request.Headers.TryGetValue("SessionId", out var headerSession))
+        {
+            var headerSessionId = headerSession.FirstOrDefault();
+            if (!string.IsNullOrEmpty(headerSessionId))
+            {
+                var existingCookie = context.Request.Headers.Cookie.ToString();
+                var injected = $"PHPSESSID={headerSessionId}";
+                context.Request.Headers.Cookie = string.IsNullOrEmpty(existingCookie) ? injected : $"{existingCookie}; {injected}";
+            }
+        }
+
         // Use default empty mongoId if not found in cookie
         var sessionId = context.Request.Cookies.TryGetValue("PHPSESSID", out var sessionIdString)
             ? new MongoId(sessionIdString)
