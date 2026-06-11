@@ -297,6 +297,14 @@ public record ServerFeatures
     /// </summary>
     [JsonPropertyName("lazyProfileLoad")]
     public bool LazyProfileLoad { get; set; }
+
+    /// <summary>
+    ///     Cache flea/trader read-only endpoint responses (final HTTP body) with
+    ///     single-flight coalescing; event-driven invalidation + 60s TTL backstop.
+    ///     Default on. See FleaTraderCacheService.
+    /// </summary>
+    [JsonPropertyName("fleaTraderCache")]
+    public bool FleaTraderCache { get; set; } = true;
 }
 
 public record ChatbotFeatures

@@ -19,6 +19,8 @@ public class RagfairCallbacks(
     RagfairController ragfairController,
     RagfairTaxService ragfairTaxService,
     RagfairPriceService ragfairPriceService,
+    FleaTraderCacheService fleaTraderCache,
+    JsonUtil jsonUtil,
     ConfigServer configServer
 ) : IOnLoad, IOnUpdate
 {
@@ -49,6 +51,9 @@ public class RagfairCallbacks(
         // Process all offers / expire offers
         ragfairServer.Update();
 
+        // 跳蚤数据已刷新，事件驱动失效缓存（原 RagfairOnUpdateInvalidatePatch 内联）
+        fleaTraderCache.InvalidateFlea();
+
         return Task.FromResult(true);
     }
 
@@ -62,7 +67,10 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ValueTask<string> Search(string url, SearchRequestData info, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(ragfairController.GetOffers(sessionID, info)));
+        // 高频只读端点缓存 + 并发合并（原 RagfairSearchCachePatch 内联；开关关闭时直通）
+        var key = $"flea:search:{sessionID}:{jsonUtil.Serialize(info)?.GetHashCode()}";
+        var body = fleaTraderCache.GetOrCompute(key, () => httpResponseUtil.GetBody(ragfairController.GetOffers(sessionID, info)));
+        return new ValueTask<string>(body);
     }
 
     /// <summary>
@@ -74,7 +82,13 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetMarketPrice(string url, GetMarketPriceRequestData info, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(ragfairController.GetItemMinAvgMaxFleaPriceValues(info)));
+        // 原 RagfairMarketPriceCachePatch 内联（全局价格，无 session 差异）
+        var key = $"flea:mprice:{jsonUtil.Serialize(info)?.GetHashCode()}";
+        var body = fleaTraderCache.GetOrCompute(
+            key,
+            () => httpResponseUtil.GetBody(ragfairController.GetItemMinAvgMaxFleaPriceValues(info))
+        );
+        return new ValueTask<string>(body);
     }
 
     /// <summary>
@@ -86,7 +100,12 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ItemEventRouterResponse AddOffer(PmcData pmcData, AddOfferRequestData info, MongoId sessionID)
     {
-        return ragfairController.AddPlayerOffer(pmcData, info, sessionID);
+        var response = ragfairController.AddPlayerOffer(pmcData, info, sessionID);
+
+        // 玩家上架 → offer 池变化，清跳蚤缓存（原 RagfairAddOfferInvalidatePatch 内联）
+        fleaTraderCache.InvalidateFlea();
+
+        return response;
     }
 
     /// <summary>
@@ -98,7 +117,12 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ItemEventRouterResponse RemoveOffer(PmcData pmcData, RemoveOfferRequestData info, MongoId sessionID)
     {
-        return ragfairController.FlagOfferForRemoval(info.OfferId, sessionID);
+        var response = ragfairController.FlagOfferForRemoval(info.OfferId, sessionID);
+
+        // 玩家下架 → 清跳蚤缓存（原 RagfairRemoveOfferInvalidatePatch 内联）
+        fleaTraderCache.InvalidateFlea();
+
+        return response;
     }
 
     /// <summary>
@@ -110,7 +134,12 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ItemEventRouterResponse ExtendOffer(PmcData pmcData, ExtendOfferRequestData info, MongoId sessionID)
     {
-        return ragfairController.ExtendOffer(info, sessionID);
+        var response = ragfairController.ExtendOffer(info, sessionID);
+
+        // 玩家续期 → 清跳蚤缓存（原 RagfairExtendOfferInvalidatePatch 内联）
+        fleaTraderCache.InvalidateFlea();
+
+        return response;
     }
 
     /// <summary>
@@ -123,7 +152,9 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetFleaPrices(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(ragfairController.GetAllFleaPrices()));
+        // 原 RagfairFleaPricesCachePatch 内联（全局，无 session 差异）
+        var body = fleaTraderCache.GetOrCompute("flea:prices", () => httpResponseUtil.GetBody(ragfairController.GetAllFleaPrices()));
+        return new ValueTask<string>(body);
     }
 
     /// <summary>

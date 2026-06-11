@@ -1,18 +1,22 @@
-﻿using SPTarkov.DI.Annotations;
+using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
 using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Servers;
+using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Utils;
 
 namespace SPTarkov.Server.Core.Callbacks;
 
 [Injectable(TypePriority = OnLoadOrder.TraderCallbacks)]
-public class TraderCallbacks(HttpResponseUtil httpResponseUtil, TraderController traderController, ConfigServer configServer)
-    : IOnLoad,
-        IOnUpdate
+public class TraderCallbacks(
+    HttpResponseUtil httpResponseUtil,
+    TraderController traderController,
+    FleaTraderCacheService fleaTraderCache,
+    ConfigServer configServer
+) : IOnLoad, IOnUpdate
 {
     protected readonly TraderConfig TraderConfig = configServer.GetConfig<TraderConfig>();
 
@@ -26,6 +30,9 @@ public class TraderCallbacks(HttpResponseUtil httpResponseUtil, TraderController
     {
         traderController.Update();
 
+        // 商人周期重置（restock 等）后清空全部 trader 缓存（原 TraderOnUpdateInvalidatePatch 内联）
+        fleaTraderCache.InvalidateTrader();
+
         return Task.FromResult(true);
     }
 
@@ -34,7 +41,12 @@ public class TraderCallbacks(HttpResponseUtil httpResponseUtil, TraderController
     /// </summary>
     public ValueTask<string> GetTraderSettings(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(traderController.GetAllTraders(sessionID)));
+        // 高频只读端点缓存（原 TraderSettingsCachePatch 内联；开关关闭时直通）
+        var body = fleaTraderCache.GetOrCompute(
+            $"trader:{sessionID}:settings",
+            () => httpResponseUtil.GetBody(traderController.GetAllTraders(sessionID))
+        );
+        return new ValueTask<string>(body);
     }
 
     /// <summary>
@@ -43,7 +55,13 @@ public class TraderCallbacks(HttpResponseUtil httpResponseUtil, TraderController
     public ValueTask<string> GetTrader(string url, EmptyRequestData _, MongoId sessionID)
     {
         var traderID = url.Replace("/client/trading/api/getTrader/", "");
-        return new ValueTask<string>(httpResponseUtil.GetBody(traderController.GetTrader(sessionID, traderID)));
+
+        // 原 TraderGetCachePatch 内联
+        var body = fleaTraderCache.GetOrCompute(
+            $"trader:{sessionID}:get:{traderID}",
+            () => httpResponseUtil.GetBody(traderController.GetTrader(sessionID, traderID))
+        );
+        return new ValueTask<string>(body);
     }
 
     /// <summary>
@@ -53,6 +71,12 @@ public class TraderCallbacks(HttpResponseUtil httpResponseUtil, TraderController
     public ValueTask<string> GetAssort(string url, EmptyRequestData _, MongoId sessionID)
     {
         var traderID = url.Replace("/client/trading/api/getTraderAssort/", "");
-        return new ValueTask<string>(httpResponseUtil.GetBody(traderController.GetAssort(sessionID, traderID)));
+
+        // 原 TraderAssortCachePatch 内联
+        var body = fleaTraderCache.GetOrCompute(
+            $"trader:{sessionID}:assort:{traderID}",
+            () => httpResponseUtil.GetBody(traderController.GetAssort(sessionID, traderID))
+        );
+        return new ValueTask<string>(body);
     }
 }

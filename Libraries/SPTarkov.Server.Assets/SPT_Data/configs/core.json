@@ -321,7 +321,8 @@
     "achievementProfileIdBlacklist": [],
     "allowRegistration": false,
     "autoRepairProfiles": true,
-    "lazyProfileLoad": false
+    "lazyProfileLoad": false,
+    "fleaTraderCache": true
   },
   "customWatermarkLocaleKeys": []
 }

@@ -31,6 +31,7 @@ public class TradeHelper(
     RagfairServer ragfairServer,
     TraderAssortHelper traderAssortHelper,
     TraderPurchasePersisterService traderPurchasePersisterService,
+    FleaTraderCacheService fleaTraderCache,
     ICloner cloner
 )
 {
@@ -238,6 +239,9 @@ public class TradeHelper(
                 httpResponseUtil.AppendErrorToOutput(output, errorMessage, BackendErrorCodes.UnknownTradingError);
             }
         }
+
+        // 购买后该 session 的库存/限购变化 → 只清该 session 的商人缓存（原 TradeBuyInvalidatePatch 内联）
+        fleaTraderCache.InvalidateTraderForSession(sessionID.ToString());
     }
 
     /// <summary>
