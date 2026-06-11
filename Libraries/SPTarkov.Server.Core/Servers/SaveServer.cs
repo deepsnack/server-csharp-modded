@@ -34,7 +34,7 @@ public class SaveServer(
     protected const string profileFilepath = "user/profiles/";
 
     /// <summary>
-    /// 根据SessionId获取用户名
+    /// 根据SessionId获取用户名（懒加载时回退头索引，不触发物化）
     /// </summary>
     public string? GetUsernameBySessionId(MongoId sessionId)
     {
@@ -42,11 +42,25 @@ public class SaveServer(
         {
             return profile.ProfileInfo.Username;
         }
-        return null;
+
+        return lazyHeaders.TryGetValue(sessionId, out var header) ? header.ProfileInfo.Username : null;
     }
 
     /// <summary>
-    /// 根据用户名获取SessionId
+    /// 根据SessionId获取 PMC 昵称（懒加载时回退头索引，不触发物化；日志身份后缀用）
+    /// </summary>
+    public string? GetPmcNicknameBySessionId(MongoId sessionId)
+    {
+        if (profiles.TryGetValue(sessionId, out var profile))
+        {
+            return profile.CharacterData?.PmcData?.Info?.Nickname;
+        }
+
+        return lazyHeaders.TryGetValue(sessionId, out var header) ? header.Nickname : null;
+    }
+
+    /// <summary>
+    /// 根据用户名获取SessionId（懒加载时回退用户名索引，不触发物化）
     /// </summary>
     public MongoId? GetSessionIdByUsername(string username)
     {
@@ -57,6 +71,15 @@ public class SaveServer(
                 return kvp.Key;
             }
         }
+
+        // 注意：不能写成 `cond ? lazyId : null`——MongoId 有 implicit operator MongoId(string)，
+        // null 字面量会经 null→string→MongoId 转换链把整个三元表达式推断为非空 MongoId，
+        // 未命中时也返回 HasValue=true 的值。必须用显式 if/return null。
+        if (lazyUsernameIndex.TryGetValue(username, out var lazyId))
+        {
+            return lazyId;
+        }
+
         return null;
     }
 
@@ -98,6 +121,15 @@ public class SaveServer(
     protected readonly ConcurrentDictionary<MongoId, string> saveMd5 = new();
     protected readonly ConcurrentDictionary<MongoId, SemaphoreSlim> saveLocks = new();
 
+    // ---- 懒加载（原 SPT-ProfileCore LazyProfile 内联；开关 CoreConfig.Features.LazyProfileLoad，默认关）----
+    protected readonly ConcurrentDictionary<MongoId, LazyProfileHeader> lazyHeaders = new();
+    protected readonly ConcurrentDictionary<string, MongoId> lazyUsernameIndex = new(StringComparer.Ordinal);
+    protected readonly ConcurrentDictionary<MongoId, object> lazyLoadLocks = new();
+    protected bool? lazyEnabled;
+
+    /// <summary>懒加载是否开启（config 启动后不热切换）。</summary>
+    public bool LazyEnabled => lazyEnabled ??= configServer.GetConfig<CoreConfig>().Features.LazyProfileLoad;
+
     /// <summary>
     ///     Add callback to occur prior to saving profile changes
     /// </summary>
@@ -131,6 +163,16 @@ public class SaveServer(
         }
 
         var files = fileUtil.GetFiles(profileFilepath).Where(item => fileUtil.GetFileExtension(item) == "json");
+
+        // 懒加载：启动只扫描存档头建索引，不反序列化整档；按需物化（GetProfile/GetProfiles 触发）
+        if (LazyEnabled)
+        {
+            var lazyStopwatch = Stopwatch.StartNew();
+            var scanned = files.Count(ScanProfileHeader);
+            lazyStopwatch.Stop();
+            logger.Success($"[LazyProfile] 已扫描 {scanned} 个存档头（{lazyStopwatch.ElapsedMilliseconds}ms），整档按需加载");
+            return;
+        }
 
         // load profiles
         var stopwatch = Stopwatch.StartNew();
@@ -246,6 +288,9 @@ public class SaveServer(
             throw new Exception("session id provided was empty, did you restart the server while the game was running?");
         }
 
+        // 懒加载：未加载且头索引存在则按需物化
+        EnsureMaterialized(sessionId);
+
         if (profiles == null || profiles.IsEmpty)
         {
             throw new Exception($"no profiles found in saveServer with id: {sessionId}");
@@ -261,7 +306,8 @@ public class SaveServer(
 
     public bool ProfileExists(MongoId id)
     {
-        return profiles.ContainsKey(id);
+        // 懒加载：离线档（仅头索引在场）也算存在
+        return profiles.ContainsKey(id) || lazyHeaders.ContainsKey(id);
     }
 
     /// <summary>
@@ -270,6 +316,9 @@ public class SaveServer(
     /// <returns> Dictionary of Profiles with their ID as Keys. </returns>
     public Dictionary<MongoId, SptProfile> GetProfiles()
     {
+        // 懒加载：全量扫描语义要求物化全部已知存档（兜底，保证按用户名/pmcId 等遍历命中离线档）
+        MaterializeAll();
+
         return profiles.ToDictionary();
     }
 
@@ -284,6 +333,7 @@ public class SaveServer(
         {
             if (profiles.TryRemove(sessionID, out _))
             {
+                UnregisterLazyHeader(sessionID);
                 return true;
             }
         }
@@ -318,6 +368,12 @@ public class SaveServer(
                 CharacterData = new Characters { PmcData = new PmcData(), ScavData = new PmcData() },
             }
         );
+
+        // 懒加载：登记新档头索引
+        if (profiles.TryGetValue(profileInfo.ProfileId.Value, out var createdProfile))
+        {
+            RegisterLazyHeader(createdProfile);
+        }
     }
 
     /// <summary>
@@ -330,6 +386,9 @@ public class SaveServer(
 
         // 软重置：角色重建时合并 sidecar 保留统计（原 AddProfileSoftResetPatch 内联；无 sidecar 时空操作）
         softResetService.MergePreservedStatsIfPending(profileDetails);
+
+        // 懒加载：登记/刷新头索引
+        RegisterLazyHeader(profileDetails);
     }
 
     /// <summary>
@@ -501,6 +560,9 @@ public class SaveServer(
             profiles.TryRemove(sessionID, out _);
         }
 
+        // 懒加载：清理头索引
+        UnregisterLazyHeader(sessionID);
+
         return true;
     }
 
@@ -523,5 +585,225 @@ public class SaveServer(
         }
 
         return false;
+    }
+
+    // ==================== 懒加载核心（原 SPT-ProfileCore LazyProfile 内联） ====================
+
+    /// <summary>头索引只读视图（离线清理等不需要整档的场景用，不触发物化）。</summary>
+    public IReadOnlyDictionary<MongoId, LazyProfileHeader> GetLazyHeaders()
+    {
+        return lazyHeaders;
+    }
+
+    /// <summary>仅已加载 profile 的快照（不触发物化；懒加载感知的全量扫描方用）。</summary>
+    public Dictionary<MongoId, SptProfile> GetLoadedProfilesSnapshot()
+    {
+        return profiles.ToDictionary();
+    }
+
+    /// <summary>启动时只抽取存档头字段建索引，不反序列化整档。</summary>
+    protected bool ScanProfileHeader(string filePath)
+    {
+        var name = Path.GetFileNameWithoutExtension(filePath);
+        if (string.Equals(name, "activeMods", StringComparison.OrdinalIgnoreCase) || name.EndsWith("-corrupt", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(filePath));
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("info", out var infoEl))
+            {
+                return false;
+            }
+
+            var profileInfo = jsonUtil.Deserialize<Info>(infoEl.GetRawText());
+            if (profileInfo?.ProfileId is null || profileInfo.ProfileId.Value.IsEmpty)
+            {
+                return false;
+            }
+
+            string? nickname = null;
+            int? level = null;
+            string? side = null;
+            int? experience = null;
+            MongoId? pmcId = null;
+            var hasRagfairOffers = false;
+
+            if (
+                root.TryGetProperty("characters", out var charsEl)
+                && charsEl.ValueKind == JsonValueKind.Object
+                && charsEl.TryGetProperty("pmc", out var pmcEl)
+                && pmcEl.ValueKind == JsonValueKind.Object
+            )
+            {
+                // 跳蚤挂单存在性：启动恢复市场时只物化有挂单的档
+                if (
+                    pmcEl.TryGetProperty("RagfairInfo", out var ragfairEl)
+                    && ragfairEl.ValueKind == JsonValueKind.Object
+                    && ragfairEl.TryGetProperty("offers", out var offersEl)
+                    && offersEl.ValueKind == JsonValueKind.Array
+                )
+                {
+                    hasRagfairOffers = offersEl.GetArrayLength() > 0;
+                }
+
+                if (pmcEl.TryGetProperty("_id", out var pmcIdEl) && pmcIdEl.ValueKind == JsonValueKind.String)
+                {
+                    var idStr = pmcIdEl.GetString();
+                    if (!string.IsNullOrEmpty(idStr) && MongoId.IsValidMongoId(idStr))
+                    {
+                        pmcId = new MongoId(idStr);
+                    }
+                }
+
+                if (pmcEl.TryGetProperty("Info", out var pmcInfoEl) && pmcInfoEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (pmcInfoEl.TryGetProperty("Nickname", out var nick) && nick.ValueKind == JsonValueKind.String)
+                    {
+                        nickname = nick.GetString();
+                    }
+
+                    if (pmcInfoEl.TryGetProperty("Level", out var lvl) && lvl.ValueKind == JsonValueKind.Number)
+                    {
+                        level = lvl.GetInt32();
+                    }
+
+                    if (pmcInfoEl.TryGetProperty("Side", out var sd) && sd.ValueKind == JsonValueKind.String)
+                    {
+                        side = sd.GetString();
+                    }
+
+                    if (pmcInfoEl.TryGetProperty("Experience", out var xp) && xp.ValueKind == JsonValueKind.Number)
+                    {
+                        experience = xp.GetInt32();
+                    }
+                }
+            }
+
+            var header = new LazyProfileHeader
+            {
+                ProfileInfo = profileInfo,
+                Nickname = nickname,
+                Level = level,
+                Side = side,
+                Experience = experience,
+                PmcId = pmcId,
+                HasRagfairOffers = hasRagfairOffers,
+                FilePath = filePath,
+                IsLoaded = false,
+                IsInvalid = profileInfo.InvalidOrUnloadableProfile ?? false,
+            };
+
+            IndexLazyHeader(profileInfo.ProfileId.Value, header);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[LazyProfile] 存档头扫描失败 {filePath}: {ex.Message}");
+            return false;
+        }
+    }
+
+    protected void IndexLazyHeader(MongoId sessionId, LazyProfileHeader header)
+    {
+        lazyHeaders[sessionId] = header;
+        if (!string.IsNullOrEmpty(header.ProfileInfo.Username))
+        {
+            lazyUsernameIndex[header.ProfileInfo.Username] = sessionId;
+        }
+    }
+
+    /// <summary>内存中已创建/加载的 profile 登记头索引（关懒加载时空操作，避免无谓开销）。</summary>
+    protected void RegisterLazyHeader(SptProfile profile)
+    {
+        if (!LazyEnabled || profile.ProfileInfo?.ProfileId is null || profile.ProfileInfo.ProfileId.Value.IsEmpty)
+        {
+            return;
+        }
+
+        var sessionId = profile.ProfileInfo.ProfileId.Value;
+        var pmcInfo = profile.CharacterData?.PmcData?.Info;
+
+        IndexLazyHeader(
+            sessionId,
+            new LazyProfileHeader
+            {
+                ProfileInfo = profile.ProfileInfo,
+                Nickname = pmcInfo?.Nickname,
+                Level = pmcInfo?.Level,
+                Side = pmcInfo?.Side,
+                Experience = pmcInfo?.Experience,
+                PmcId = profile.CharacterData?.PmcData?.Id,
+                HasRagfairOffers = profile.CharacterData?.PmcData?.RagfairInfo?.Offers is { Count: > 0 },
+                FilePath = GetProfileFilePath(sessionId),
+                IsLoaded = true,
+                IsInvalid = profile.ProfileInfo.InvalidOrUnloadableProfile ?? false,
+            }
+        );
+    }
+
+    protected void UnregisterLazyHeader(MongoId sessionId)
+    {
+        if (lazyHeaders.TryRemove(sessionId, out var header))
+        {
+            if (!string.IsNullOrEmpty(header.ProfileInfo.Username))
+            {
+                lazyUsernameIndex.TryRemove(header.ProfileInfo.Username, out _);
+            }
+        }
+
+        lazyLoadLocks.TryRemove(sessionId, out _);
+    }
+
+    /// <summary>若未加载且头索引存在，则同步物化（双检锁防并发重复加载）。</summary>
+    protected void EnsureMaterialized(MongoId sessionId)
+    {
+        if (!LazyEnabled || profiles.ContainsKey(sessionId) || !lazyHeaders.TryGetValue(sessionId, out var header))
+        {
+            return;
+        }
+
+        var gate = lazyLoadLocks.GetOrAdd(sessionId, _ => new object());
+        lock (gate)
+        {
+            if (profiles.ContainsKey(sessionId))
+            {
+                return;
+            }
+
+            var filename = Path.GetFileNameWithoutExtension(header.FilePath);
+            if (MongoId.IsValidMongoId(filename))
+            {
+                LoadProfileAsync(sessionId).GetAwaiter().GetResult();
+            }
+            else
+            {
+                // 用户名命名的存档：按完整路径加载
+                LoadProfileByUsernameAsync(header.FilePath, filename).GetAwaiter().GetResult();
+            }
+
+            header.IsLoaded = true;
+        }
+    }
+
+    /// <summary>物化全部已知存档（GetProfiles 全量扫描语义兜底）。</summary>
+    protected void MaterializeAll()
+    {
+        if (!LazyEnabled)
+        {
+            return;
+        }
+
+        foreach (var id in lazyHeaders.Keys)
+        {
+            if (!profiles.ContainsKey(id))
+            {
+                EnsureMaterialized(id);
+            }
+        }
     }
 }

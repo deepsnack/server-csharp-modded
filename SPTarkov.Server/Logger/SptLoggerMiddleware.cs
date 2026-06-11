@@ -94,13 +94,10 @@ public class SptLoggerMiddleware(
                 return string.Empty;
             }
 
-            if (!saveServer.GetProfiles().TryGetValue(new MongoId(sessionIdString), out var profile))
-            {
-                return string.Empty;
-            }
-
-            var username = profile.ProfileInfo?.Username;
-            var nickname = profile.CharacterData?.PmcData?.Info?.Nickname;
+            // 用单点查询（懒加载时回退头索引），不得用 GetProfiles()——那会触发全量物化
+            var sessionId = new MongoId(sessionIdString);
+            var username = saveServer.GetUsernameBySessionId(sessionId);
+            var nickname = saveServer.GetPmcNicknameBySessionId(sessionId);
 
             var parts = new List<string>();
             if (!string.IsNullOrEmpty(username))

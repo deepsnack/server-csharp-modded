@@ -41,7 +41,9 @@ public class BtrDeliveryCallbacks(
     protected void ProcessDeliveries()
     {
         // Process each installed profile.
-        foreach (var (sessionId, _) in saveServer.GetProfiles())
+        // 懒加载时只扫已加载档：BTR 送货邮件只有玩家在线才可见，未加载档物化后由下个周期补发
+        var profilesToProcess = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        foreach (var (sessionId, _) in profilesToProcess)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))
             {

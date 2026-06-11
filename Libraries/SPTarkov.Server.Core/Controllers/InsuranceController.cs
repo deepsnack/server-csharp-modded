@@ -49,7 +49,10 @@ public class InsuranceController(
     public void ProcessReturn()
     {
         // Process each installed profile.
-        foreach (var (sessionId, _) in saveServer.GetProfiles())
+        // 懒加载时只扫已加载档：保险回邮只有玩家在线才可见，未加载档物化后由下个保险周期补发，
+        // 对玩家不可感知（邮件创建更晚 = 过期更晚，无损）
+        var profilesToProcess = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        foreach (var (sessionId, _) in profilesToProcess)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))
             {

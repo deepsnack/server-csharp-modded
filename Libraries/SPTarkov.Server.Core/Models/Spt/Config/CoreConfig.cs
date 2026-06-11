@@ -290,6 +290,13 @@ public record ServerFeatures
     /// </summary>
     [JsonPropertyName("autoRepairProfiles")]
     public bool AutoRepairProfiles { get; set; } = true;
+
+    /// <summary>
+    ///     Lazy profile loading: scan only profile headers at startup, materialize full
+    ///     profiles on demand. High-value for servers with many profiles. Default off.
+    /// </summary>
+    [JsonPropertyName("lazyProfileLoad")]
+    public bool LazyProfileLoad { get; set; }
 }
 
 public record ChatbotFeatures

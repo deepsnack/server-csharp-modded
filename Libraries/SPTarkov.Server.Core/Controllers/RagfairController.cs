@@ -46,6 +46,7 @@ public class RagfairController(
     PaymentService paymentService,
     RagfairPriceService ragfairPriceService,
     RagfairOfferGenerator ragfairOfferGenerator,
+    SaveServer saveServer,
     ConfigServer configServer
 )
 {
@@ -56,7 +57,9 @@ public class RagfairController(
     /// </summary>
     public void Update()
     {
-        foreach (var (sessionId, profile) in profileHelper.GetProfiles())
+        // 懒加载时只扫已加载档：有挂单的档在启动恢复市场时已物化，无挂单的离线档此处无事可做，语义等价
+        var profilesToCheck = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : profileHelper.GetProfiles();
+        foreach (var (sessionId, profile) in profilesToCheck)
         {
             // Check profile is capable of creating offers
             var pmcProfile = profile?.CharacterData?.PmcData;

@@ -15,6 +15,7 @@ public class TraderPurchasePersisterService(
     RandomUtil randomUtil,
     TimeUtil timeUtil,
     ProfileHelper profileHelper,
+    SaveServer saveServer,
     ServerLocalisationService serverLocalisationService,
     ConfigServer configServer
 )
@@ -72,7 +73,8 @@ public class TraderPurchasePersisterService(
     public void ResetTraderPurchasesStoredInProfile(MongoId traderId)
     {
         // Reset all profiles purchase dictionaries now a trader update has occured;
-        var profiles = profileHelper.GetProfiles();
+        // 懒加载时只扫已加载档（不触发全量物化）；未加载档的记录在下个商人刷新周期清理
+        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : profileHelper.GetProfiles();
         foreach (var profile in profiles)
         {
             // Skip if no purchases
@@ -99,7 +101,8 @@ public class TraderPurchasePersisterService(
     /// <param name="traderId"> Trader ID </param>
     public void RemoveStalePurchasesFromProfiles(MongoId traderId)
     {
-        var profiles = profileHelper.GetProfiles();
+        // 懒加载时只扫已加载档（不触发全量物化）；未加载档的过期记录在下个商人刷新周期清理
+        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : profileHelper.GetProfiles();
         foreach (var profileKvP in profiles)
         {
             var profile = profileKvP.Value;

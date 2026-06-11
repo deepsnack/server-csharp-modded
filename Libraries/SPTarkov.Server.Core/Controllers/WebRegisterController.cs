@@ -1340,7 +1340,8 @@ public class WebRegisterController(
             return new { success = false, available = false, message = "用户名不能为空" };
         }
 
-        var taken = saveServer.GetProfiles().Values.Any(p => p.ProfileInfo?.Username == username);
+        // 走索引查询（懒加载时不触发全量物化；高频防抖调用必须轻量）
+        var taken = saveServer.GetSessionIdByUsername(username).HasValue;
         return new { success = true, available = !taken, message = taken ? "该账户名已被占用" : "该账户名可用" };
     }
 

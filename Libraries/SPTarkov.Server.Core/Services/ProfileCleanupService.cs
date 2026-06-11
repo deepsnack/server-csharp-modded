@@ -82,7 +82,12 @@ public class ProfileCleanupService(
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var toDelete = new List<MongoId>();
 
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        // 懒加载时用头索引判断活跃度（不物化整档）；否则用内存 profile 表
+        var candidates = saveServer.LazyEnabled
+            ? saveServer.GetLazyHeaders().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo.Username, kv.Value.FilePath))
+            : saveServer.GetProfiles().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo?.Username, FilePath: (string?)null));
+
+        foreach (var (sessionId, username, headerPath) in candidates)
         {
             var lastLogin = lastLoginService.Get(sessionId);
 
@@ -97,7 +102,7 @@ public class ProfileCleanupService(
             }
 
             // 从未登录过 — 回退到存档文件创建时间
-            var path = ResolveProfileFilePath(sessionId, profile.ProfileInfo?.Username);
+            var path = headerPath is not null && fileUtil.FileExists(headerPath) ? headerPath : ResolveProfileFilePath(sessionId, username);
             if (path is not null && (DateTime.UtcNow - File.GetCreationTimeUtc(path)).TotalDays >= config.NeverLoggedInDaysThreshold)
             {
                 toDelete.Add(sessionId);
@@ -124,9 +129,14 @@ public class ProfileCleanupService(
     protected void DedupeProfileFiles()
     {
         var removed = 0;
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+
+        // 懒加载时用头索引（用户名/路径已在头中），不物化整档
+        var entries = saveServer.LazyEnabled
+            ? saveServer.GetLazyHeaders().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo.Username))
+            : saveServer.GetProfiles().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo?.Username));
+
+        foreach (var (sessionId, username) in entries)
         {
-            var username = profile.ProfileInfo?.Username;
             if (string.IsNullOrEmpty(username))
             {
                 continue;

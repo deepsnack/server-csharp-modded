@@ -143,7 +143,16 @@ public class RagfairOfferService(
             return;
         }
 
-        foreach (var sessionId in saveServer.GetProfiles().Keys)
+        // 懒加载时只物化"有跳蚤挂单"的档（头扫描已标记），其余离线档保持未加载；
+        // 关懒加载时维持基线全量遍历语义
+        var sessionIds = saveServer.LazyEnabled
+            ? saveServer
+                .GetLoadedProfilesSnapshot()
+                .Keys.Union(saveServer.GetLazyHeaders().Where(kv => kv.Value.HasRagfairOffers).Select(kv => kv.Key))
+                .ToList()
+            : saveServer.GetProfiles().Keys.ToList();
+
+        foreach (var sessionId in sessionIds)
         {
             var pmcData = saveServer.GetProfile(sessionId)?.CharacterData?.PmcData;
             if (pmcData?.RagfairInfo?.Offers == null)

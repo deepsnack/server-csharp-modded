@@ -162,12 +162,14 @@ public class LauncherV2Controller(
     {
         var result = MongoId.Empty();
 
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        // 用户名→sessionId 走索引（懒加载时只物化该档，不触发全量加载）
+        var matchedId = string.IsNullOrEmpty(info.Username) ? null : saveServer.GetSessionIdByUsername(info.Username!);
+        if (matchedId.HasValue)
         {
-            if (info.Username != profile.ProfileInfo!.Username)
-                continue;
+            var sessionId = matchedId.Value;
+            var profileInfo = saveServer.GetProfile(sessionId).ProfileInfo!;
 
-            var storedPassword = profile.ProfileInfo.Password ?? string.Empty;
+            var storedPassword = profileInfo.Password ?? string.Empty;
             var inputPassword = info.Password ?? string.Empty;
 
             // Legacy profiles with no stored password: allow login and set first input as password (same as V1)
@@ -175,7 +177,7 @@ public class LauncherV2Controller(
             {
                 if (!string.IsNullOrEmpty(inputPassword))
                 {
-                    profile.ProfileInfo.Password = EncryptPassword(inputPassword);
+                    profileInfo.Password = EncryptPassword(inputPassword);
                 }
                 result = sessionId;
             }
@@ -183,8 +185,6 @@ public class LauncherV2Controller(
             {
                 result = sessionId;
             }
-
-            break;
         }
 
         // 登录成功记录时间戳，供离线存档清理判断活跃度（原 LauncherV2GetSessionIdRecordPatch 内联）

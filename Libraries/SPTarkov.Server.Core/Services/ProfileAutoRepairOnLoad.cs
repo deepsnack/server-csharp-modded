@@ -23,6 +23,13 @@ public class ProfileAutoRepairOnLoad(
             return;
         }
 
+        // 懒加载开启时跳过启动批修复（避免全量物化打破懒加载）；存盘前/拉档前修复仍然生效
+        if (saveServer.LazyEnabled)
+        {
+            logger.Info("[ProfileAutoRepair] 懒加载开启，跳过启动批修复（存盘前/拉档前修复不受影响）");
+            return;
+        }
+
         var repairedProfiles = 0;
         foreach (var (sessionId, profile) in saveServer.GetProfiles())
         {

@@ -49,7 +49,9 @@ public class DialogueController(
     /// </summary>
     public void Update()
     {
-        var profiles = saveServer.GetProfiles();
+        // 懒加载时只扫已加载档（每个心跳都会跑，不得触发全量物化）；
+        // 未加载档的过期对话物品在其物化后的下个心跳清理
+        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
         foreach (var (sessionId, _) in profiles)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))

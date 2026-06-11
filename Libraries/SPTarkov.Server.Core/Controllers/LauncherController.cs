@@ -87,45 +87,33 @@ public class LauncherController(
     {
         MongoId result = MongoId.Empty();
 
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        // 用户名→sessionId 走索引（懒加载时只物化该档，不触发全量加载）
+        var matchedId = string.IsNullOrEmpty(info?.Username) ? null : saveServer.GetSessionIdByUsername(info!.Username!);
+        if (matchedId.HasValue)
         {
-            var account = profile.ProfileInfo;
-            if (info?.Username != account?.Username)
-            {
-                continue;
-            }
+            var sessionId = matchedId.Value;
+            var account = saveServer.GetProfile(sessionId).ProfileInfo;
 
             // 获取存储的密码和用户输入的密码
-
             var storedPassword = account?.Password ?? string.Empty;
             var inputPassword = info?.Password ?? string.Empty;
 
             // 如果存储的密码为空，允许登录并将首次输入的密码加密后保存到存档（兼容旧存档和新创建的存档）
             if (string.IsNullOrEmpty(storedPassword))
             {
-                if (!string.IsNullOrEmpty(inputPassword))
+                if (!string.IsNullOrEmpty(inputPassword) && account is not null)
                 {
                     // 使用 SHA256 算法加密用户输入的密码并保存
                     account.Password = EncryptPassword(inputPassword);
-                    await saveServer.SaveAsync();
+                    await saveServer.SaveProfileAsync(sessionId);
                 }
                 result = sessionId;
-                break;
             }
-
-            // 存储的密码不为空，验证密码正确性
-            // 对用户输入的密码进行加密后与存储的密码进行比较
-            var encryptedInputPassword = EncryptPassword(inputPassword);
-            if (storedPassword == encryptedInputPassword)
+            else if (storedPassword == EncryptPassword(inputPassword))
             {
+                // 存储的密码不为空，验证密码正确性
                 result = sessionId;
             }
-            else
-            {
-                // 密码不正确，保持结果为空（登录失败）
-                result = MongoId.Empty();
-            }
-            break;
         }
 
         // 登录成功记录时间戳，供离线存档清理判断活跃度（原 RecordLastLoginPatch 内联）

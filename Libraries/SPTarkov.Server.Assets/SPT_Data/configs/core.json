@@ -320,7 +320,8 @@
     "createNewProfileTypesBlacklist": [],
     "achievementProfileIdBlacklist": [],
     "allowRegistration": false,
-    "autoRepairProfiles": true
+    "autoRepairProfiles": true,
+    "lazyProfileLoad": false
   },
   "customWatermarkLocaleKeys": []
 }
