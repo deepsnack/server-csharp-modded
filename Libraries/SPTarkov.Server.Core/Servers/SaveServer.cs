@@ -60,8 +60,9 @@ public class SaveServer(
 
     /// <summary>
     /// 获取profile文件路径（优先使用用户名命名，如果没有用户名则使用MongoId）
+    /// public：ProfileCleanupService 重复文件清理/活跃度判断需要解析当前命名（原 private）
     /// </summary>
-    private string GetProfileFilePath(MongoId sessionId)
+    public string GetProfileFilePath(MongoId sessionId)
     {
         var username = GetUsernameBySessionId(sessionId);
         if (!string.IsNullOrEmpty(username))

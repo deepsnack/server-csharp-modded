@@ -22,7 +22,8 @@ public class LauncherV2Controller(
     ServerLocalisationService serverLocalisationService,
     ConfigServer configServer,
     Watermark watermark,
-    ProfileController profileController
+    ProfileController profileController,
+    LastLoginService lastLoginService
 )
 {
     protected readonly CoreConfig CoreConfig = configServer.GetConfig<CoreConfig>();
@@ -159,6 +160,8 @@ public class LauncherV2Controller(
 
     protected MongoId GetSessionId(LoginRequestData info)
     {
+        var result = MongoId.Empty();
+
         foreach (var (sessionId, profile) in saveServer.GetProfiles())
         {
             if (info.Username != profile.ProfileInfo!.Username)
@@ -174,13 +177,23 @@ public class LauncherV2Controller(
                 {
                     profile.ProfileInfo.Password = EncryptPassword(inputPassword);
                 }
-                return sessionId;
+                result = sessionId;
+            }
+            else if (storedPassword == EncryptPassword(inputPassword))
+            {
+                result = sessionId;
             }
 
-            return storedPassword == EncryptPassword(inputPassword) ? sessionId : MongoId.Empty();
+            break;
         }
 
-        return MongoId.Empty();
+        // 登录成功记录时间戳，供离线存档清理判断活跃度（原 LauncherV2GetSessionIdRecordPatch 内联）
+        if (!result.IsEmpty)
+        {
+            lastLoginService.Record(result);
+        }
+
+        return result;
     }
 
     protected string EncryptPassword(string password)

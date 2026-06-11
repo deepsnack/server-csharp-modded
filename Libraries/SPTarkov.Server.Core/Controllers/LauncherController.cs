@@ -26,7 +26,8 @@ public class LauncherController(
     DatabaseService databaseService,
     ServerLocalisationService serverLocalisationService,
     ProfileDataService profileDataService,
-    ConfigServer configServer
+    ConfigServer configServer,
+    LastLoginService lastLoginService
 )
 {
     protected readonly CoreConfig CoreConfig = configServer.GetConfig<CoreConfig>();
@@ -125,6 +126,12 @@ public class LauncherController(
                 result = MongoId.Empty();
             }
             break;
+        }
+
+        // 登录成功记录时间戳，供离线存档清理判断活跃度（原 RecordLastLoginPatch 内联）
+        if (!result.IsEmpty)
+        {
+            lastLoginService.Record(result);
         }
 
         return result;
