@@ -319,7 +319,8 @@
     },
     "createNewProfileTypesBlacklist": [],
     "achievementProfileIdBlacklist": [],
-    "allowRegistration": false
+    "allowRegistration": false,
+    "autoRepairProfiles": true
   },
   "customWatermarkLocaleKeys": []
 }

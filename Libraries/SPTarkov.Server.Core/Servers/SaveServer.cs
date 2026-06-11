@@ -25,6 +25,7 @@ public class SaveServer(
     ServerLocalisationService serverLocalisationService,
     ProfileValidatorService profileValidatorService,
     BackupService backupService,
+    ProfileAutoRepairService profileAutoRepairService,
     ISptLogger<SaveServer> logger,
     ConfigServer configServer
 )
@@ -428,6 +429,9 @@ public class SaveServer(
                     profiles[sessionID] = previous;
                 }
             }
+
+            // 存盘前自修复（开关在服务内部判断；原 ProfileAutoRepair pre-save 回调内联）
+            profileAutoRepairService.RepairProfile(profiles[sessionID], sessionID, "pre-save");
 
             start = Stopwatch.StartNew();
             var jsonProfile = jsonUtil.Serialize(profiles[sessionID], !configServer.GetConfig<CoreConfig>().Features.CompressProfile);

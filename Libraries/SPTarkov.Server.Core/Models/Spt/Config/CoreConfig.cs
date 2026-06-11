@@ -283,6 +283,13 @@ public record ServerFeatures
     /// </summary>
     [JsonPropertyName("allowRegistration")]
     public bool AllowRegistration { get; set; }
+
+    /// <summary>
+    ///     Auto-repair profile item damage (duplicate/empty ids, orphaned parents, stale references)
+    ///     on startup, pre-save and profile-list. See ProfileAutoRepairService.
+    /// </summary>
+    [JsonPropertyName("autoRepairProfiles")]
+    public bool AutoRepairProfiles { get; set; } = true;
 }
 
 public record ChatbotFeatures

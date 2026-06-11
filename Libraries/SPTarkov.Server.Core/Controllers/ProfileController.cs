@@ -22,7 +22,8 @@ public class ProfileController(
     CreateProfileService createProfileService,
     ProfileFixerService profileFixerService,
     PlayerScavGenerator playerScavGenerator,
-    ProfileHelper profileHelper
+    ProfileHelper profileHelper,
+    ProfileAutoRepairService profileAutoRepairService
 )
 {
     /// <summary>
@@ -96,6 +97,12 @@ public class ProfileController(
     /// <returns>Return a full profile, scav and pmc profiles + meta data</returns>
     public virtual List<PmcData> GetCompleteProfile(MongoId sessionId)
     {
+        // 客户端拉取存档列表前自修复（开关在服务内部判断；原 ProfileGetCompleteProfileAutoRepairPatch 内联）
+        if (!saveServer.IsProfileInvalidOrUnloadable(sessionId))
+        {
+            profileAutoRepairService.RepairProfile(saveServer.GetProfile(sessionId), sessionId, "profile-list");
+        }
+
         var profile = profileHelper.GetCompleteProfile(sessionId);
 
         // Some users like to crank massive skill multipliers and send the client invalid information,
