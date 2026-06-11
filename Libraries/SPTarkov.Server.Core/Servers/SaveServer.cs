@@ -462,12 +462,14 @@ public class SaveServer(
     /// </summary>
     /// <param name="sessionID"> Profile ID to remove </param>
     /// <returns> True if successful </returns>
-    public bool RemoveProfile(MongoId sessionID)
+    /// <param name="sessionID"> Profile ID to remove </param>
+    /// <param name="force"> true 时无视软重置开关执行真删除（管理员删号/半成品清理用） </param>
+    public bool RemoveProfile(MongoId sessionID, bool force = false)
     {
         // 软重置（原 RemoveProfileSoftResetPatch 内联）：开启时把"删除存档"改为保留账号身份的进度擦除。
         // 与 mod 版不同：擦除后的档保留在内存（树内全量加载，无 LazyProfile header 可重注册），
         // 落盘走 SaveProfileAsync 的用户名命名路径。
-        if (softResetService.Enabled && profiles.TryGetValue(sessionID, out var profileToReset) && profileToReset.ProfileInfo is not null)
+        if (!force && softResetService.Enabled && profiles.TryGetValue(sessionID, out var profileToReset) && profileToReset.ProfileInfo is not null)
         {
             softResetService.CaptureSidecar(sessionID, profileToReset);
             softResetService.WipeProfileContent(profileToReset);

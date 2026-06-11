@@ -5,7 +5,53 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAvailableVersions();
     document.getElementById('sendCodeBtn').addEventListener('click', sendVerificationCode);
     document.getElementById('registerForm').addEventListener('submit', handleRegister);
+    document.getElementById('email').addEventListener('blur', checkPreRegistered);
 });
+
+function checkPreRegistered() {
+    const email = document.getElementById('email').value.trim();
+    const vsel = document.getElementById('version');
+    const note = document.getElementById('versionLockNote');
+
+    if (!email || !validateEmail(email)) {
+        vsel.disabled = false;
+        note.style.display = 'none';
+        return;
+    }
+
+    fetch('/register/api/check-preregistered', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.preRegistered && data.lockedVersion) {
+            // 管理员锁定的版本可能不在普通玩家白名单内（预注册无视限制），
+            // 此时下拉里没有对应 option，直接赋值会静默失败导致 version 为空、
+            // 提交时误报"请选择版本"。若缺失则动态补入该选项再选中。
+            const exists = Array.prototype.some.call(vsel.options, function(o) {
+                return o.value === data.lockedVersion;
+            });
+            if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = data.lockedVersion;
+                opt.textContent = data.lockedVersion;
+                vsel.appendChild(opt);
+            }
+            vsel.value = data.lockedVersion;
+            vsel.disabled = true;
+            note.style.display = 'inline';
+        } else {
+            vsel.disabled = false;
+            note.style.display = 'none';
+        }
+    })
+    .catch(() => {
+        vsel.disabled = false;
+        note.style.display = 'none';
+    });
+}
 
 function loadAvailableVersions() {
     fetch('/register/api/versions')

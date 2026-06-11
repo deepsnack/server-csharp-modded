@@ -110,36 +110,4 @@ public class LauncherCallbacks(
         return new ValueTask<string>(httpResponseUtil.NoBody(launcherController.GetServerModsProfileUsed(sessionID)));
     }
 
-    /// <summary>
-    /// 获取可用的版本列表
-    /// 从 profiles 目录读取版本信息
-    /// </summary>
-    /// <returns>版本列表</returns>
-    public ValueTask<string> GetVersions()
-    {
-        var result = webRegisterController.GetVersions();
-        return new ValueTask<string>(httpResponseUtil.NoBody(result));
-    }
-
-    /// <summary>
-    /// 发送验证码到指定邮箱
-    /// </summary>
-    /// <param name="request">包含邮箱的请求</param>
-    /// <returns>发送结果</returns>
-    public ValueTask<string> SendVerificationCode(dynamic request)
-    {
-        var result = webRegisterController.SendVerificationCode(request);
-        return new ValueTask<string>(httpResponseUtil.NoBody(result));
-    }
-
-    /// <summary>
-    /// 处理用户注册
-    /// </summary>
-    /// <param name="request">注册请求</param>
-    /// <returns>注册结果</returns>
-    public ValueTask<string> WebRegister(WebRegisterRequest request)
-    {
-        var result = webRegisterController.Register(request);
-        return new ValueTask<string>(httpResponseUtil.NoBody(result));
-    }
 }
