@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
@@ -12,8 +13,11 @@ namespace SPTarkov.Server.Core.Routers;
 [Injectable]
 public class EventOutputHolder(ProfileHelper profileHelper, TimeUtil timeUtil, ICloner cloner)
 {
-    protected readonly Dictionary<MongoId, Dictionary<string, bool>> _clientActiveSessionStorage = new();
-    protected readonly Dictionary<MongoId, ItemEventRouterResponse> _outputStore = new();
+    // 并发副存 + per-session 锁（原 EventOutputHolderConcurrencyPatch 内联）：
+    // 同一玩家串行（上游本就串行，双保险），不同玩家并行不互锁
+    protected readonly ConcurrentDictionary<MongoId, ConcurrentDictionary<string, bool>> _clientActiveSessionStorage = new();
+    protected readonly ConcurrentDictionary<MongoId, ItemEventRouterResponse> _outputStore = new();
+    protected readonly KeyedLockRegistry<MongoId> sessionLocks = new();
 
     /// <summary>
     /// Get a fresh/empty response to send to the client
@@ -22,27 +26,40 @@ public class EventOutputHolder(ProfileHelper profileHelper, TimeUtil timeUtil, I
     /// <returns>ItemEventRouterResponse</returns>
     public ItemEventRouterResponse GetOutput(MongoId sessionId)
     {
-        if (_outputStore.TryGetValue(sessionId, out var result))
+        lock (sessionLocks.Get(sessionId))
         {
+            if (_outputStore.TryGetValue(sessionId, out var result))
+            {
+                return result;
+            }
+
+            // Nothing found, Create new empty output response
+            ResetOutputInternal(sessionId);
+            _outputStore.TryGetValue(sessionId, out result!);
+
             return result;
         }
-
-        // Nothing found, Create new empty output response
-        ResetOutput(sessionId);
-        _outputStore.TryGetValue(sessionId, out result!);
-
-        return result;
     }
 
     public void ResetOutput(MongoId sessionId)
     {
+        lock (sessionLocks.Get(sessionId))
+        {
+            ResetOutputInternal(sessionId);
+        }
+    }
+
+    protected void ResetOutputInternal(MongoId sessionId)
+    {
         var pmcProfile = profileHelper.GetPmcProfile(sessionId);
 
-        _outputStore.Remove(sessionId);
-
         // Create fresh output object
-        _outputStore.Add(
-            sessionId,
+        _outputStore[sessionId] = BuildFreshResponse(sessionId, pmcProfile);
+    }
+
+    protected ItemEventRouterResponse BuildFreshResponse(MongoId sessionId, PmcData pmcProfile)
+    {
+        return
             new ItemEventRouterResponse
             {
                 ProfileChanges = new Dictionary<MongoId, ProfileChange>
@@ -78,8 +95,7 @@ public class EventOutputHolder(ProfileHelper profileHelper, TimeUtil timeUtil, I
                     },
                 },
                 Warnings = [],
-            }
-        );
+            };
     }
 
     /// <summary>
@@ -87,6 +103,14 @@ public class EventOutputHolder(ProfileHelper profileHelper, TimeUtil timeUtil, I
     /// </summary>
     /// <param name="sessionId"> Session id </param>
     public void UpdateOutputProperties(MongoId sessionId)
+    {
+        lock (sessionLocks.Get(sessionId))
+        {
+            UpdateOutputPropertiesInternal(sessionId);
+        }
+    }
+
+    protected void UpdateOutputPropertiesInternal(MongoId sessionId)
     {
         var pmcData = profileHelper.GetPmcProfile(sessionId);
         var profileChanges = _outputStore[sessionId].ProfileChanges[sessionId];
@@ -205,11 +229,7 @@ public class EventOutputHolder(ProfileHelper profileHelper, TimeUtil timeUtil, I
             }
 
             // Client informed of craft, remove from data returned
-            if (!_clientActiveSessionStorage.TryGetValue(sessionId, out var storageForSessionId))
-            {
-                _clientActiveSessionStorage.Add(sessionId, []);
-                storageForSessionId = _clientActiveSessionStorage[sessionId];
-            }
+            var storageForSessionId = _clientActiveSessionStorage.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, bool>());
 
             // Ensure we don't inform client of production again
             if (storageForSessionId.ContainsKey(production.Key))
