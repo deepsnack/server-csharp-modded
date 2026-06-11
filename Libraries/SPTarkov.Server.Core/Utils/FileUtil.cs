@@ -119,7 +119,8 @@ public class FileUtil
             Directory.CreateDirectory(directoryPath);
         }
 
-        var tempFilePath = filePath + ".bak";
+        // 唯一 GUID 临时文件名，避免并发写同一目标时 .bak 互踩（原 SPT-Performance FileUtilRobust 内联）
+        var tempFilePath = Path.Combine(directoryPath ?? string.Empty, $"{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
 
         try
         {
@@ -134,8 +135,8 @@ public class FileUtil
                 fs.Flush(true);
             }
 
-            // Overwrite over the old file
-            File.Move(tempFilePath, filePath, overwrite: true);
+            // Overwrite over the old file; Windows 下其它进程短暂持有读句柄会使单次 rename 失败，带重试
+            await MoveFileWithRetriesAsync(tempFilePath, filePath);
         }
         catch
         {
@@ -148,6 +149,28 @@ public class FileUtil
                 catch { }
             }
             throw;
+        }
+    }
+
+    /// <summary>
+    ///     原子覆盖 Move，IO/权限类瞬时失败重试（最多 20 次、间隔 250ms）。
+    /// </summary>
+    protected static async Task MoveFileWithRetriesAsync(string sourceFilePath, string destinationFilePath)
+    {
+        const int maxAttempts = 20;
+        var retryDelay = TimeSpan.FromMilliseconds(250);
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(sourceFilePath, destinationFilePath, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < maxAttempts)
+            {
+                await Task.Delay(retryDelay);
+            }
         }
     }
 

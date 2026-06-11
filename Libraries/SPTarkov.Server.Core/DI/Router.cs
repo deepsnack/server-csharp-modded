@@ -32,7 +32,8 @@ public abstract class Router
 
     protected abstract IEnumerable<HandledRoute> GetHandledRoutes();
 
-    protected IEnumerable<HandledRoute> GetInternalHandledRoutes()
+    // protected internal：HttpRouter 构建 O(1) 路由索引需要枚举各 Router 的路由表（原 SPT-Performance FastRouter 内联）
+    protected internal IEnumerable<HandledRoute> GetInternalHandledRoutes()
     {
         if (!handledRoutes.Any())
         {
