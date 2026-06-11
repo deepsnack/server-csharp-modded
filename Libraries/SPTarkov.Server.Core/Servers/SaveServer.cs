@@ -138,17 +138,19 @@ public class SaveServer(
         {
             // 支持MongoId格式和用户名格式的文件名
             var filename = Path.GetFileNameWithoutExtension(file);
-            var filePath = fileUtil.StripExtension(file);
-            
+
             // 如果文件名是有效的MongoId
             if (MongoId.IsValidMongoId(filename))
             {
-                await LoadProfileAsync(filePath);
+                await LoadProfileAsync(filename);
             }
             else
             {
-                // 尝试作为用户名文件加载（文件名不是有效的MongoId）
-                await LoadProfileByUsernameAsync(filePath, filename);
+                // 尝试作为用户名文件加载（文件名不是有效的MongoId）。
+                // 必须传带扩展名的完整路径——原先传去扩展名的纯文件名导致反序列化
+                // File.Exists 永远为 false，用户名命名的存档从未真正加载（靠重复的
+                // 旧 MongoId 文件兜底；dedupe 删除旧文件后会在重启时丢加载）。
+                await LoadProfileByUsernameAsync(file, filename);
             }
         }
 
