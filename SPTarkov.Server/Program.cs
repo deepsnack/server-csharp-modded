@@ -285,16 +285,19 @@ public static class Program
 
         var handle = GetStdHandle(stdOutputHandle);
 
+        // 输出被重定向（无控制台）时拿不到 console mode——VT 彩色只是装饰，
+        // 不应让服务端因此拒绝启动（影响日志重定向/服务化/CI 场景）
         if (!GetConsoleMode(handle, out var consoleMode))
         {
-            throw new Exception("Unable to get console mode");
+            Console.WriteLine("[startup] console mode unavailable (output redirected?), skipping virtual terminal setup");
+            return;
         }
 
         consoleMode |= enableVirtualTerminalProcessing;
 
         if (!SetConsoleMode(handle, consoleMode))
         {
-            throw new Exception("Unable to set console mode");
+            Console.WriteLine("[startup] unable to set console mode, skipping virtual terminal setup");
         }
     }
 
