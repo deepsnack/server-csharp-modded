@@ -142,6 +142,15 @@ public class ProfileCleanupService(
                 continue;
             }
 
+            // headless 存档（自动生成，固定 headless_ 前缀）永远以 MongoId(ProfileId) 命名，
+            // 且 Fika 无头子系统以 ProfileId 识别存档/鉴权。绝不能把它的 MongoId 文件当成
+            // 用户名命名文件的"重复"删除——一旦删除会导致无头鉴权失配、无头从 Fika Manager
+            // 状态列表里消失（[Fika Headless Client] Invalid headless client ...）。
+            if (username.StartsWith("headless_", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             var usernamePath = saveServer.GetProfileFilePath(sessionId);
             var mongoIdPath = Path.Combine(ProfileDir, $"{sessionId}.json");
 
