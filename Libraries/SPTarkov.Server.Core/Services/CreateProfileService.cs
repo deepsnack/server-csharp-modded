@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Generators;
 using SPTarkov.Server.Core.Helpers;
@@ -35,15 +36,40 @@ public class CreateProfileService(
     EventOutputHolder eventOutputHolder,
     PlayerScavGenerator playerScavGenerator,
     ICloner cloner,
-    MailSendService mailSendService
+    MailSendService mailSendService,
+    ItemAcquisitionMaskService acquisitionMask,
+    EditionUpgradeService editionUpgradeService,
+    SoftResetService softResetService
 )
 {
     public async ValueTask<string> CreateProfile(MongoId sessionId, ProfileCreateRequestData request)
     {
         var account = cloner.Clone(saveServer.GetProfile(sessionId));
-        var profileTemplateClone = cloner.Clone(profileHelper.GetProfileTemplateForSide(account.ProfileInfo.Edition, request.Side));
+        var rawEdition = account.ProfileInfo.Edition;
+        var templateEdition = editionUpgradeService.ResolveEdition(rawEdition) ?? EditionUpgradeService.EditionLadder[0];
+        var profileTemplate = profileHelper.GetProfileTemplateForSide(templateEdition, request.Side);
+
+        if (profileTemplate?.Character is null)
+        {
+            throw new InvalidOperationException(
+                $"Unable to find profile template for account edition: {rawEdition} (resolved: {templateEdition}) and side: {request.Side}"
+            );
+        }
+
+        if (!string.Equals(rawEdition, templateEdition, StringComparison.Ordinal))
+        {
+            logger.Info($"Resolved account edition '{rawEdition}' to profile template '{templateEdition}' for {sessionId}");
+        }
+
+        var profileTemplateClone = cloner.Clone(profileTemplate);
 
         var pmcData = profileTemplateClone.Character;
+
+        // 服务期屏蔽：从新档初始库存剔除被标记移除的物品（作用于克隆模板，不破坏 DB 模板）
+        if (acquisitionMask.HasAny && pmcData.Inventory?.Items is not null)
+        {
+            pmcData.Inventory.Items.RemoveAll(item => acquisitionMask.IsStartInvRemoved(request.Side, item.Template));
+        }
 
         // Delete existing profile
         DeleteProfileBySessionId(sessionId);
@@ -72,15 +98,18 @@ public class CreateProfileService(
 
         // Process handling if the account has been forced to wipe
         // BSG keeps both the achievements, prestige level and the total in-game time in a wipe
-        if (account.CharacterData.PmcData.Achievements is not null)
+        var oldPmc = account.CharacterData?.PmcData;
+        var oldScav = account.CharacterData?.ScavData;
+
+        if (oldPmc?.Achievements is not null)
         {
-            pmcData.Achievements = account.CharacterData.PmcData.Achievements;
+            pmcData.Achievements = oldPmc.Achievements;
         }
 
-        if (account.CharacterData.PmcData.Prestige is not null)
+        if (oldPmc?.Prestige is not null)
         {
-            pmcData.Prestige = account.CharacterData.PmcData.Prestige;
-            pmcData.Info.PrestigeLevel = account.CharacterData.PmcData.Info.PrestigeLevel;
+            pmcData.Prestige = oldPmc.Prestige;
+            pmcData.Info.PrestigeLevel = oldPmc.Info?.PrestigeLevel;
         }
 
         UpdateInventoryEquipmentId(pmcData);
@@ -110,14 +139,14 @@ public class CreateProfileService(
         };
 
         // Set old account in-game time data on wipe, if it exists to the pmc
-        if (account.CharacterData?.PmcData?.Stats?.Eft is not null)
+        if (oldPmc?.Stats?.Eft is not null)
         {
             if (pmcData.Stats.Eft is not null)
             {
-                pmcData.Stats.Eft.TotalInGameTime = account.CharacterData.PmcData.Stats.Eft.TotalInGameTime;
+                pmcData.Stats.Eft.TotalInGameTime = oldPmc.Stats.Eft.TotalInGameTime;
 
                 // Get the old profile's scav lifetime counter, if it exists
-                var lifetimeCounter = account.CharacterData?.PmcData?.Stats?.Eft?.OverallCounters?.Items?.FirstOrDefault(x =>
+                var lifetimeCounter = oldPmc.Stats.Eft.OverallCounters?.Items?.FirstOrDefault(x =>
                     x.Key?.Contains("LifeTime") == true
                 );
 
@@ -205,16 +234,17 @@ public class CreateProfileService(
         ResetAllTradersInProfile(sessionId);
 
         saveServer.GetProfile(sessionId).CharacterData.ScavData = playerScavGenerator.Generate(sessionId);
+        softResetService.MergePreservedStatsIfPending(saveServer.GetProfile(sessionId));
 
         // Set old account in-game time data on wipe, if it exists to the scav
-        if (account.CharacterData?.ScavData?.Stats?.Eft is not null)
+        if (oldScav?.Stats?.Eft is not null)
         {
             if (profileDetails.CharacterData.ScavData.Stats?.Eft is not null)
             {
-                profileDetails.CharacterData.ScavData.Stats.Eft.TotalInGameTime = account.CharacterData.ScavData.Stats.Eft.TotalInGameTime;
+                profileDetails.CharacterData.ScavData.Stats.Eft.TotalInGameTime = oldScav.Stats.Eft.TotalInGameTime;
 
                 // Get the old profile's scav lifetime counter, if it exists
-                var lifetimeCounter = account.CharacterData?.ScavData?.Stats?.Eft?.OverallCounters?.Items?.FirstOrDefault(x =>
+                var lifetimeCounter = oldScav.Stats.Eft.OverallCounters?.Items?.FirstOrDefault(x =>
                     x.Key?.Contains("LifeTime") == true
                 );
 

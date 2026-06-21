@@ -27,6 +27,7 @@ public class SaveServer(
     BackupService backupService,
     ProfileAutoRepairService profileAutoRepairService,
     SoftResetService softResetService,
+    PasswordStoreService passwordStoreService,
     ISptLogger<SaveServer> logger,
     ConfigServer configServer
 )
@@ -90,13 +91,26 @@ public class SaveServer(
     public string GetProfileFilePath(MongoId sessionId)
     {
         var username = GetUsernameBySessionId(sessionId);
-        if (!string.IsNullOrEmpty(username))
+        if (!string.IsNullOrEmpty(username) && !IsHeadlessUsername(username))
         {
             // 清理用户名中的非法文件名字符
             var safeUsername = SanitizeFileName(username);
             return Path.Combine(profileFilepath, $"{safeUsername}.json");
         }
+        // headless 存档（Fika 自动生成，用户名固定前缀 headless_）必须继续以 MongoId(ProfileId) 命名：
+        // Fika 无头子系统全程以 ProfileId 识别存档/生成启动脚本，且 IsHeadlessClient 用 ProfileId 鉴权。
+        // 若按用户名命名，ProfileCleanupService.DedupeProfileFiles 会把 MongoId 命名文件当重复删除，
+        // 导致无头客户端鉴权失配、识别不到存档（[Fika Headless Client] Invalid headless client ...）。
         return Path.Combine(profileFilepath, $"{sessionId}.json");
+    }
+
+    /// <summary>
+    /// 判断用户名是否为 Fika headless 存档（自动生成，固定前缀 headless_）。
+    /// headless 存档不参与用户名命名，始终以 MongoId 命名。
+    /// </summary>
+    public static bool IsHeadlessUsername(string? username)
+    {
+        return username is not null && username.StartsWith("headless_", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -477,8 +491,20 @@ public class SaveServer(
         Stopwatch start;
         try
         {
-            // 使用用户名作为文件名（如果可用）
+            // 使用用户名作为文件名（如果可用；headless 存档强制 MongoId 命名）
             var filePath = GetProfileFilePath(sessionID);
+
+            // 迁移：曾经按用户名命名的 headless 存档（headless_xxx.json）现改回 MongoId 命名，
+            // 删除残留的旧用户名文件，避免重启时旧档与 MongoId 档双加载、陈旧数据回覆盖。
+            var legacyUsername = GetUsernameBySessionId(sessionID);
+            if (IsHeadlessUsername(legacyUsername))
+            {
+                var legacyPath = Path.Combine(profileFilepath, $"{SanitizeFileName(legacyUsername!)}.json");
+                if (!string.Equals(Path.GetFullPath(legacyPath), Path.GetFullPath(filePath), StringComparison.OrdinalIgnoreCase))
+                {
+                    fileUtil.DeleteFile(legacyPath);
+                }
+            }
 
             // Run pre-save callbacks before we save into json
             foreach (var callback in onBeforeSaveCallbacks)
@@ -532,12 +558,13 @@ public class SaveServer(
         // 落盘走 SaveProfileAsync 的用户名命名路径。
         if (!force && softResetService.Enabled && profiles.TryGetValue(sessionID, out var profileToReset) && profileToReset.ProfileInfo is not null)
         {
-            softResetService.CaptureSidecar(sessionID, profileToReset);
-            softResetService.WipeProfileContent(profileToReset);
-            profileToReset.ProfileInfo.IsWiped = true;
-            SaveProfileAsync(sessionID).GetAwaiter().GetResult();
-            logger.Warning($"[SoftReset] profile {sessionID} soft-reset instead of deleted (identity preserved, progress wiped)");
-            return true;
+            return SoftResetProfile(sessionID);
+        }
+
+        if (!passwordStoreService.Remove(sessionID))
+        {
+            logger.Error($"Unable to remove credentials for profile {sessionID}; profile deletion was cancelled");
+            return false;
         }
 
         // 获取用户名（用于删除用户名命名的文件）
@@ -563,6 +590,39 @@ public class SaveServer(
         // 懒加载：清理头索引
         UnregisterLazyHeader(sessionID);
 
+        return true;
+    }
+
+    /// <summary>
+    ///     软重置：保留账号身份（Info：用户名/密码/版本/邮箱映射均不动），仅擦除全部游戏进度并标记 IsWiped。
+    ///     与 <see cref="RemoveProfile"/> 的软重置分支共用同一套编排，但本方法不受 SoftReset 开关约束——
+    ///     供注册页玩家自助、启动器删档、管理员显式软重置调用；真删账号必须显式调用 RemoveProfile(force: true)。
+    /// </summary>
+    /// <param name="sessionID"> 目标存档 ID </param>
+    /// <returns> true 表示已软重置；档不存在/无 Info 返回 false </returns>
+    public bool SoftResetProfile(MongoId sessionID)
+    {
+        SptProfile profileToReset;
+        try
+        {
+            // LazyProfile mode may only have the header indexed at this point; materialize before wiping.
+            profileToReset = GetProfile(sessionID);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (profileToReset.ProfileInfo is null)
+        {
+            return false;
+        }
+
+        softResetService.CaptureSidecar(sessionID, profileToReset);
+        softResetService.WipeProfileContent(profileToReset);
+        profileToReset.ProfileInfo.IsWiped = true;
+        SaveProfileAsync(sessionID).GetAwaiter().GetResult();
+        logger.Warning($"[SoftReset] profile {sessionID} progress wiped (identity preserved)");
         return true;
     }
 

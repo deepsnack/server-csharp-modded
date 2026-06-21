@@ -4,8 +4,9 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass;
 
 /// <summary>
-///     通行证任务追踪：进度全部来自客户端插件战后上报（POST /battlepass/api/track），
-///     服务端按 <see cref="BpTaskTemplate"/> 条件判定并累计到 <see cref="BpActiveTask.Progress"/>，达成即结算 BP 经验。
+///     通行证任务追踪：服务端战后档案是 Kills/FindItem/HandoverItem/Exploration 的权威来源；
+///     客户端插件上报（POST /battlepass/api/track）只作为 VisitZone/PlaceItem 等服务端档案缺失维度的补充。
+///     两条路径共用同一套 <see cref="BpTaskTemplate"/> 条件判定与进度结算。
 ///     <para><b>零档案副作用</b>：不注入任何原生 quest、不写 <c>pmcData.Quests</c>/<c>TaskConditionCounters</c>，加载链路完全不受影响。</para>
 ///     <para><b>跨局累计</b>：默认任务进度跨局累加，仅在 daily/weekly/season 轮换时清零；
 ///     <c>singleRaid=true</c> 的任务要求单局内一次达标、不跨局累加。</para>
@@ -14,11 +15,18 @@ namespace SPTarkov.Server.Core.BattlePass;
 [Injectable]
 public class BattlePassTrackService(
     BattlePassService battlePassService,
+    Services.DatabaseService databaseService,
     ISptLogger<BattlePassTrackService> logger
 )
 {
     /// <summary>每个 profile 保留的最近 raidId 数量（幂等去重，防无界增长）。</summary>
     private const int MaxProcessedRaidIds = 200;
+
+    private enum RaidTrackSource
+    {
+        ClientSupplemental,
+        ServerAuthoritative,
+    }
 
     // ============================ 任务轮换（不依赖 pmc，仅维护 BpProgress.ActiveTasks） ============================
 
@@ -27,16 +35,27 @@ public class BattlePassTrackService(
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var allTasks = BattlePassStore.GetTasks();
+        var season = BattlePassStore.GetSeason();
         var changed = false;
         foreach (var scope in new[] { "daily", "weekly", "season" })
         {
-            var last = GetLastRollForScope(prog, scope, now);
-            if (!TaskRotationService.ShouldRoll(scope, last, now))
+            var last = GetLastRollForScope(prog, scope);
+            var shouldRoll = TaskRotationService.ShouldRoll(season, scope, last, now);
+            var needsReconciliation = TaskRotationService.NeedsReconciliation(allTasks, season, prog.ActiveTasks, scope);
+            if (!shouldRoll && !needsReconciliation)
             {
                 continue;
             }
 
-            changed |= RollScope(prog, allTasks, scope, now, avoidPrevious: false, resetDailyRerolls: true);
+            if (shouldRoll)
+            {
+                RollScope(prog, allTasks, season, scope, now, avoidPrevious: false, resetRefreshBudget: true);
+                changed = true;
+            }
+            else
+            {
+                changed |= ReconcileScope(prog, allTasks, season, scope, now);
+            }
         }
 
         return changed;
@@ -53,19 +72,20 @@ public class BattlePassTrackService(
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var allTasks = BattlePassStore.GetTasks();
+        var season = BattlePassStore.GetSeason();
 
         if (normalized == "all")
         {
             var changed = false;
             foreach (var s in new[] { "daily", "weekly", "season" })
             {
-                changed |= RollScope(prog, allTasks, s, now, avoidPrevious: true, resetDailyRerolls: false);
+                changed |= RollScope(prog, allTasks, season, s, now, avoidPrevious: true, resetRefreshBudget: false);
             }
 
             return changed;
         }
 
-        return RollScope(prog, allTasks, normalized, now, avoidPrevious: true, resetDailyRerolls: false);
+        return RollScope(prog, allTasks, season, normalized, now, avoidPrevious: true, resetRefreshBudget: false);
     }
 
     /// <summary>替换某条日任务为同池内另一随机任务（消耗刷新次数由调用方控制）。</summary>
@@ -78,6 +98,12 @@ public class BattlePassTrackService(
         }
 
         var allTasks = BattlePassStore.GetTasks();
+        var targetTemplate = allTasks.FirstOrDefault(t => string.Equals(t.Id, target.TaskId, StringComparison.OrdinalIgnoreCase));
+        if (targetTemplate is null || string.Equals(targetTemplate.Rotation, "fixed", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         var activeIds = prog.ActiveTasks.Select(t => t.TaskId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var pool = allTasks
             .Where(t =>
@@ -101,10 +127,11 @@ public class BattlePassTrackService(
     private static bool RollScope(
         BpProgress prog,
         List<BpTaskTemplate> allTasks,
+        BpSeason season,
         string scope,
         long now,
         bool avoidPrevious,
-        bool resetDailyRerolls
+        bool resetRefreshBudget
     )
     {
         var oldTasks = prog.ActiveTasks.Where(t => ScopeMatches(t.Scope, scope)).ToList();
@@ -116,7 +143,7 @@ public class BattlePassTrackService(
 
         prog.ActiveTasks.RemoveAll(t => ScopeMatches(t.Scope, scope));
 
-        var selected = TaskRotationService.SelectForScope(allTasks, scope, excluded);
+        var selected = TaskRotationService.SelectForScope(allTasks, season, scope, excluded);
         foreach (var template in selected)
         {
             prog.ActiveTasks.Add(NewActiveTask(template, now));
@@ -125,7 +152,7 @@ public class BattlePassTrackService(
         if (ScopeMatches(scope, "daily"))
         {
             prog.LastDailyRollUtc = now;
-            if (resetDailyRerolls)
+            if (resetRefreshBudget)
             {
                 prog.DailyRerollsUsed = 0;
             }
@@ -133,6 +160,18 @@ public class BattlePassTrackService(
         else if (ScopeMatches(scope, "weekly"))
         {
             prog.LastWeeklyRollUtc = now;
+            if (resetRefreshBudget)
+            {
+                prog.WeeklyRefreshUsed = 0;
+            }
+        }
+        else if (ScopeMatches(scope, "season"))
+        {
+            prog.LastSeasonRollUtc = now;
+            if (resetRefreshBudget)
+            {
+                prog.SeasonRefreshUsed = 0;
+            }
         }
 
         return oldTasks.Count > 0 || selected.Count > 0;
@@ -151,15 +190,98 @@ public class BattlePassTrackService(
         };
     }
 
+    internal static bool ReconcileScope(BpProgress prog, List<BpTaskTemplate> allTasks, BpSeason season, string scope, long now)
+    {
+        var scoped = TaskRotationService.GetScopedTemplates(allTasks, scope);
+        var templates = scoped.ToDictionary(t => t.Id, StringComparer.OrdinalIgnoreCase);
+        var current = prog.ActiveTasks.Where(t => ScopeMatches(t.Scope, scope)).ToList();
+        var retained = new List<BpActiveTask>();
+        var retainedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var active in current)
+        {
+            if (templates.ContainsKey(active.TaskId) && retainedIds.Add(active.TaskId))
+            {
+                retained.Add(active);
+            }
+        }
+
+        foreach (var fixedTemplate in scoped.Where(t => string.Equals(t.Rotation, "fixed", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (retainedIds.Add(fixedTemplate.Id))
+            {
+                retained.Add(NewActiveTask(fixedTemplate, now));
+            }
+        }
+
+        var desiredRandomCount = Math.Min(
+            TaskRotationService.RandomCountForScope(season, scope),
+            scoped.Count(t => !string.Equals(t.Rotation, "fixed", StringComparison.OrdinalIgnoreCase))
+        );
+        var retainedRandom = retained
+            .Where(t => templates.TryGetValue(t.TaskId, out var template)
+                && !string.Equals(template.Rotation, "fixed", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (retainedRandom.Count > desiredRandomCount)
+        {
+            var removeIds = retainedRandom
+                .Skip(desiredRandomCount)
+                .Select(t => t.TaskId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            retained.RemoveAll(t => removeIds.Contains(t.TaskId));
+            retainedIds.ExceptWith(removeIds);
+        }
+        else if (retainedRandom.Count < desiredRandomCount)
+        {
+            var candidates = scoped
+                .Where(t =>
+                    !string.Equals(t.Rotation, "fixed", StringComparison.OrdinalIgnoreCase)
+                    && !retainedIds.Contains(t.Id)
+                )
+                .ToList();
+            foreach (var template in TaskRotationService.PickWeighted(candidates, desiredRandomCount - retainedRandom.Count))
+            {
+                retained.Add(NewActiveTask(template, now));
+                retainedIds.Add(template.Id);
+            }
+        }
+
+        prog.ActiveTasks.RemoveAll(t => ScopeMatches(t.Scope, scope));
+        prog.ActiveTasks.AddRange(retained);
+        return true;
+    }
+
     // ============================ 战后上报 → 进度累计 / 结算 ============================
 
     /// <summary>
-    ///     应用客户端实时上报的「本场累计快照」：对每条未完成的活跃任务按模板条件算出「本场至今总量」，
-    ///     只把相对上次快照的<b>增量</b>补进进度（单局任务直接取本场值），达成则结算 BP 经验。会改动 prog（调用方保存）。
-    ///     <para><b>增量幂等</b>：同一 raidId 多次累计快照（逐事件 / 30s 心跳 / 战局结束）重复、乱序、丢包都安全，绝不重复加分；
-    ///     已收尾战局的迟到上报按 <see cref="BpProgress.ProcessedRaidIds"/> 拦截。</para>
+    ///     应用客户端实时上报的「本场累计快照」。客户端只负责服务端战后档案缺失的补充维度：
+    ///     <c>VisitZone</c> / <c>PlaceItem</c>；Kills/FindItem/HandoverItem/Exploration 由
+    ///     <see cref="ApplyAuthoritativeRaidTrack"/> 在战后从服务端档案权威结算，避免客户端随机 raidId 与
+    ///     服务端 ServerId 不一致时重复入账。
     /// </summary>
     public RaidTrackResult ApplyRaidTrack(string profileId, BpProgress prog, BpSeason season, RaidTrackPayload? payload)
+    {
+        return ApplyRaidTrackInternal(profileId, prog, season, payload, RaidTrackSource.ClientSupplemental);
+    }
+
+    /// <summary>
+    ///     应用服务端战后档案生成的权威累计快照。会改动 prog（调用方保存）。
+    ///     <para><b>增量幂等</b>：同一 raidId 重复处理会按 <see cref="BpProgress.ProcessedRaidIds"/> 拦截；
+    ///     若旧版客户端已在同一物理战局中预先累计过同类任务，本方法会沿用当前战局基准，只补最终差值。</para>
+    /// </summary>
+    public RaidTrackResult ApplyAuthoritativeRaidTrack(string profileId, BpProgress prog, BpSeason season, RaidTrackPayload? payload)
+    {
+        return ApplyRaidTrackInternal(profileId, prog, season, payload, RaidTrackSource.ServerAuthoritative);
+    }
+
+    private RaidTrackResult ApplyRaidTrackInternal(
+        string profileId,
+        BpProgress prog,
+        BpSeason season,
+        RaidTrackPayload? payload,
+        RaidTrackSource source
+    )
     {
         var result = new RaidTrackResult();
         if (payload is null)
@@ -168,6 +290,9 @@ public class BattlePassTrackService(
         }
 
         var raidId = payload.RaidId ?? "";
+        var previousRaidId = prog.CurrentRaidId;
+        var previousRaidHadAppliedProgress = prog.CurrentRaidApplied.Any(kv => kv.Value > 0);
+        var authoritative = source == RaidTrackSource.ServerAuthoritative;
 
         // 战局切换 / 乱序迟到判定
         if (!string.Equals(raidId, prog.CurrentRaidId, StringComparison.Ordinal))
@@ -179,10 +304,15 @@ public class BattlePassTrackService(
                 return result;
             }
 
-            // 切到新战局：归档旧局 id，重置本场已应用计数（旧局未收尾也无妨，跨局进度已累计）
-            ArchiveRaid(prog, prog.CurrentRaidId);
+            // 客户端补充上报切到新战局：归档旧局 id，重置本场已应用计数。
+            // 服务端权威收尾即便 raidId 不同，也先保留当前基准，兼容旧版客户端已预先入账的同类进度。
+            if (!authoritative)
+            {
+                ArchiveRaid(prog, prog.CurrentRaidId);
+                prog.CurrentRaidApplied.Clear();
+            }
+
             prog.CurrentRaidId = string.IsNullOrWhiteSpace(raidId) ? null : raidId;
-            prog.CurrentRaidApplied.Clear();
         }
 
         var templates = BattlePassStore.GetTasks().ToDictionary(t => t.Id);
@@ -195,6 +325,11 @@ public class BattlePassTrackService(
             }
 
             if (!templates.TryGetValue(active.TaskId, out var tpl))
+            {
+                continue;
+            }
+
+            if (!TaskSourceCanProcess(tpl, source))
             {
                 continue;
             }
@@ -250,11 +385,25 @@ public class BattlePassTrackService(
         if (!string.IsNullOrWhiteSpace(payload.ExitStatus))
         {
             ArchiveRaid(prog, prog.CurrentRaidId);
+            if (authoritative && previousRaidHadAppliedProgress)
+            {
+                ArchiveRaid(prog, previousRaidId);
+            }
+
             prog.CurrentRaidId = null;
             prog.CurrentRaidApplied.Clear();
         }
 
         return result;
+    }
+
+    private static bool TaskSourceCanProcess(BpTaskTemplate tpl, RaidTrackSource source)
+    {
+        var ct = tpl.ConditionType?.Trim() ?? "Kills";
+        var supplemental = string.Equals(ct, "VisitZone", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ct, "PlaceItem", StringComparison.OrdinalIgnoreCase);
+
+        return source == RaidTrackSource.ClientSupplemental ? supplemental : !supplemental;
     }
 
     /// <summary>把一个 raidId 记入已处理列表（容量上限，超出丢弃最旧）；用于拦截已收尾战局的迟到上报。</summary>
@@ -273,7 +422,7 @@ public class BattlePassTrackService(
     }
 
     /// <summary>把一场上报对某任务模板换算成进度增量（条件判定全在服务端）。</summary>
-    private static int ComputeDelta(BpTaskTemplate tpl, RaidTrackPayload payload)
+    private int ComputeDelta(BpTaskTemplate tpl, RaidTrackPayload payload)
     {
         var ct = tpl.ConditionType?.Trim() ?? "Kills";
 
@@ -298,8 +447,13 @@ public class BattlePassTrackService(
             return payload.VisitedZones.Any(z => string.Equals(z, tpl.ZoneId, StringComparison.OrdinalIgnoreCase)) ? 1 : 0;
         }
 
-        if (string.Equals(ct, "HandoverItem", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(ct, "FindItem", StringComparison.OrdinalIgnoreCase))
+        // HandoverItem 只走网页上交（BattlePassHandoverService），不在战后档案自动计数，避免「游戏内还是网页交」歧义。
+        if (string.Equals(ct, "HandoverItem", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (string.Equals(ct, "FindItem", StringComparison.OrdinalIgnoreCase))
         {
             if (!LocationMatches(tpl.Location, payload.Location))
             {
@@ -335,7 +489,7 @@ public class BattlePassTrackService(
             return 0;
         }
 
-        return payload.Kills.Count(k => KillMatchesTarget(tpl.Target, k));
+        return payload.Kills.Count(k => KillMatches(tpl, k));
     }
 
     private static HashSet<string> WantedTpls(BpTaskTemplate tpl)
@@ -357,8 +511,34 @@ public class BattlePassTrackService(
         return string.Equals(templateLocation, raidLocation, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool KillMatchesTarget(string? target, BpKillEvent k)
+    internal bool KillMatches(BpTaskTemplate tpl, BpKillEvent k)
     {
+        if (!ValueMatches(tpl.Weapons, k.Weapon) || !ValueMatches(tpl.BodyParts, k.BodyPart))
+        {
+            return false;
+        }
+
+        if (!WeaponCaliberMatches(tpl.WeaponCalibers, k.Weapon))
+        {
+            return false;
+        }
+
+        if (!ValueMatches(tpl.SavageRoles, k.Role))
+        {
+            return false;
+        }
+
+        if (!DistanceMatches(tpl.DistanceCompare, tpl.DistanceValue, k.Distance))
+        {
+            return false;
+        }
+
+        if (!DaytimeMatches(tpl.DaytimeFrom, tpl.DaytimeTo, k.Time))
+        {
+            return false;
+        }
+
+        var target = tpl.Target;
         var t = (target ?? "Any").Trim();
         if (string.Equals(t, "Any", StringComparison.OrdinalIgnoreCase))
         {
@@ -378,9 +558,108 @@ public class BattlePassTrackService(
         };
     }
 
+    private bool WeaponCaliberMatches(IEnumerable<string>? allowed, string? weaponTpl)
+    {
+        var calibers = allowed?.Where(value => !string.IsNullOrWhiteSpace(value)).ToList();
+        if (calibers is null || calibers.Count == 0)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(weaponTpl) || !Models.Common.MongoId.IsValidMongoId(weaponTpl))
+        {
+            return false;
+        }
+
+        var weaponId = new Models.Common.MongoId(weaponTpl);
+        if (!databaseService.GetItems().TryGetValue(weaponId, out var weapon))
+        {
+            return false;
+        }
+
+        var actual = weapon.Properties?.Caliber ?? weapon.Properties?.AmmoCaliber;
+        return ValueMatches(calibers, actual);
+    }
+
+    private static bool ValueMatches(IEnumerable<string>? allowed, string? actual)
+    {
+        var list = allowed?.Where(v => !string.IsNullOrWhiteSpace(v)).ToList();
+        if (list is null || list.Count == 0)
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(actual) && list.Any(v => string.Equals(v, actual, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool DistanceMatches(string? compare, double? expected, double? actual)
+    {
+        if (expected is null)
+        {
+            return true;
+        }
+
+        if (actual is null)
+        {
+            return false;
+        }
+
+        return (compare ?? ">=").Trim().ToLowerInvariant() switch
+        {
+            ">" or "gt" or "greater" or "more" => actual.Value > expected.Value,
+            "<" or "lt" or "less" => actual.Value < expected.Value,
+            "<=" or "lte" or "le" or "max" or "atmost" => actual.Value <= expected.Value,
+            "=" or "==" or "eq" => Math.Abs(actual.Value - expected.Value) < 0.001,
+            _ => actual.Value >= expected.Value,
+        };
+    }
+
+    private static bool DaytimeMatches(int? from, int? to, string? time)
+    {
+        if (from is null && to is null)
+        {
+            return true;
+        }
+
+        if (!TryParseHour(time, out var hour))
+        {
+            return false;
+        }
+
+        var start = NormalizeHour(from ?? 0);
+        var end = NormalizeHour(to ?? 24);
+
+        if (start == end)
+        {
+            return true;
+        }
+
+        return start < end
+            ? hour >= start && hour < end
+            : hour >= start || hour < end;
+    }
+
+    private static bool TryParseHour(string? time, out int hour)
+    {
+        hour = 0;
+        if (string.IsNullOrWhiteSpace(time))
+        {
+            return false;
+        }
+
+        var firstPart = time.Split(':', 2)[0];
+        return int.TryParse(firstPart, out hour);
+    }
+
+    private static int NormalizeHour(int hour)
+    {
+        var normalized = hour % 24;
+        return normalized < 0 ? normalized + 24 : normalized;
+    }
+
     // ============================ 小工具 ============================
 
-    private static long GetLastRollForScope(BpProgress prog, string scope, long now)
+    private static long GetLastRollForScope(BpProgress prog, string scope)
     {
         if (ScopeMatches(scope, "daily"))
         {
@@ -392,7 +671,7 @@ public class BattlePassTrackService(
             return prog.LastWeeklyRollUtc;
         }
 
-        return prog.ActiveTasks.Any(t => ScopeMatches(t.Scope, "season")) ? now : 0;
+        return prog.LastSeasonRollUtc;
     }
 
     private static string? NormalizeScope(string? scope)

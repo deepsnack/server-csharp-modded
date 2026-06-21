@@ -10,13 +10,14 @@ namespace SPTarkov.Server.Core.BattlePass.Controllers;
 ///     <list type="bullet">
 ///       <item><c>GET /battlepass/api/title/{profileId}</c>：单个玩家当前佩戴称号。</item>
 ///       <item><c>POST /battlepass/api/titles</c>（body <c>{profileIds:[...]}</c>）：批量（raid 昵称牌）。</item>
+///       <item><c>POST /battlepass/api/titles-by-nickname</c>（body <c>{nicknames:[...]}</c>）：按昵称批量（主菜单在线玩家列表）。</item>
 ///       <item><c>GET /battlepass/api/title-image/{titleId}</c>：图片称号的 PNG（约定 128×32 透明底）。</item>
 ///     </list>
 ///     字面量路由优先于页面 catch-all（同 <c>BattlePassIconController</c>），不会被遮蔽。
 /// </summary>
 [Injectable]
 [ApiController]
-public class BattlePassTitleController
+public class BattlePassTitleController(BattlePassService battlePassService)
 {
     private const int MaxBatch = 100;
 
@@ -58,6 +59,32 @@ public class BattlePassTitleController
         }
 
         return new { success = true, titles = BattlePassTitleApi.GetEquippedTitles(ids) };
+    }
+
+    [HttpPost("battlepass/api/titles-by-nickname")]
+    public object GetTitlesByNickname([FromBody] JsonElement request)
+    {
+        var names = new List<string>();
+        if (request.ValueKind == JsonValueKind.Object
+            && request.TryGetProperty("nicknames", out var arr)
+            && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var e in arr.EnumerateArray())
+            {
+                var n = e.GetString();
+                if (!string.IsNullOrWhiteSpace(n))
+                {
+                    names.Add(n);
+                }
+
+                if (names.Count >= MaxBatch)
+                {
+                    break;
+                }
+            }
+        }
+
+        return new { success = true, titles = battlePassService.GetEquippedTitlesByNickname(names) };
     }
 
     [HttpGet("battlepass/api/title-image/{titleId}")]

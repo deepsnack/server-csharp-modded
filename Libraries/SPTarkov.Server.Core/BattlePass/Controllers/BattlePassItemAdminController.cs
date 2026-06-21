@@ -16,7 +16,8 @@ namespace SPTarkov.Server.Core.BattlePass.Controllers;
 public class BattlePassItemAdminController(
     ItemSearchService searchService,
     ItemGraphService graphService,
-    ItemControlSync controlSync
+    ItemControlSync controlSync,
+    ItemBanSync itemBanSync
 )
 {
     private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
@@ -112,5 +113,81 @@ public class BattlePassItemAdminController(
         BattlePassStore.SaveItemOverrides(list);
         controlSync.Sync();
         return new { success = removed > 0 };
+    }
+
+    // ============================ 全局物品封禁（屏蔽而非删除） ============================
+
+    /// <summary>读取当前全局封禁配置（tpl + 分类）。</summary>
+    [HttpGet("bans")]
+    public object GetBans([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, bans = BattlePassStore.GetItemBans() };
+    }
+
+    /// <summary>整体替换全局封禁配置（body = BpItemBans）并即时屏蔽生效（非破坏、可还原）。</summary>
+    [HttpPost("bans")]
+    public object SetBans([FromBody] BpItemBans bans, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        BattlePassStore.SaveItemBans(bans ?? new BpItemBans());
+        itemBanSync.Apply();
+        return new { success = true };
+    }
+
+    /// <summary>单项切换封禁（body: {tpl, banned} 或 {category, banned}）。便于前端逐条勾选。</summary>
+    [HttpPost("bans/toggle")]
+    public object ToggleBan([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var banned = !request.TryGetProperty("banned", out var b) || b.ValueKind != JsonValueKind.False;
+        var tpl = request.TryGetProperty("tpl", out var t) ? t.GetString() : null;
+        var category = request.TryGetProperty("category", out var c) ? c.GetString() : null;
+
+        if (string.IsNullOrWhiteSpace(tpl) && string.IsNullOrWhiteSpace(category))
+        {
+            return new { success = false, message = "缺少 tpl 或 category" };
+        }
+
+        var bans = BattlePassStore.GetItemBans();
+        if (!string.IsNullOrWhiteSpace(tpl))
+        {
+            if (banned)
+            {
+                bans.Tpls.Add(tpl);
+            }
+            else
+            {
+                bans.Tpls.Remove(tpl);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            if (banned)
+            {
+                bans.Categories.Add(category);
+            }
+            else
+            {
+                bans.Categories.Remove(category);
+            }
+        }
+
+        BattlePassStore.SaveItemBans(bans);
+        itemBanSync.Apply();
+        return new { success = true, bans };
     }
 }

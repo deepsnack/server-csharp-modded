@@ -85,6 +85,13 @@ table.grid tr:hover td { background: #16170d; }
 .code-gen .json-edit { min-height: 120px; margin: 14px 16px; width: calc(100% - 32px); color: var(--brass-hi); }
 .badge-used { color: var(--red); }
 .badge-free { color: var(--green); }
+.player-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 10px 0 12px; padding: 8px 10px; border: 1px solid var(--line); background: var(--panel);
+}
+.player-toolbar #player-search { flex: 1 1 280px; min-width: 220px; }
+.player-toolbar .muted { color: var(--text-dim); font-family: var(--f-mono); font-size: 11px; }
+.player-check, #player-check-all { width: auto; margin: 0; }
 
 /* ---- 细粒度折叠区 ---- */
 details.fine { margin-top: 14px; border: 1px solid var(--line); padding: 10px 12px; background: rgba(0,0,0,.2); }
@@ -115,8 +122,9 @@ details.fine label { font-size: 11px; }
 
 label.chk { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
 label.chk input { width: auto; margin: 0; }
+.resupply-editor { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 8px; }
 
-.tpl-row { display: flex; gap: 10px; align-items: center; }
+.tpl-row { display: flex; gap: 10px; align-items: center; position: relative; }
 .tpl-row input { flex: 1 1 auto; }
 
 .avatar-box {
@@ -175,6 +183,8 @@ label.chk input { width: auto; margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; background: var(--panel-hi); border: 1px solid var(--line); border-radius: 4px; font-family: var(--f-mono); font-size: 11px; color: var(--text); }
 .chip-x { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.chip-name { font-family: var(--f-ui); color: var(--text); }
+.chip-id { font-family: var(--f-mono); font-size: 10px; color: var(--text-dim); }
 
 /* ============================================================================
    任务编辑器 (tasks.html) 图形化布局
@@ -244,6 +254,33 @@ label.with-cb input[type=checkbox] { width: auto; margin: 0; }
 .ip-icon { width: 32px; height: 32px; object-fit: contain; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
 .ip-results { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--panel); border: 1px solid var(--line-bright); max-height: 240px; overflow-y: auto; box-shadow: 0 6px 18px rgba(0,0,0,.45); border-radius: 0 0 4px 4px; }
 .ip-selected-name { font-size: 12px; color: var(--brass); margin-top: 2px; }
+.multi-item-picker { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.multi-value-input { font-family: var(--f-mono); font-size: 11px; }
+.multi-chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }
+.multi-chip {
+    display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+    border: 1px solid var(--line); background: rgba(216,162,74,.08); color: var(--text);
+    border-radius: 3px; padding: 2px 6px; font-family: var(--f-mono); font-size: 10px;
+}
+.multi-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-chip button { border: 0; background: none; color: var(--red); cursor: pointer; padding: 0; line-height: 1; }
+.tag-entry, .condition-pair { display: flex; gap: 8px; align-items: center; }
+.tag-entry input { flex: 1 1 auto; }
+.condition-pair > * { flex: 1 1 0; }
+.distance-pair select { flex: 0 0 92px; }
+
+.kill-conditions { margin-top: 14px; border: 1px solid var(--line-bright); background: rgba(0,0,0,.2); padding: 12px; }
+.kill-conditions-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 10px; }
+.kill-conditions-head strong { color: var(--brass); font-family: var(--f-display); letter-spacing: 1px; }
+.kill-conditions-head span { color: var(--text-dim); font-size: 11px; }
+.kill-condition-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.kill-condition-card { border: 1px solid var(--line); background: var(--panel); padding: 10px; min-width: 0; }
+.kill-condition-card h3 { margin: 0 0 8px; color: var(--brass-dim); font-family: var(--f-display); font-size: 13px; letter-spacing: .8px; }
+.kill-condition-card > label, .kill-condition-card .tag-picker + label { display: block; margin-top: 8px; }
+.choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.choice-grid label { display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--line); background: rgba(255,255,255,.02); cursor: pointer; }
+.choice-grid input { width: auto; margin: 0; }
+@media (max-width: 760px) { .kill-condition-grid { grid-template-columns: 1fr; } }
 
 /* 物品搜索结果项 */
 .sr-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--line); transition: background .12s; }
@@ -289,6 +326,8 @@ label.with-cb input[type=checkbox] { width: auto; margin: 0; }
 .rw-row input, .rw-row select { font-size: 12px; padding: 4px 6px; }
 .rw-tpl { flex: 1; font-family: var(--f-mono); }
 .rw-tpl-results { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--panel); border: 1px solid var(--line-bright); max-height: 180px; overflow-y: auto; box-shadow: 0 4px 14px rgba(0,0,0,.4); border-radius: 0 0 4px 4px; }
+.rw-card.rw-invalid { outline: 1px solid #c0392b; outline-offset: -1px; }
+.sr-new-link { display: block; padding: 6px 8px; font-size: 11px; color: var(--accent, #c8a44d); cursor: pointer; border-top: 1px solid var(--line); }
 .rw-del { padding: 2px 6px; font-size: 16px; line-height: 1; }
 .rw-extra { border-top: 1px dashed var(--line); padding-top: 4px; margin-top: 2px; }
 .rw-extra .rw-row label { width: 52px; font-size: 10px; color: var(--text-dim); }
@@ -307,3 +346,34 @@ label.with-cb input[type=checkbox] { width: auto; margin: 0; }
 /* 浮动跳转按钮 */
 .track-jump { position: fixed; right: 22px; bottom: 26px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
 .track-jump button { box-shadow: 0 3px 10px rgba(0,0,0,.4); }
+
+/* ---- 统一价格编辑器（BpPrice，约定组件 price.js） ---- */
+.price-editor .price-rows { display: flex; flex-direction: column; gap: 8px; }
+.price-row { display: flex; gap: 8px; align-items: center; }
+.price-row .price-item-wrap { flex: 1 1 auto; }
+.price-row .price-item-input { flex: 1 1 auto; }
+.price-row .price-item-icon { width: 30px; height: 30px; }
+.price-row .price-amt { flex: 0 0 96px; }
+.price-row .price-del { flex: 0 0 auto; line-height: 1; padding: 4px 9px; }
+.price-add { margin-top: 8px; }
+
+/* ---- 任务系统全局设置面板（tasks.html）---- */
+.task-settings-box { margin-top: 14px; border: 1px solid var(--line); padding: 10px 12px; }
+.task-settings-box > summary { cursor: pointer; font-family: var(--f-display); font-weight: 600; letter-spacing: 1px; color: var(--brass); }
+.task-settings-box .ts-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 10px; margin-top: 6px; }
+.task-settings-box .ts-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-dim); }
+.task-settings-box .ts-grid label input { width: 100%; }
+.task-settings-box .ts-sub { color: var(--text-faint); font-size: 9.5px; }
+
+/* ---- 有效全量黑名单列表（flea.html）---- */
+#eff-filter { width: 100%; margin: 8px 0; }
+.eff-rows { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+.eff-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--line); }
+.eff-row .rw-icon { width: 30px; height: 30px; flex: 0 0 auto; }
+.eff-row .eff-text { flex: 1 1 auto; min-width: 0; }
+.eff-row .eff-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.eff-row .meta { font-size: 10px; }
+.eff-row .btn { flex: 0 0 auto; }
+.badge.managed { color: var(--brass); border-color: var(--brass-dim); }
+.badge.custom { color: var(--olive); border-color: rgba(140,150,90,.5); }
+.badge.bsg { color: var(--molten); border-color: rgba(226,96,42,.5); }

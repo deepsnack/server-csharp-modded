@@ -28,10 +28,15 @@ public class TraderCallbacks(
 
     public Task<bool> OnUpdate(long _)
     {
-        traderController.Update();
+        // App 主循环每 5s 回调一次本方法；仅当本轮确实刷新了某商人 assort 时才失效缓存。
+        // （此前无条件失效导致 trader 缓存最长只活 5s、命中率≈0，等于没有缓存）
+        if (traderController.Update())
+        {
+            fleaTraderCache.InvalidateTrader();
+        }
 
-        // 商人周期重置（restock 等）后清空全部 trader 缓存（原 TraderOnUpdateInvalidatePatch 内联）
-        fleaTraderCache.InvalidateTrader();
+        // 周期回收超 TTL 的缓存条目，防止不再被访问的大响应体（下线玩家的 assort 等）常驻内存
+        fleaTraderCache.SweepExpired();
 
         return Task.FromResult(true);
     }

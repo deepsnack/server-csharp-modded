@@ -79,11 +79,21 @@
                 </div>
             </div>
 
+            <div class="panel">
+                <div class="panel-head"><h2>有效全量黑名单</h2><button id="eff-reload" class="btn ghost small">刷新</button></div>
+                <div class="form-body">
+                    <p class="hint" id="eff-summary">展示当前实际被跳蚤禁售的全部物品（自定义 + BSG 官方 + 原版自定义）。放开：自定义项=移出黑名单；BSG/原版项=加入白名单强制放开。立即生效。</p>
+                    <input id="eff-filter" placeholder="筛选名称 / tpl…" />
+                    <div id="eff-rows" class="eff-rows"></div>
+                </div>
+            </div>
+
             <button id="save-flea" class="btn primary">保存并应用</button>
         </main>
     </section>
 
     <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
     <script src="flea.js"></script>
 </body>
 </html>

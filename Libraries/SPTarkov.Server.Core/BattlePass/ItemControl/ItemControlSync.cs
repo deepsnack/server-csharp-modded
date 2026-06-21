@@ -20,7 +20,11 @@ namespace SPTarkov.Server.Core.BattlePass.ItemControl;
 ///     OnLoad 于 +90000（晚于物品 mod、早于 TraderRegistration）；后台保存后可运行时再 <see cref="Sync"/>。
 /// </summary>
 [Injectable(InjectionType.Singleton, TypePriority = OnLoadOrder.PostDBModLoader + 90000)]
-public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemControlSync> logger) : IOnLoad
+public class ItemControlSync(
+    DatabaseService databaseService,
+    ItemAcquisitionMaskService maskService,
+    ISptLogger<ItemControlSync> logger
+) : IOnLoad
 {
     private bool _lootHooked;
 
@@ -38,9 +42,11 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
             var overrides = BattlePassStore.GetItemOverrides();
             HookLootTransformers(); // 仅首次真正注册
 
+            // 最小破坏原则：仅 add 类直接注入内存 DB（无中生有，无法服务期实现）；
+            // remove 类一律改走服务期屏蔽（见 ItemAcquisitionMaskService），不再破坏式删 DB。
             foreach (var ov in overrides)
             {
-                if (!MongoIdEx.TryParse(ov.Tpl, out var tpl))
+                if (ov.Op != "add" || !MongoIdEx.TryParse(ov.Tpl, out var tpl))
                 {
                     continue;
                 }
@@ -56,14 +62,14 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
                     case AcqSource.Hideout:
                         ApplyHideout(ov, tpl);
                         break;
-                    case AcqSource.StartInv:
-                        ApplyStartInv(ov, tpl);
-                        break;
-                    // loot 由 transformer 处理，无需此处即时改
+                    // startInv 仅支持 remove（服务期屏蔽）；loot 由 transformer 处理
                 }
             }
 
-            logger.Success($"[SPT-BattlePass] 物品获取 override 已应用（共 {overrides.Count} 条）。");
+            // remove 索引重建：商人/任务/藏身处/初始库存的移除在各 serve 链路即时生效（克隆后过滤，不动 DB）
+            maskService.Rebuild();
+
+            logger.Success($"[SPT-BattlePass] 物品获取 override 已应用（共 {overrides.Count} 条；remove 走服务期屏蔽）。");
         }
         catch (Exception ex)
         {
@@ -87,17 +93,7 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
         var assort = trader.Assort;
         assort.Items ??= new List<Item>();
 
-        if (ov.Op == "remove")
-        {
-            var rootIds = assort.Items.Where(i => i.Template == tpl).Select(i => i.Id).ToHashSet();
-            assort.Items.RemoveAll(i => i.Template == tpl);
-            foreach (var rid in rootIds)
-            {
-                assort.BarterScheme?.Remove(rid);
-                assort.LoyalLevelItems?.Remove(rid);
-            }
-        }
-        else if (ov.Op == "add")
+        // 仅处理 add（remove 改走服务期屏蔽，见 ItemAcquisitionMaskService）
         {
             var rootId = DeterministicId($"{ov.TraderId}:{ov.Tpl}", "bp-itemctrl-trader");
             if (assort.Items.Any(i => i.Id == rootId))
@@ -145,25 +141,11 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
 
         if (!quest.Rewards.TryGetValue(ov.RewardGroup, out var rewards))
         {
-            if (ov.Op != "add")
-            {
-                return;
-            }
-
             rewards = new List<Reward>();
             quest.Rewards[ov.RewardGroup] = rewards;
         }
 
-        if (ov.Op == "remove")
-        {
-            foreach (var rw in rewards.Where(r => r.Type == RewardType.Item && r.Items is not null))
-            {
-                rw.Items!.RemoveAll(it => it.Template == tpl);
-            }
-
-            rewards.RemoveAll(r => r.Type == RewardType.Item && (r.Items is null || r.Items.Count == 0));
-        }
-        else if (ov.Op == "add")
+        // 仅处理 add（remove 改走服务期屏蔽，见 ItemAcquisitionMaskService）
         {
             var rewardId = DeterministicId($"{ov.QuestId}:{ov.RewardGroup}:{ov.Tpl}", "bp-itemctrl-quest");
             if (rewards.Any(r => r.Id == rewardId))
@@ -202,31 +184,7 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
             return;
         }
 
-        if (ov.Op == "remove")
-        {
-            if (ov.Role == "ingredient")
-            {
-                var recipe = ov.RecipeId is not null
-                    ? recipes.FirstOrDefault(r => r.Id.ToString() == ov.RecipeId)
-                    : null;
-                if (recipe?.Requirements is not null)
-                {
-                    recipe.Requirements.RemoveAll(rq => rq.TemplateId == tpl);
-                }
-                else
-                {
-                    foreach (var r in recipes.Where(r => r.Requirements is not null))
-                    {
-                        r.Requirements!.RemoveAll(rq => rq.TemplateId == tpl);
-                    }
-                }
-            }
-            else // output
-            {
-                recipes.RemoveAll(r => r.EndProduct == tpl);
-            }
-        }
-        else if (ov.Op == "add")
+        // 仅处理 add（remove 改走服务期屏蔽，见 ItemAcquisitionMaskService）
         {
             if (ov.Role == "ingredient" && ov.RecipeId is not null)
             {
@@ -276,39 +234,8 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
         }
     }
 
-    // ---- 初始库存 ----
-    private void ApplyStartInv(BpItemOverride ov, MongoId tpl)
-    {
-        var profiles = databaseService.GetTables().Templates?.Profiles;
-        if (profiles is null)
-        {
-            return;
-        }
-
-        foreach (var (_, sides) in profiles)
-        {
-            foreach (var (sideName, side) in new[] { ("Usec", sides.Usec), ("Bear", sides.Bear) })
-            {
-                if (!ov.Side.Equals("both", StringComparison.OrdinalIgnoreCase)
-                    && !ov.Side.Equals(sideName, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var inv = side?.Character?.Inventory?.Items;
-                if (inv is null)
-                {
-                    continue;
-                }
-
-                if (ov.Op == "remove")
-                {
-                    inv.RemoveAll(i => i.Template == tpl);
-                }
-                // 初始库存 add 涉及 stash 网格摆放，v1 不支持（前端禁用）
-            }
-        }
-    }
+    // 初始库存移除改走服务期屏蔽（CreateProfileService 克隆模板后过滤，见 ItemAcquisitionMaskService.IsStartInvRemoved）；
+    // add 涉及 stash 网格摆放，v1 不支持（前端禁用）。
 
     // ---- 战利品 transformer（仅注册一次，内部实时读 override） ----
     private void HookLootTransformers()
@@ -381,17 +308,10 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
                         continue;
                     }
 
-                    if (loose.Spawnpoints is not null)
-                    {
-                        loose.Spawnpoints = loose.Spawnpoints
-                            .Where(sp => !SpawnpointHasTpl(sp, tpl)).ToList();
-                    }
-
-                    if (loose.SpawnpointsForced is not null)
-                    {
-                        loose.SpawnpointsForced = loose.SpawnpointsForced
-                            .Where(sp => !SpawnpointHasTpl(sp, tpl)).ToList();
-                    }
+                    // 精确移除：只剔除该 tpl 的物品条目，保留同点位其它物品；
+                    // 点位被掏空才整体丢弃。镜像 LocationLootGenerator 的 validComposedKeys 过滤逻辑。
+                    loose.Spawnpoints = FilterLooseSpawnpoints(loose.Spawnpoints, tpl);
+                    loose.SpawnpointsForced = FilterLooseSpawnpoints(loose.SpawnpointsForced, tpl);
                 }
 
                 return loose;
@@ -426,9 +346,48 @@ public class ItemControlSync(DatabaseService databaseService, ISptLogger<ItemCon
                         && string.Equals(o.LocationId, locationId, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool SpawnpointHasTpl(Spawnpoint sp, MongoId tpl)
+    /// <summary>
+    ///     从散落点集合中精确剔除目标 tpl：仅删除匹配的物品条目，并同步裁剪 itemDistribution 中失效的
+    ///     composedKey；点位无任何物品残留时才整体丢弃。不误伤同点位的其它物品（修正旧版整点删除的粗粒度）。
+    /// </summary>
+    private static IEnumerable<Spawnpoint>? FilterLooseSpawnpoints(IEnumerable<Spawnpoint>? points, MongoId tpl)
     {
-        return sp.Template?.Items?.Any(i => i.Template == tpl) ?? false;
+        if (points is null)
+        {
+            return points;
+        }
+
+        var result = new List<Spawnpoint>();
+        foreach (var sp in points)
+        {
+            var items = sp.Template?.Items?.ToList();
+            if (items is null || items.All(i => i.Template != tpl))
+            {
+                result.Add(sp); // 该点不含目标物品，原样保留
+                continue;
+            }
+
+            var kept = items.Where(i => i.Template != tpl).ToList();
+            if (kept.Count == 0)
+            {
+                continue; // 掏空 → 丢弃整点
+            }
+
+            sp.Template!.Items = kept;
+
+            // 仅保留仍存在于 Items 的 composedKey（与 LocationLootGenerator 的 validComposedKeys 一致）
+            if (sp.ItemDistribution is not null)
+            {
+                var validKeys = kept.Select(i => i.ComposedKey).Where(k => k is not null).ToHashSet();
+                sp.ItemDistribution = sp.ItemDistribution
+                    .Where(d => d.ComposedKey?.Key is null || validKeys.Contains(d.ComposedKey.Key))
+                    .ToList();
+            }
+
+            result.Add(sp);
+        }
+
+        return result;
     }
 
     private static MongoId DeterministicId(string seed, string salt)

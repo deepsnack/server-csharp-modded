@@ -46,7 +46,6 @@ public class RagfairController(
     PaymentService paymentService,
     RagfairPriceService ragfairPriceService,
     RagfairOfferGenerator ragfairOfferGenerator,
-    SaveServer saveServer,
     ConfigServer configServer
 )
 {
@@ -57,8 +56,9 @@ public class RagfairController(
     /// </summary>
     public void Update()
     {
-        // 懒加载时只扫已加载档：有挂单的档在启动恢复市场时已物化，无挂单的离线档此处无事可做，语义等价
-        var profilesToCheck = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : profileHelper.GetProfiles();
+        // 懒加载时只扫已加载档：有挂单的档在启动恢复市场时已物化，无挂单的离线档此处无事可做，语义等价。
+        // 经 ProfileHelper 封装，避免 RagfairController 直接依赖 SaveServer（保持构造签名与上游一致，兼容 SVM 等覆盖型模组）。
+        var profilesToCheck = profileHelper.GetActiveProfilesSnapshot();
         foreach (var (sessionId, profile) in profilesToCheck)
         {
             // Check profile is capable of creating offers

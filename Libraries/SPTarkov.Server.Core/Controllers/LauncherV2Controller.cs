@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Launcher;
@@ -23,7 +21,8 @@ public class LauncherV2Controller(
     ConfigServer configServer,
     Watermark watermark,
     ProfileController profileController,
-    LastLoginService lastLoginService
+    LastLoginService lastLoginService,
+    PasswordStoreService passwordStoreService
 )
 {
     protected readonly CoreConfig CoreConfig = configServer.GetConfig<CoreConfig>();
@@ -85,8 +84,7 @@ public class LauncherV2Controller(
             }
         }
 
-        await CreateAccount(info);
-        return true;
+        return !(await CreateAccount(info)).IsEmpty;
     }
 
     /// <summary>
@@ -98,7 +96,7 @@ public class LauncherV2Controller(
     {
         var sessionId = GetSessionId(info);
 
-        return !sessionId.IsEmpty && saveServer.RemoveProfile(sessionId);
+        return !sessionId.IsEmpty && saveServer.SoftResetProfile(sessionId);
     }
 
     /// <summary>
@@ -145,12 +143,17 @@ public class LauncherV2Controller(
             ScavengerId = scavId,
             Aid = hashUtil.GenerateAccountId(),
             Username = info.Username,
-            Password = EncryptPassword(info.Password ?? string.Empty),
             IsWiped = true,
             Edition = info.Edition,
         };
 
         saveServer.CreateProfile(newProfileDetails);
+
+        if (!passwordStoreService.SetPassword(profileId, info.Password))
+        {
+            saveServer.RemoveProfile(profileId, force: true);
+            return MongoId.Empty();
+        }
 
         await saveServer.LoadProfileAsync(profileId);
         await saveServer.SaveProfileAsync(profileId);
@@ -169,19 +172,30 @@ public class LauncherV2Controller(
             var sessionId = matchedId.Value;
             var profileInfo = saveServer.GetProfile(sessionId).ProfileInfo!;
 
-            var storedPassword = profileInfo.Password ?? string.Empty;
             var inputPassword = info.Password ?? string.Empty;
 
-            // Legacy profiles with no stored password: allow login and set first input as password (same as V1)
-            if (string.IsNullOrEmpty(storedPassword))
+            if (!string.IsNullOrEmpty(profileInfo.Password))
             {
-                if (!string.IsNullOrEmpty(inputPassword))
+                if (!passwordStoreService.ImportLegacyHash(sessionId, profileInfo.Password))
                 {
-                    profileInfo.Password = EncryptPassword(inputPassword);
+                    return MongoId.Empty();
                 }
+
+                profileInfo.Password = null;
+                saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
+            }
+
+            var storedPassword = passwordStoreService.GetHash(sessionId);
+            if (storedPassword is null)
+            {
+                if (!string.IsNullOrEmpty(inputPassword) && !passwordStoreService.SetPassword(sessionId, inputPassword))
+                {
+                    return MongoId.Empty();
+                }
+
                 result = sessionId;
             }
-            else if (storedPassword == EncryptPassword(inputPassword))
+            else if (passwordStoreService.Verify(sessionId, inputPassword))
             {
                 result = sessionId;
             }
@@ -194,13 +208,6 @@ public class LauncherV2Controller(
         }
 
         return result;
-    }
-
-    protected string EncryptPassword(string password)
-    {
-        using var sha256 = SHA256.Create();
-        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
-        return BitConverter.ToString(hashBytes).Replace("-", string.Empty);
     }
 
     public SptProfile GetProfile(MongoId sessionId)
@@ -220,19 +227,16 @@ public class LauncherV2Controller(
             return false;
         }
 
-        var sessionId = Login(info);
-
-        if (!sessionId)
+        var sessionId = GetSessionId(info);
+        if (sessionId.IsEmpty)
         {
-            var profileInfo = saveServer
-                .GetProfiles()
-                .FirstOrDefault(x => x.Value.ProfileInfo?.Username == info.Username)
-                .Value.ProfileInfo;
-
-            profileInfo!.Edition = info.Edition;
-            profileInfo.IsWiped = true;
+            return false;
         }
 
-        return sessionId;
+        var profileInfo = saveServer.GetProfile(sessionId).ProfileInfo;
+        profileInfo!.Edition = info.Edition;
+        profileInfo.IsWiped = true;
+        saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
+        return true;
     }
 }

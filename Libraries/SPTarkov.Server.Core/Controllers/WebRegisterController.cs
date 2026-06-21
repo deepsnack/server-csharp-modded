@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MailKit.Net.Smtp;
@@ -30,6 +29,8 @@ public class WebRegisterController(
     HashUtil hashUtil,
     Services.RegisterActivationCodeService activationCodeService,
     Services.LastLoginService lastLoginService,
+    Services.EditionUpgradeService editionUpgradeService,
+    Services.PasswordStoreService passwordStoreService,
     ISptLogger<WebRegisterController> logger
 )
 {
@@ -323,15 +324,16 @@ public class WebRegisterController(
                 return new { success = false, message = "无法定位账户，请联系管理员" };
             }
 
-            // 密码写入存档 Info.Password（树内统一存储；哈希算法与登录校验同源）
             var resetProfile = saveServer.GetProfile(profileId.Value);
             if (resetProfile?.ProfileInfo is null)
             {
                 return new { success = false, message = "无法定位账户，请联系管理员" };
             }
 
-            resetProfile.ProfileInfo.Password = EncryptPassword(newPassword);
-            saveServer.SaveProfileAsync(profileId.Value).GetAwaiter().GetResult();
+            if (!passwordStoreService.SetPassword(profileId.Value, newPassword))
+            {
+                return new { success = false, message = "密码保存失败，请稍后重试" };
+            }
 
             // 清除已使用的验证码
             VerificationCodes.Remove(email);
@@ -343,6 +345,48 @@ public class WebRegisterController(
         catch (Exception ex)
         {
             return new { success = false, message = $"重置密码失败: {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// 玩家自助软重置：用启动器账号（用户名 + 密码）认证后，仅擦除自己存档的游戏进度，保留账号身份与注册邮箱。
+    /// 与启动器"删除存档"（硬重置：删档 + 释放邮箱）相对。密码校验走与登录同源的 PasswordStoreService。
+    /// </summary>
+    [HttpPost("self-soft-reset")]
+    public object SelfSoftReset([FromBody] System.Text.Json.JsonElement request)
+    {
+        try
+        {
+            var username = request.TryGetProperty("username", out var u) ? u.GetString() : null;
+            var password = request.TryGetProperty("password", out var p) ? p.GetString() : null;
+
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                return new { success = false, message = "用户名不能为空" };
+            }
+
+            if (string.IsNullOrEmpty(password))
+            {
+                return new { success = false, message = "密码不能为空" };
+            }
+
+            var sessionId = saveServer.GetSessionIdByUsername(username);
+            if (sessionId is null || sessionId.Value.IsEmpty || !passwordStoreService.Verify(sessionId.Value, password))
+            {
+                return new { success = false, message = "用户名或密码错误" };
+            }
+
+            if (!saveServer.SoftResetProfile(sessionId.Value))
+            {
+                return new { success = false, message = "无法定位存档，请稍后重试" };
+            }
+
+            logger.Warning($"[WebRegister] 玩家自助软重置 username={username} profileId={sessionId.Value}");
+            return new { success = true, message = "存档已重置：游戏进度已清空，账号与邮箱保留" };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, message = $"重置失败: {ex.Message}" };
         }
     }
 
@@ -658,13 +702,16 @@ public class WebRegisterController(
                 ScavengerId = scavId,
                 Aid = hashUtil.GenerateAccountId(),
                 Username = request.Username,
-                // 密码写入存档 Info.Password（树内统一存储，哈希算法与登录校验同源）
-                Password = EncryptPassword(request.Password!),
                 IsWiped = true,
                 Edition = request.Edition
             };
 
             saveServer.CreateProfile(newProfileDetails);
+            if (!passwordStoreService.SetPassword(profileId, request.Password))
+            {
+                throw new InvalidOperationException("无法保存账户密码");
+            }
+
             await saveServer.LoadProfileAsync(profileId);
             await saveServer.SaveProfileAsync(profileId);
 
@@ -677,28 +724,6 @@ public class WebRegisterController(
             try { saveServer.RemoveProfile(profileId, force: true); } catch { }
             return MongoId.Empty();
         }
-    }
-
-    /// <summary>
-    /// 使用 SHA256 算法对密码进行加密
-    /// </summary>
-    /// <param name="password">原始密码</param>
-    /// <returns>加密后的密码（十六进制字符串）</returns>
-    private string EncryptPassword(string password)
-    {
-        // 使用 SHA256 算法创建哈希对象
-        using var sha256 = SHA256.Create();
-
-        // 将密码字符串转换为字节数组
-        var passwordBytes = Encoding.UTF8.GetBytes(password);
-
-        // 计算密码的哈希值
-        var hashBytes = sha256.ComputeHash(passwordBytes);
-
-        // 将哈希字节数组转换为十六进制字符串
-        var hashString = BitConverter.ToString(hashBytes).Replace("-", string.Empty);
-
-        return hashString;
     }
 
     /// <summary>
@@ -1410,11 +1435,84 @@ public class WebRegisterController(
         return new { success = true, accounts = results };
     }
 
+    private object HardResetAccount(MongoId sessionId, string profileId)
+    {
+        if (!saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
+        {
+            return new { success = false, message = "账号不存在" };
+        }
+
+        var username = profile.ProfileInfo?.Username ?? string.Empty;
+        var email = GetEmailByUsername(username);
+
+        // 删除存档（内存 + 两种命名的磁盘文件）和登录凭据；force 确保软重置开启时也是真删除。
+        if (!saveServer.RemoveProfile(sessionId, force: true))
+        {
+            return new { success = false, message = "硬重置失败：无法删除账号凭据或存档" };
+        }
+
+        // 释放邮箱：从已注册列表移除 + 删除用户名映射，该邮箱即可重新注册。
+        if (!string.IsNullOrEmpty(email))
+        {
+            RemoveRegisteredEmail(email);
+        }
+
+        if (!string.IsNullOrEmpty(username))
+        {
+            RemoveEmailMapping(username);
+        }
+
+        // 清理登录时间侧存储。
+        lastLoginService.Remove(sessionId);
+
+        var displayName = string.IsNullOrWhiteSpace(username) ? profileId : username;
+        logger.Warning($"[WebRegister] 管理员硬重置账号: {displayName} ({email ?? "无邮箱"}) profileId={profileId}");
+        return new { success = true, message = $"账号 {displayName} 已硬重置，邮箱已释放，可重新注册" };
+    }
+
     /// <summary>
-    /// 删除账号：存档文件真删除（force 绕过软重置）+ 释放邮箱记录 + 移除映射，使该邮箱可重新注册。
+    /// 硬重置账号：存档文件真删除（force 绕过软重置）+ 释放邮箱记录 + 移除映射，使该邮箱可重新注册。
+    /// </summary>
+    [HttpPost("admin/accounts/{profileId}/hard-reset")]
+    public object AdminHardResetAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return new { success = false, message = "profileId 无效" };
+        }
+
+        return HardResetAccount(new MongoId(profileId), profileId);
+    }
+
+    /// <summary>
+    /// 兼容旧后台调用的删除账号接口；行为与硬重置一致。
     /// </summary>
     [HttpDelete("admin/accounts/{profileId}")]
     public object AdminDeleteAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return new { success = false, message = "profileId 无效" };
+        }
+
+        return HardResetAccount(new MongoId(profileId), profileId);
+    }
+
+    /// <summary>
+    /// 管理员软重置指定账号：仅擦除游戏进度，保留账号身份与注册邮箱（与删除账号的硬重置相对）。
+    /// </summary>
+    [HttpPost("admin/accounts/{profileId}/soft-reset")]
+    public object AdminSoftResetAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
         if (!IsAdminAuthorized(adminToken))
         {
@@ -1432,28 +1530,48 @@ public class WebRegisterController(
             return new { success = false, message = "账号不存在" };
         }
 
+        if (!saveServer.SoftResetProfile(sessionId))
+        {
+            return new { success = false, message = "软重置失败" };
+        }
+
         var username = profile.ProfileInfo?.Username ?? string.Empty;
-        var email = GetEmailByUsername(username);
+        logger.Warning($"[WebRegister] 管理员软重置账号: {username} profileId={profileId}");
+        return new { success = true, message = $"账号 {username} 的游戏进度已重置（账号与邮箱保留）" };
+    }
 
-        // 1. 删除存档（内存 + 两种命名的磁盘文件；force 确保软重置开启时也是真删除）
-        saveServer.RemoveProfile(sessionId, force: true);
-
-        // 2. 释放邮箱：从已注册列表移除 + 删除用户名映射，该邮箱即可重新注册
-        if (!string.IsNullOrEmpty(email))
+    /// <summary>
+    /// 管理员批量软重置：为所有账号重置游戏进度（全选）。破坏性操作，需 confirm=true 防误触。
+    /// </summary>
+    [HttpPost("admin/soft-reset-all")]
+    public object AdminSoftResetAll(
+        [FromBody] System.Text.Json.JsonElement request,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
         {
-            RemoveRegisteredEmail(email);
+            return new { success = false, message = "未授权" };
         }
 
-        if (!string.IsNullOrEmpty(username))
+        var confirm = request.TryGetProperty("confirm", out var c) && c.ValueKind == JsonValueKind.True;
+        if (!confirm)
         {
-            RemoveEmailMapping(username);
+            return new { success = false, message = "缺少二次确认 confirm=true" };
         }
 
-        // 3. 清理登录时间侧存储
-        lastLoginService.Remove(sessionId);
+        var ids = saveServer.GetProfiles().Keys.ToList();
+        var done = 0;
+        foreach (var id in ids)
+        {
+            if (saveServer.SoftResetProfile(id))
+            {
+                done++;
+            }
+        }
 
-        logger.Warning($"[WebRegister] 管理员删除账号: {username} ({email ?? "无邮箱"}) profileId={profileId}");
-        return new { success = true, message = $"账号 {username} 已删除，邮箱已释放" };
+        logger.Warning($"[WebRegister] 管理员批量软重置：{done}/{ids.Count} 个账号已重置");
+        return new { success = true, message = $"已为 {done} 个账号重置游戏进度", count = done };
     }
 
     // ==================== N2：注册激活码（管理端） ====================
@@ -1573,6 +1691,190 @@ public class WebRegisterController(
         activationCodeService.RetentionDays = days;
         return new { success = true, retentionDays = activationCodeService.RetentionDays, message = days <= 0 ? "日志将不限时保存" : $"日志保留 {days} 天" };
     }
+
+    // ==================== U1-U6：版本升级 ====================
+
+    /// <summary>5 档标准升级链（Standard → Unheard）。前端用作目标版本下拉。</summary>
+    [HttpGet("admin/upgrade/editions")]
+    public object AdminUpgradeListEditions([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, editions = Services.EditionUpgradeService.EditionLadder };
+    }
+
+    /// <summary>列出/批量编辑版本别名映射。空 from = 删除；空 to = 拒绝。</summary>
+    [HttpGet("admin/upgrade/aliases")]
+    public object AdminUpgradeListAliases([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, aliases = editionUpgradeService.ListAliases() };
+    }
+
+    [HttpPost("admin/upgrade/aliases")]
+    public object AdminUpgradeSetAlias(
+        [FromBody] System.Text.Json.JsonElement request,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var from = request.TryGetProperty("from", out var f) ? f.GetString() : null;
+        var to = request.TryGetProperty("to", out var t) ? t.GetString() : null;
+        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+        {
+            return new { success = false, message = "from/to 不能为空" };
+        }
+
+        if (!editionUpgradeService.SetAlias(from, to))
+        {
+            return new { success = false, message = "目标版本不在标准链中（仅允许 Standard / Left Behind / Prepare To Escape / Edge Of Darkness / Unheard）" };
+        }
+
+        return new { success = true, aliases = editionUpgradeService.ListAliases() };
+    }
+
+    [HttpDelete("admin/upgrade/aliases/{from}")]
+    public object AdminUpgradeRemoveAlias(string from, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var removed = editionUpgradeService.RemoveAlias(from);
+        return new { success = removed, aliases = editionUpgradeService.ListAliases() };
+    }
+
+    /// <summary>读取/更新邮件标题、正文模板、附件保留天数。</summary>
+    [HttpGet("admin/upgrade/config")]
+    public object AdminUpgradeGetConfig([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, config = editionUpgradeService.GetConfig() };
+    }
+
+    [HttpPost("admin/upgrade/config")]
+    public object AdminUpgradeSetConfig(
+        [FromBody] Services.EditionUpgradeConfig request,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        editionUpgradeService.SetConfig(request);
+        return new { success = true, config = editionUpgradeService.GetConfig() };
+    }
+
+    /// <summary>预览升级补齐结果（不写入）。</summary>
+    [HttpGet("admin/upgrade/preview/{profileId}")]
+    public object AdminUpgradePreview(
+        string profileId,
+        [FromQuery] string target,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return new { success = false, message = "profileId 无效" };
+        }
+
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return new { success = false, message = "target 必填（目标版本）" };
+        }
+
+        var preview = editionUpgradeService.Preview(new MongoId(profileId), target);
+        return new
+        {
+            success = preview.Success,
+            message = preview.Message,
+            profileId = preview.ProfileId,
+            fromEdition = preview.FromEdition,
+            toEdition = preview.ToEdition,
+            rawEdition = preview.RawEdition,
+            side = preview.Side,
+            itemRootCount = preview.ItemRootCount,
+            itemTotalCount = preview.ItemTotalCount,
+            // 仅返回 _tpl + 数量，避免把 MongoId 全树暴露给前端造成噪音
+            itemBundles = preview.ItemBundles
+                .GroupBy(b => b.RootTemplate)
+                .Select(g => new { tpl = g.Key, rootCount = g.Count(), itemCount = g.Sum(x => x.Items.Count) })
+                .ToList(),
+            hideoutStashAdditions = preview.HideoutStashAdditions,
+            dogTagChange = preview.DogTagTemplateChange == null
+                ? null
+                : new { from = preview.DogTagTemplateChange.OldTemplate?.ToString(), to = preview.DogTagTemplateChange.NewTemplate.ToString() },
+            traderInfoUpgrades = preview.TraderInfoUpgrades.Select(u => new
+            {
+                traderId = u.TraderId.ToString(),
+                newLoyaltyLevel = u.NewLoyaltyLevel,
+                newStanding = u.NewStanding,
+            }).ToList(),
+        };
+    }
+
+    /// <summary>执行升级（前端两步确认后调用）。需带 confirm=true 防误触。</summary>
+    [HttpPost("admin/upgrade/execute")]
+    public object AdminUpgradeExecute(
+        [FromBody] System.Text.Json.JsonElement request,
+        [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
+    )
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var profileId = request.TryGetProperty("profileId", out var p) ? p.GetString() : null;
+        var target = request.TryGetProperty("target", out var t) ? t.GetString() : null;
+        var confirm = request.TryGetProperty("confirm", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.True;
+
+        if (string.IsNullOrWhiteSpace(profileId) || !MongoId.IsValidMongoId(profileId))
+        {
+            return new { success = false, message = "profileId 无效" };
+        }
+
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return new { success = false, message = "target 必填" };
+        }
+
+        if (!confirm)
+        {
+            return new { success = false, message = "缺少二次确认 confirm=true" };
+        }
+
+        var op = $"admin:{adminToken?[..Math.Min(8, adminToken.Length)]}";
+        var result = editionUpgradeService.Execute(new MongoId(profileId), target, op);
+        return new
+        {
+            success = result.Success,
+            message = result.Message,
+            itemCount = result.ItemCount,
+            nonItemChanges = result.NonItemChanges,
+        };
+    }
 }
-
-

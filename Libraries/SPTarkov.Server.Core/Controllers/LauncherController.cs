@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
@@ -27,7 +25,8 @@ public class LauncherController(
     ServerLocalisationService serverLocalisationService,
     ProfileDataService profileDataService,
     ConfigServer configServer,
-    LastLoginService lastLoginService
+    LastLoginService lastLoginService,
+    PasswordStoreService passwordStoreService
 )
 {
     protected readonly CoreConfig CoreConfig = configServer.GetConfig<CoreConfig>();
@@ -94,22 +93,31 @@ public class LauncherController(
             var sessionId = matchedId.Value;
             var account = saveServer.GetProfile(sessionId).ProfileInfo;
 
-            // 获取存储的密码和用户输入的密码
-            var storedPassword = account?.Password ?? string.Empty;
             var inputPassword = info?.Password ?? string.Empty;
 
-            // 如果存储的密码为空，允许登录并将首次输入的密码加密后保存到存档（兼容旧存档和新创建的存档）
-            if (string.IsNullOrEmpty(storedPassword))
+            // wipe=true 的旧档可能跳过 profile migration，在首次登录时补迁移并清理旧字段。
+            if (!string.IsNullOrEmpty(account?.Password))
             {
-                if (!string.IsNullOrEmpty(inputPassword) && account is not null)
+                if (!passwordStoreService.ImportLegacyHash(sessionId, account.Password))
                 {
-                    // 使用 SHA256 算法加密用户输入的密码并保存
-                    account.Password = EncryptPassword(inputPassword);
-                    await saveServer.SaveProfileAsync(sessionId);
+                    return MongoId.Empty();
                 }
+
+                account.Password = null;
+                await saveServer.SaveProfileAsync(sessionId);
+            }
+
+            var storedPassword = passwordStoreService.GetHash(sessionId);
+            if (storedPassword is null)
+            {
+                if (!string.IsNullOrEmpty(inputPassword) && !passwordStoreService.SetPassword(sessionId, inputPassword))
+                {
+                    return MongoId.Empty();
+                }
+
                 result = sessionId;
             }
-            else if (storedPassword == EncryptPassword(inputPassword))
+            else if (passwordStoreService.Verify(sessionId, inputPassword))
             {
                 // 存储的密码不为空，验证密码正确性
                 result = sessionId;
@@ -154,47 +162,27 @@ public class LauncherController(
         var profileId = new MongoId();
         var scavId = new MongoId();
         
-        // 使用 SHA256 算法对密码进行加密
-        var encryptedPassword = EncryptPassword(info.Password);
-        
         var newProfileDetails = new Info
         {
             ProfileId = profileId,
             ScavengerId = scavId,
             Aid = hashUtil.GenerateAccountId(),
             Username = info.Username,
-            Password = encryptedPassword,
             IsWiped = true,
             Edition = info.Edition,
         };
         saveServer.CreateProfile(newProfileDetails);
 
+        if (!passwordStoreService.SetPassword(profileId, info.Password))
+        {
+            saveServer.RemoveProfile(profileId, force: true);
+            return MongoId.Empty();
+        }
+
         await saveServer.LoadProfileAsync(profileId);
         await saveServer.SaveProfileAsync(profileId);
 
         return profileId;
-    }
-
-    /// <summary>
-    /// 使用 SHA256 算法对密码进行加密
-    /// </summary>
-    /// <param name="password">原始密码</param>
-    /// <returns>加密后的密码（十六进制字符串）</returns>
-    protected string EncryptPassword(string password)
-    {
-        // 使用 SHA256 算法创建哈希对象
-        using var sha256 = SHA256.Create();
-        
-        // 将密码字符串转换为字节数组
-        var passwordBytes = Encoding.UTF8.GetBytes(password);
-        
-        // 计算密码的哈希值
-        var hashBytes = sha256.ComputeHash(passwordBytes);
-        
-        // 将哈希字节数组转换为十六进制字符串
-        var hashString = BitConverter.ToString(hashBytes).Replace("-", string.Empty);
-        
-        return hashString;
     }
 
     /// <summary>
@@ -219,8 +207,10 @@ public class LauncherController(
 
         if (!sessionId.IsEmpty)
         {
-            saveServer.GetProfile(sessionId).ProfileInfo!.Password = EncryptPassword(info.Change ?? string.Empty);
-            await saveServer.SaveAsync();
+            if (!passwordStoreService.SetPassword(sessionId, info.Change))
+            {
+                return MongoId.Empty();
+            }
         }
 
         return sessionId;
@@ -269,6 +259,17 @@ public class LauncherController(
     public Dictionary<string, AbstractModMetadata> GetLoadedServerMods()
     {
         return loadedMods.ToDictionary(sptMod => sptMod.ModMetadata?.Name ?? "UNKNOWN MOD", sptMod => sptMod.ModMetadata);
+    }
+
+    /// <summary>
+    ///     Get the WebDAV game-update source config the launcher uses to list/download update packages.
+    ///     Read from SPT_Data/webdav/config.json (template written on first run). An empty url means
+    ///     "not configured" — a valid state the launcher handles gracefully.
+    /// </summary>
+    /// <returns>WebDAV config (url/username/password/zipDirectory)</returns>
+    public WebDavModConfig GetWebDavConfig()
+    {
+        return WebDavModConfig.Load();
     }
 
     /// <summary>

@@ -12,6 +12,18 @@ public record CoreConfig : BaseConfig
     [JsonPropertyName("projectName")]
     public required string ProjectName { get; set; }
 
+    /// <summary>
+    ///     版本号短横线后缀（展示层）。非空时版本展示面变为 "{主版本}-{此后缀}"，
+    ///     如 "4.0.13-测试服"。留空 = 维持原编译期行为（debug 显示 bleeding edge 文案、游戏内显示 commit）。
+    ///     中文支持范围：launcher / 控制台水印 / 网页 / 存档元数据均可中文（JSON UTF-8）；
+    ///     仅"游戏内左下角版本标签"一面受 HTTP 头 ASCII 协议限制（客户端会把该 label 经
+    ///     Taxonomy.Major 拼进 App-Version 请求头，非 ASCII 会让客户端报
+    ///     "Header value contains invalid characters" 拒绝启动）——该面遇非 ASCII 后缀自动回退原版格式。
+    ///     只影响展示：升级/兼容性校验仍走编译期 SemVer（ProgramStatics.SPT_VERSION）。
+    /// </summary>
+    [JsonPropertyName("versionSuffix")]
+    public string? VersionSuffix { get; set; }
+
     [JsonPropertyName("compatibleTarkovVersion")]
     public required string CompatibleTarkovVersion { get; set; }
 

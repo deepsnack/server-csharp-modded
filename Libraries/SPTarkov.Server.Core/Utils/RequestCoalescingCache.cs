@@ -80,4 +80,21 @@ public sealed class RequestCoalescingCache
     {
         InvalidatePrefix(bucket + ":");
     }
+
+    /// <summary>
+    ///     主动移除已超 TTL 的条目。GetOrCompute 只在条目被再次访问时懒淘汰，
+    ///     失效改为事件驱动后，不再被访问的条目（如下线玩家的 trader 响应体）会一直占内存——
+    ///     由外部周期任务调用本方法兜底回收。
+    /// </summary>
+    public void SweepExpired()
+    {
+        var now = DateTime.UtcNow.Ticks;
+        foreach (var (key, entry) in _entries)
+        {
+            if (now - entry.CreatedTicks > _ttlTicks)
+            {
+                _entries.TryRemove(new KeyValuePair<string, Entry>(key, entry));
+            }
+        }
+    }
 }

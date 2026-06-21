@@ -25,7 +25,8 @@ public class TraderHelper(
     FenceService fenceService,
     TimeUtil timeUtil,
     RandomUtil randomUtil,
-    ConfigServer configServer
+    ConfigServer configServer,
+    EditionUpgradeService editionUpgradeService
 )
 {
     protected readonly FrozenSet<string> GameVersionsWithHigherBuyRestrictions = [GameEditions.EDGE_OF_DARKNESS, GameEditions.UNHEARD];
@@ -59,13 +60,21 @@ public class TraderHelper(
         if (sessionId is not null)
         {
             var pmcData = profileHelper.GetPmcProfile(sessionId.Value);
-            if (pmcData == null)
+
+            // 软重置/未建号档：账号身份仍在，但 CharacterData 已被擦除（PmcData == null），尚无角色。
+            // 正常流程下客户端会先请求 profile/list（IsWiped 时返回空列表）→ 进入建号流程，不会走到这里。
+            // 但若客户端缓存了软重置前"已选存档"，重启后可能绕过 profile/list 直接加载主菜单，使
+            // traderSettings 落到此处。原先对 null PMC 抛 Fatal 会让加载界面永久卡死（见账号软重置后
+            // 登录日志：/client/trading/api/traderSettings 反复 Fatal）。改为按"无 session"优雅降级：
+            // 仅返回 trader 基础数据、不做按档重置，避免卡死；客户端最终仍会回到建号流程。
+            if (pmcData is null)
             {
-                throw new Exception(serverLocalisationService.GetText("trader-unable_to_find_profile_with_id", sessionId));
+                logger.Warning(serverLocalisationService.GetText("trader-unable_to_find_profile_with_id", sessionId));
+                return databaseService.GetTrader(traderId)?.Base;
             }
 
             // Profile has traderInfo dict (profile beyond creation stage) but no requested trader in profile
-            if (pmcData?.TradersInfo != null && !(pmcData?.TradersInfo?.ContainsKey(traderId) ?? false))
+            if (pmcData.TradersInfo != null && !pmcData.TradersInfo.ContainsKey(traderId))
             {
                 // Add trader values to profile
                 ResetTrader(sessionId.Value, traderId);
@@ -144,7 +153,23 @@ public class TraderHelper(
 
         // Get matching profile 'type' e.g. 'standard'
         var pmcData = fullProfile.CharacterData.PmcData;
-        var matchingSide = profileHelper.GetProfileTemplateForSide(fullProfile.ProfileInfo.Edition, pmcData.Info.Side);
+
+        // ProfileInfo.Edition 可能是本地化/别名档位名（如中文「标准版」「无名者」），不能直接拿去查模板表，
+        // 否则 GetProfileTemplateForSide 命中失败返回 null → 下方 matchingSide.Trader 抛 NullReference
+        // （实机表现：建号「选择外观」页弹出 "Object reference not set to an instance of an object" 并卡死）。
+        // 与 CreateProfileService 一致，先经 EditionUpgradeService 解析回标准链档位；解析不出时兜底为最低档 Standard。
+        var resolvedEdition = editionUpgradeService.ResolveEdition(fullProfile.ProfileInfo.Edition) ?? EditionUpgradeService.EditionLadder[0];
+        var matchingSide = profileHelper.GetProfileTemplateForSide(resolvedEdition, pmcData.Info.Side);
+        if (matchingSide is null)
+        {
+            // 兜底仍取不到模板（如 profiles.json 缺该档位）：放弃按档重置，避免崩溃卡死。
+            // 客户端后续仍可正常走建号/进游戏流程，该 trader 走默认数据库基础数据。
+            logger.Warning(
+                $"Unable to reset trader '{traderID}' for {sessionID}: no profile template for edition "
+                    + $"'{fullProfile.ProfileInfo.Edition}' (resolved: '{resolvedEdition}') side '{pmcData.Info.Side}'"
+            );
+            return;
+        }
 
         // Profiles trader settings
         var profileTemplateTraderData = matchingSide.Trader;
@@ -339,6 +364,31 @@ public class TraderHelper(
     {
         var updateSeconds = GetTraderUpdateSeconds(traderId) ?? 0;
         return timeUtil.GetTimeStamp() + updateSeconds;
+    }
+
+    /// <summary>
+    ///     Add or update the fixed reset interval used by the native trader refresh flow.
+    ///     Runtime-injected traders should call this whenever their configuration is reloaded.
+    /// </summary>
+    public void SetTraderUpdateSeconds(MongoId traderId, int seconds, string? name = null)
+    {
+        var normalizedSeconds = Math.Max(60, seconds);
+        var existing = TraderConfig.UpdateTime.FirstOrDefault(x => x.TraderId == traderId);
+        if (existing is null)
+        {
+            TraderConfig.UpdateTime.Add(
+                new UpdateTime
+                {
+                    Name = name ?? string.Empty,
+                    TraderId = traderId,
+                    Seconds = new MinMax<int>(normalizedSeconds, normalizedSeconds),
+                }
+            );
+            return;
+        }
+
+        existing.Name = name ?? existing.Name;
+        existing.Seconds = new MinMax<int>(normalizedSeconds, normalizedSeconds);
     }
 
     /// <summary>

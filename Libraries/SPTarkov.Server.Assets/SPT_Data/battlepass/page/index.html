@@ -52,57 +52,68 @@
         </header>
 
         <main class="content">
+            <section id="compensation-panel" class="compensation-panel">
+                <div class="compensation-copy">
+                    <strong>奖励轨补偿</strong>
+                    <span id="compensation-status">当前没有新增奖励</span>
+                </div>
+                <button id="compensation-btn" class="btn small compensation-btn" type="button" disabled>暂无可领取补偿</button>
+            </section>
+
             <!-- 奖励轨 -->
-            <div class="rail-wrap">
-                <div class="rail-labels">
-                    <div class="rail-label free">免费轨</div>
-                    <div class="rail-label premium">付费轨</div>
-                </div>
-                <div class="rail-scroll" id="rail"></div>
-            </div>
-
-            <!-- 满级循环奖励（双轨 · 逐轮可领） -->
-            <div id="cycle-section" class="cycle-section hidden">
-                <div class="cycle-head">
-                    <h2>♾️ 循环奖励</h2>
-                    <span id="cycle-sub" class="cycle-sub"></span>
-                </div>
-                <div class="cycle-preview">
-                    <div class="cycle-track">
-                        <span class="cyc-lbl free">免费轨每轮</span>
-                        <div id="cycle-free-cell" class="cyc-cell"></div>
-                        <button id="cycle-free-all" class="btn ghost small" type="button">一键领取（免费）</button>
+            <section class="reward-section">
+                <div class="rail-wrap">
+                    <div class="rail-labels">
+                        <div class="rail-label free">免费轨</div>
+                        <div class="rail-label premium">付费轨</div>
                     </div>
-                    <div class="cycle-track">
-                        <span class="cyc-lbl premium">付费轨每轮</span>
-                        <div id="cycle-premium-cell" class="cyc-cell"></div>
-                        <button id="cycle-premium-all" class="btn ghost small" type="button">一键领取（付费）</button>
-                    </div>
+                    <div class="rail-scroll" id="rail"></div>
                 </div>
-                <div id="cycle-rounds" class="cycle-rounds"></div>
-            </div>
 
-            <!-- 任务 + 兑换 -->
-            <aside class="side">
-                <div class="panel">
-                    <div class="panel-head">
-                        <h2>任务</h2>
-                        <div class="task-tools">
-                            <button id="refresh-daily" class="t-reroll" type="button">刷新每日</button>
-                            <span class="rerolls" id="rerolls"></span>
+                <!-- 满级循环奖励（双轨 · 逐轮可领） -->
+                <div id="cycle-section" class="cycle-section hidden">
+                    <div class="cycle-head">
+                        <h2>♾️ 循环奖励</h2>
+                        <span id="cycle-sub" class="cycle-sub"></span>
+                    </div>
+                    <div class="cycle-preview">
+                        <div class="cycle-track">
+                            <span class="cyc-lbl free">免费轨每轮</span>
+                            <div id="cycle-free-cell" class="cyc-cell"></div>
+                            <button id="cycle-free-all" class="btn ghost small" type="button">一键领取（免费）</button>
+                        </div>
+                        <div class="cycle-track">
+                            <span class="cyc-lbl premium">付费轨每轮</span>
+                            <div id="cycle-premium-cell" class="cyc-cell"></div>
+                            <button id="cycle-premium-all" class="btn ghost small" type="button">一键领取（付费）</button>
                         </div>
                     </div>
-                    <div id="task-list" class="task-list"></div>
+                    <div id="cycle-rounds" class="cycle-rounds"></div>
                 </div>
-                <div class="panel">
-                    <div class="panel-head"><h2>兑换激活码</h2></div>
-                    <div class="redeem">
-                        <input id="redeem-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" />
-                        <button id="redeem-btn" class="btn primary small">兑换</button>
+            </section>
+
+            <!-- 任务 -->
+            <section class="panel tasks-section">
+                <div class="panel-head">
+                    <h2>任务</h2>
+                    <div class="task-tools">
+                        <button id="refresh-daily" class="t-reroll" type="button">刷新每日</button>
+                        <button id="refresh-weekly" class="t-reroll" type="button">刷新每周</button>
+                        <button id="refresh-season" class="t-reroll" type="button">刷新赛季</button>
                     </div>
-                    <p id="redeem-msg" class="msg"></p>
                 </div>
-            </aside>
+                <div id="task-list" class="task-list"></div>
+            </section>
+
+            <!-- 兑换 -->
+            <section class="panel redeem-section">
+                <div class="panel-head"><h2>兑换激活码</h2></div>
+                <div class="redeem">
+                    <input id="redeem-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" />
+                    <button id="redeem-btn" class="btn primary small">兑换</button>
+                </div>
+                <p id="redeem-msg" class="msg"></p>
+            </section>
         </main>
     </section>
 

@@ -62,5 +62,9 @@ public class LauncherStaticRouter(LauncherCallbacks launcherCallbacks, JsonUtil 
                 "/launcher/server/serverModsUsedByProfile",
                 async (url, info, sessionID, _) => await launcherCallbacks.GetServerModsProfileUsed(url, info, sessionID)
             ),
+            new RouteAction<EmptyRequestData>(
+                "/launcher/webdav/config",
+                async (_, _, _, _) => await launcherCallbacks.GetWebDavConfig()
+            ),
         ]
     ) { }

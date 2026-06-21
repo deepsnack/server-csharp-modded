@@ -40,4 +40,10 @@ public class FleaTraderCacheService(ConfigServer configServer)
     {
         cache.InvalidatePrefix($"trader:{sessionId}:");
     }
+
+    /// <summary>周期回收超 TTL 条目（trader 失效改为事件驱动后，防下线玩家的响应体常驻内存）。</summary>
+    public void SweepExpired()
+    {
+        cache.SweepExpired();
+    }
 }

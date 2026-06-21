@@ -7,6 +7,8 @@ using SPTarkov.Server.Core.Models.Eft.Launcher;
 using SPTarkov.Server.Core.Models.Eft.Profile;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Spt.Launcher;
+using SPTarkov.Server.Core.Servers;
+using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Utils;
 
 namespace SPTarkov.Server.Core.Callbacks;
@@ -16,7 +18,9 @@ public class ProfileCallbacks(
     HttpResponseUtil httpResponse,
     TimeUtil timeUtil,
     ProfileController profileController,
-    ProfileHelper profileHelper
+    ProfileHelper profileHelper,
+    SaveServer saveServer,
+    ProfileAutoRepairService profileAutoRepairService
 )
 {
     /// <summary>
@@ -36,6 +40,13 @@ public class ProfileCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetProfileData(string url, EmptyRequestData _, MongoId sessionID)
     {
+        // 客户端拉取存档列表前自修复（开关在服务内部判断）。置于 callback 层而非 ProfileController，
+        // 以保持 ProfileController 构造签名与上游一致——否则继承覆盖它的模组（如 SVM）会因找不到基类构造而崩溃。
+        if (!saveServer.IsProfileInvalidOrUnloadable(sessionID))
+        {
+            profileAutoRepairService.RepairProfile(saveServer.GetProfile(sessionID), sessionID, "profile-list");
+        }
+
         return new ValueTask<string>(httpResponse.GetBody(profileController.GetCompleteProfile(sessionID)));
     }
 

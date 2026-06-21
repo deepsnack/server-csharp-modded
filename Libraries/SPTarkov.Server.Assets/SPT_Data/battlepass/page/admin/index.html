@@ -39,6 +39,7 @@
                 <button class="tab" data-tab="codes">激活码</button>
                 <button class="tab" data-tab="players">玩家</button>
                 <a class="tab" href="trader.html">商人 →</a>
+                <a class="tab" href="recipes.html">配方 →</a>
                 <a class="tab" href="titles.html">称号 →</a>
                 <a class="tab" href="items.html">物品 →</a>
                 <a class="tab" href="flea.html">跳蚤 →</a>
@@ -130,7 +131,16 @@
             <!-- 玩家 -->
             <div class="tab-pane hidden" id="pane-players">
                 <h2>玩家进度</h2>
-                <button id="refresh-players" class="btn ghost small">刷新</button>
+                <p class="hint">重置涵盖等级、经验、领取记录、循环进度、任务和补偿账本，并收回通行证商人购买权与配方；永久称号保留。列表和“重置全部”均自动排除 Fika Headless 存档。</p>
+                <div class="player-toolbar">
+                    <input id="player-search" type="search" placeholder="搜索账号、角色昵称或完整 Profile ID" autocomplete="off" />
+                    <button id="refresh-players" class="btn ghost small">刷新</button>
+                    <label class="with-cb"><input id="bp-reset-preserve-premium" type="checkbox" checked /> 保留付费轨</label>
+                    <button id="reset-selected-players" class="btn del small">重置选中</button>
+                    <button id="reset-all-players" class="btn del small">重置全部</button>
+                    <span id="player-filter-hint" class="muted"></span>
+                    <span id="player-action-hint" class="muted"></span>
+                </div>
                 <div id="player-rows"></div>
             </div>
         </main>

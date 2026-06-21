@@ -11,7 +11,11 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     物品父子重整由 MailSendService 内部完成，这里只需提供扁平 Item 列表（Id/Template/StackObjectsCount）。
 /// </summary>
 [Injectable]
-public class BattlePassRewardService(MailSendService mailSendService, ISptLogger<BattlePassRewardService> logger)
+public class BattlePassRewardService(
+    MailSendService mailSendService,
+    DatabaseService databaseService,
+    ISptLogger<BattlePassRewardService> logger
+)
 {
     private const long ThirtyDaysSeconds = 30L * 24 * 3600;
 
@@ -42,12 +46,21 @@ public class BattlePassRewardService(MailSendService mailSendService, ISptLogger
                 continue;
             }
 
+            // mod 物品兜底：配置时物品存在、后来 mod 被删除 → tpl 不在 items DB。
+            // 跳过该项（其余奖励照发），配置保留——mod 装回后该奖励自动恢复。
+            if (!databaseService.GetItems().ContainsKey(new MongoId(tpl)))
+            {
+                logger.Warning($"[SPT-BattlePass] 奖励物品 tpl={tpl} 不在物品库（mod 已删除？），本次发放跳过该项（profile={profileId}）");
+                continue;
+            }
+
             items.Add(
                 new Item
                 {
                     Id = new MongoId(),
                     Template = new MongoId(tpl),
-                    Upd = new Upd { StackObjectsCount = r.Count },
+                    // FIR 开关：SpawnedInSession=true 即「战局内找到」标记；false 时不写字段（保持原版邮件物品形态）
+                    Upd = new Upd { StackObjectsCount = r.Count, SpawnedInSession = r.FoundInRaid ? true : null },
                 }
             );
         }

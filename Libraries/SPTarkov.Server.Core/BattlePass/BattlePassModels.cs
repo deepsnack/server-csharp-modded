@@ -11,9 +11,14 @@ namespace SPTarkov.Server.Core.BattlePass;
 /// <summary>单个奖励项：物品模板 + 数量。发奖时转换为 core 的 Item 列表经邮件发放。</summary>
 public record BpReward
 {
-    /// <summary>物品模板 id（tpl，例如卢布 5449016a4bdc2d6f028b456f）。</summary>
+    /// <summary>
+    ///     物品模板 id（tpl，例如卢布 5449016a4bdc2d6f028b456f）。
+    ///     仅 type=item 必填；purchaseRight/recipe/title 等非实物奖励为空。
+    ///     必须可空——否则在 Nullable 开启下 [ApiController] 会把非空 string 视为隐式 [Required]，
+    ///     非物品奖励提交 tpl=null 时整批 tracks 保存被判 400（前端只见红色「保存失败」）。
+    /// </summary>
     [JsonPropertyName("tpl")]
-    public string Tpl { get; set; } = "";
+    public string? Tpl { get; set; } = "";
 
     /// <summary>数量（可堆叠物品为堆叠数）。</summary>
     [JsonPropertyName("count")]
@@ -26,6 +31,10 @@ public record BpReward
     /// <summary>是否核心大奖（UI 放大高亮）。</summary>
     [JsonPropertyName("featured")]
     public bool Featured { get; set; }
+
+    /// <summary>type=item 时：发放的物品是否标记为「战局内找到」（FIR，SpawnedInSession）。</summary>
+    [JsonPropertyName("foundInRaid")]
+    public bool FoundInRaid { get; set; }
 
     /// <summary>
     ///     奖励兑现方式：
@@ -110,6 +119,48 @@ public record BpSeason
     /// <summary>循环每轮实际所需经验（CycleXp 为正则用之，否则回退 BaseXp）。</summary>
     [JsonIgnore]
     public int CycleXpEffective => CycleXp > 0 ? CycleXp : BaseXp;
+
+    // ===== 任务系统全局设置（管理员可调）=====
+
+    /// <summary>每个玩家同时激活/显示的「日常」随机任务数量。</summary>
+    [JsonPropertyName("dailyTaskCount")]
+    public int DailyTaskCount { get; set; } = 3;
+
+    /// <summary>每个玩家同时激活/显示的「每周」随机任务数量。</summary>
+    [JsonPropertyName("weeklyTaskCount")]
+    public int WeeklyTaskCount { get; set; } = 2;
+
+    /// <summary>每个玩家同时激活/显示的「赛季」随机任务数量（&lt;=0 = 赛季任务池全保留）。</summary>
+    [JsonPropertyName("seasonTaskCount")]
+    public int SeasonTaskCount { get; set; }
+
+    /// <summary>用户主页任务区「同时显示」的任务数量（其余可滚动查看）。</summary>
+    [JsonPropertyName("taskDisplayCount")]
+    public int TaskDisplayCount { get; set; } = 4;
+
+    /// <summary>「日常」任务自动刷新周期（小时，&lt;=0 = 按自然日）。</summary>
+    [JsonPropertyName("dailyPeriodHours")]
+    public double DailyPeriodHours { get; set; } = 24;
+
+    /// <summary>「每周」任务自动刷新周期（小时，&lt;=0 = 不自动刷新）。</summary>
+    [JsonPropertyName("weeklyPeriodHours")]
+    public double WeeklyPeriodHours { get; set; } = 168;
+
+    /// <summary>「赛季」任务自动刷新周期（小时，&lt;=0 = 不自动刷新，仅初始化一次）。</summary>
+    [JsonPropertyName("seasonPeriodHours")]
+    public double SeasonPeriodHours { get; set; }
+
+    /// <summary>玩家每个刷新周期内可主动刷新「日常」任务的免费次数（&lt;=0 = 不允许主动刷新）。</summary>
+    [JsonPropertyName("dailyRefreshLimit")]
+    public int DailyRefreshLimit { get; set; } = 1;
+
+    /// <summary>玩家每个刷新周期内可主动刷新「每周」任务的免费次数（&lt;=0 = 不允许主动刷新）。</summary>
+    [JsonPropertyName("weeklyRefreshLimit")]
+    public int WeeklyRefreshLimit { get; set; } = 1;
+
+    /// <summary>玩家每个刷新周期内可主动刷新「赛季」任务的免费次数（&lt;=0 = 不允许主动刷新）。</summary>
+    [JsonPropertyName("seasonRefreshLimit")]
+    public int SeasonRefreshLimit { get; set; }
 
     /// <summary>返回升到 <paramref name="level"/>（从 level-1 升上来）所需经验。level 从 2 起。</summary>
     public int XpToReach(int level)
@@ -348,6 +399,24 @@ public record BpProgress
     [JsonPropertyName("claimedPremium")]
     public HashSet<int> ClaimedPremium { get; set; } = new();
 
+    /// <summary>
+    ///     已发放的普通等级轨奖励指纹（键为 level:{level}:{free|premium}）。
+    ///     用于管理员在已领取奖励轨追加奖励后，仅补发新增项；循环奖励不进入此账本。
+    /// </summary>
+    [JsonPropertyName("grantedTrackRewards")]
+    public Dictionary<string, HashSet<string>> GrantedTrackRewards { get; set; } = new();
+
+    /// <summary>旧进度是否已按升级时的当前奖励轨建立账本基线。</summary>
+    [JsonPropertyName("rewardLedgerInitialized")]
+    public bool RewardLedgerInitialized { get; set; }
+
+    /// <summary>
+    ///     已永久解锁的通行证商人货架 offer id。
+    ///     独立存于通行证进度，避免使用会被 SPT 存档修复器清除的虚拟任务状态。
+    /// </summary>
+    [JsonPropertyName("purchaseRights")]
+    public HashSet<string> PurchaseRights { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>满级后已完成的循环奖励轮次数（每轮消耗 <see cref="BpSeason.CycleXpEffective"/> 经验）。</summary>
     [JsonPropertyName("cyclesCompleted")]
     public int CyclesCompleted { get; set; }
@@ -369,9 +438,20 @@ public record BpProgress
     [JsonPropertyName("lastWeeklyRollUtc")]
     public long LastWeeklyRollUtc { get; set; }
 
+    [JsonPropertyName("lastSeasonRollUtc")]
+    public long LastSeasonRollUtc { get; set; }
+
     /// <summary>当日已用的免费刷新次数（按 lastDailyRollUtc 所在自然日重置）。</summary>
     [JsonPropertyName("dailyRerollsUsed")]
     public int DailyRerollsUsed { get; set; }
+
+    /// <summary>本周期已用的「每周」任务主动刷新次数（每周任务滚动时重置）。</summary>
+    [JsonPropertyName("weeklyRefreshUsed")]
+    public int WeeklyRefreshUsed { get; set; }
+
+    /// <summary>本周期已用的「赛季」任务主动刷新次数（赛季任务滚动时重置）。</summary>
+    [JsonPropertyName("seasonRefreshUsed")]
+    public int SeasonRefreshUsed { get; set; }
 
     /// <summary>已处理（已结束/已切换）的客户端上报 raidId；用于拦截已收尾战局的乱序迟到上报。仅保留最近若干条。</summary>
     [JsonPropertyName("processedRaidIds")]
@@ -397,7 +477,7 @@ public record BpProgress
 //  客户端只上报「原始战绩事件」，条件匹配/累计/结算全在服务端（BattlePassTrackService）。
 // ============================================================================
 
-/// <summary>一次击杀事件：阵营 + 角色（服务端据此匹配任务 target）。</summary>
+/// <summary>一次击杀事件：客户端只上报阵营/角色；服务端战后权威路径会补充武器、部位、距离等字段。</summary>
 public record BpKillEvent
 {
     [JsonPropertyName("side")]
@@ -405,6 +485,18 @@ public record BpKillEvent
 
     [JsonPropertyName("role")]
     public string? Role { get; set; }
+
+    [JsonPropertyName("weapon")]
+    public string? Weapon { get; set; }
+
+    [JsonPropertyName("bodyPart")]
+    public string? BodyPart { get; set; }
+
+    [JsonPropertyName("distance")]
+    public double? Distance { get; set; }
+
+    [JsonPropertyName("time")]
+    public string? Time { get; set; }
 }
 
 /// <summary>一项物品事件（找到/带出/安放）。</summary>
@@ -640,4 +732,60 @@ public sealed record BpTitleView
 
     [JsonPropertyName("height")]
     public int Height { get; init; }
+}
+
+/// <summary>自定义藏身处配方的单条原料（isTool=true 表示工具：制作需要但不消耗，完成后返还）。</summary>
+public record BpRecipeIngredient
+{
+    [JsonPropertyName("tpl")]
+    public string Tpl { get; set; } = "";
+
+    /// <summary>消耗数量；isTool=true 时忽略（工具固定 1 个且不消耗）。</summary>
+    [JsonPropertyName("count")]
+    public int Count { get; set; } = 1;
+
+    [JsonPropertyName("isTool")]
+    public bool IsTool { get; set; }
+}
+
+/// <summary>
+///     管理员自定义藏身处制造配方。启动时（及后台保存后）由 BattlePassRecipeSync 注入
+///     hideout production 数据库；locked=true 时加通行证虚拟任务锁，仅通过奖励轨 recipe 奖励解锁。
+/// </summary>
+public record BpCustomRecipe
+{
+    /// <summary>production id（MongoId 24hex，创建时生成；奖励轨 recipeId 引用它）。</summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    /// <summary>建筑（HideoutAreas 枚举数值）。</summary>
+    [JsonPropertyName("areaType")]
+    public int AreaType { get; set; }
+
+    /// <summary>所需建筑等级（默认 1）。</summary>
+    [JsonPropertyName("areaLevel")]
+    public int AreaLevel { get; set; } = 1;
+
+    /// <summary>制作时长（秒）。</summary>
+    [JsonPropertyName("productionTime")]
+    public int ProductionTime { get; set; } = 3600;
+
+    /// <summary>产物 tpl。</summary>
+    [JsonPropertyName("endProduct")]
+    public string EndProduct { get; set; } = "";
+
+    /// <summary>产量。</summary>
+    [JsonPropertyName("count")]
+    public int Count { get; set; } = 1;
+
+    [JsonPropertyName("ingredients")]
+    public List<BpRecipeIngredient> Ingredients { get; set; } = new();
+
+    /// <summary>true=默认锁定（通行证专属，领取 recipe 奖励后解锁）；false=创建即全员可用。</summary>
+    [JsonPropertyName("locked")]
+    public bool Locked { get; set; } = true;
+
+    /// <summary>备注（仅后台展示）。</summary>
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
 }

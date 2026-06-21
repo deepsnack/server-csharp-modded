@@ -1,13 +1,15 @@
-﻿using System.Text.Json.Nodes;
+using System.Text.Json.Nodes;
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.Migration.Migrations;
 
 /// <summary>
-/// Password property was removed from profile.info in 4.0
+/// Moves legacy launcher credentials into the independent password store before removing profile.info.password.
 /// </summary>
 [Injectable]
-public class RemovePassword : AbstractProfileMigration
+public class RemovePassword(PasswordStoreService passwordStoreService) : AbstractProfileMigration
 {
     public override string FromVersion
     {
@@ -31,16 +33,24 @@ public class RemovePassword : AbstractProfileMigration
 
     public override bool CanMigrate(JsonObject profile, IEnumerable<IProfileMigration> previouslyRanMigrations)
     {
-        var hasPassword = profile["info"]?["password"] != null;
-
-        return hasPassword;
+        return profile["info"]?["password"] is not null;
     }
 
     public override JsonObject? Migrate(JsonObject profile)
     {
-        var profileInfo = profile["info"] as JsonObject;
-        profileInfo?.Remove("password");
+        if (profile["info"] is not JsonObject profileInfo || profileInfo["password"] is not JsonValue passwordValue)
+        {
+            return profile;
+        }
 
+        var profileIdValue = profileInfo["id"]?.GetValue<string>();
+        var passwordHash = passwordValue.GetValue<string>();
+        if (!MongoId.IsValidMongoId(profileIdValue) || !passwordStoreService.ImportLegacyHash(new MongoId(profileIdValue), passwordHash))
+        {
+            return null;
+        }
+
+        profileInfo.Remove("password");
         return base.Migrate(profile);
     }
 }

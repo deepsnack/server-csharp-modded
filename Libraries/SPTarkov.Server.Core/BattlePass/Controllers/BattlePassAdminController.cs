@@ -17,7 +17,8 @@ public class BattlePassAdminController(
     BattlePassService battlePassService,
     ActivationCodeService activationCodeService,
     BattlePassTraderSync traderSync,
-    BattlePassTrackService trackService
+    BattlePassTrackService trackService,
+    BattlePassRecipeSync recipeSync
 )
 {
     private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
@@ -114,8 +115,17 @@ public class BattlePassAdminController(
             return new { success = false, message = "任务 id 不能为空" };
         }
 
+        if (
+            string.Equals(task.ConditionType, "Kills", StringComparison.OrdinalIgnoreCase)
+            && ((task.EnemyEquipment?.Count ?? 0) > 0 || (task.PlayerEquipment?.Count ?? 0) > 0 || (task.WeaponMods?.Count ?? 0) > 0)
+        )
+        {
+            return new { success = false, message = "战后记录不含敌我装备和武器改件，无法作为击杀任务条件" };
+        }
+
         var tasks = BattlePassStore.GetTasks();
-        tasks.RemoveAll(t => t.Id == task.Id);
+        task.Id = task.Id.Trim();
+        tasks.RemoveAll(t => string.Equals(t.Id, task.Id, StringComparison.OrdinalIgnoreCase));
         tasks.Add(task);
         BattlePassStore.SaveTasks(tasks);
         return new { success = true };
@@ -221,6 +231,90 @@ public class BattlePassAdminController(
     }
 
     // ---- 通行证商人：元信息 ----
+    // ---- 自定义藏身处配方 ----
+    [HttpGet("custom-recipes")]
+    public object GetCustomRecipes([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, recipes = BattlePassStore.GetCustomRecipes() };
+    }
+
+    /// <summary>创建或更新自定义配方（带 id=更新；不带=创建并生成 production id）。保存后热注入 DB。</summary>
+    [HttpPost("custom-recipes")]
+    public object SaveCustomRecipe([FromBody] BpCustomRecipe recipe, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        if (string.IsNullOrWhiteSpace(recipe.EndProduct) || !Models.Common.MongoId.IsValidMongoId(recipe.EndProduct))
+        {
+            return new { success = false, message = "产物 tpl 无效" };
+        }
+
+        if (recipe.Ingredients.Count == 0)
+        {
+            return new { success = false, message = "至少需要一种原料" };
+        }
+
+        if (recipe.Ingredients.Any(i => !Models.Common.MongoId.IsValidMongoId(i.Tpl)))
+        {
+            return new { success = false, message = "存在无效的原料 tpl" };
+        }
+
+        if (recipe.ProductionTime < 1)
+        {
+            return new { success = false, message = "制作时长必须大于 0" };
+        }
+
+        var recipes = BattlePassStore.GetCustomRecipes();
+        if (string.IsNullOrWhiteSpace(recipe.Id))
+        {
+            recipe.Id = new Models.Common.MongoId().ToString();
+            recipes.Add(recipe);
+        }
+        else
+        {
+            var idx = recipes.FindIndex(r => r.Id == recipe.Id);
+            if (idx < 0)
+            {
+                recipes.Add(recipe);
+            }
+            else
+            {
+                recipes[idx] = recipe;
+            }
+        }
+
+        BattlePassStore.SaveCustomRecipes(recipes);
+        recipeSync.Sync(); // 热重注入：新配方即刻可在 query/recipes 搜到、被奖励轨引用
+        return new { success = true, id = recipe.Id };
+    }
+
+    [HttpDelete("custom-recipes/{id}")]
+    public object DeleteCustomRecipe(string id, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var recipes = BattlePassStore.GetCustomRecipes();
+        var removed = recipes.RemoveAll(r => r.Id == id);
+        if (removed > 0)
+        {
+            BattlePassStore.SaveCustomRecipes(recipes);
+            recipeSync.Sync();
+        }
+
+        return new { success = removed > 0 };
+    }
+
     [HttpGet("trader-meta")]
     public object GetTraderMeta([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
@@ -243,6 +337,21 @@ public class BattlePassAdminController(
             return new { success = false, message = "未授权" };
         }
 
+        var currency = config.Currency?.Trim().ToUpperInvariant();
+        if (
+            !Enum.TryParse<Models.Enums.CurrencyType>(currency, out var parsedCurrency)
+            || !Enum.IsDefined(parsedCurrency)
+        )
+        {
+            return new { success = false, message = "主货币无效" };
+        }
+
+        if (config.ResupplySeconds < 60)
+        {
+            return new { success = false, message = "补货周期不能短于 60 秒" };
+        }
+
+        config.Currency = currency!;
         BattlePassStore.SaveTraderConfig(config);
         traderSync.Sync(); // 热重注入（客户端商人界面可能需重进/重登刷新元信息与头像）
         return new { success = true };
@@ -359,6 +468,24 @@ public class BattlePassAdminController(
         if (string.IsNullOrWhiteSpace(offer.Tpl))
         {
             return new { success = false, message = "商品 tpl 不能为空" };
+        }
+
+        offer.Id = offer.Id.Trim();
+        offer.Tpl = offer.Tpl.Trim();
+        if (!Models.Common.MongoId.IsValidMongoId(offer.Tpl))
+        {
+            return new { success = false, message = "商品 tpl 无效" };
+        }
+
+        offer.Cost ??= new List<BpBarterCost>();
+        if (offer.Cost.Any(c => c is null || !Models.Common.MongoId.IsValidMongoId(c.Tpl) || c.Count <= 0))
+        {
+            return new { success = false, message = "支付物品 tpl 无效或数量不是正整数" };
+        }
+
+        foreach (var cost in offer.Cost)
+        {
+            cost.Tpl = cost.Tpl.Trim();
         }
 
         var offers = BattlePassStore.GetOffers();
@@ -613,6 +740,84 @@ public class BattlePassAdminController(
     }
 
     // ---- 玩家总览 ----
+    [HttpPost("players/reset-progress")]
+    public object ResetPlayerProgress([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var preservePremium = !request.TryGetProperty("preservePremium", out var pp) || pp.ValueKind != JsonValueKind.False;
+        var all = request.TryGetProperty("all", out var a) && a.ValueKind == JsonValueKind.True;
+        var profileIds = new List<string>();
+
+        if (all)
+        {
+            profileIds = battlePassService
+                .ListProfileIds()
+                .Concat(BattlePassStore.ListProgressProfileIds())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Where(x => !battlePassService.IsHeadlessProfile(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        else
+        {
+            if (request.TryGetProperty("profileIds", out var ids) && ids.ValueKind == JsonValueKind.Array)
+            {
+                profileIds.AddRange(ids.EnumerateArray().Select(x => x.GetString()).OfType<string>().Where(x => !string.IsNullOrWhiteSpace(x)));
+            }
+
+            if (request.TryGetProperty("profileId", out var id) && id.ValueKind == JsonValueKind.String)
+            {
+                var single = id.GetString();
+                if (!string.IsNullOrWhiteSpace(single))
+                {
+                    profileIds.Add(single);
+                }
+            }
+
+            profileIds = profileIds
+                .Where(pid => !battlePassService.IsHeadlessProfile(pid))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        if (profileIds.Count == 0)
+        {
+            return new { success = false, message = "未选择玩家" };
+        }
+
+        var season = BattlePassStore.GetSeason();
+        var reset = 0;
+        var revokedPurchaseRights = 0;
+        var revokedRecipes = 0;
+        foreach (var pid in profileIds)
+        {
+            var oldProgress = BattlePassStore.GetProgress(pid);
+            revokedPurchaseRights += battlePassService.RevokePurchaseRights(pid, oldProgress);
+            revokedRecipes += battlePassService.RevokeRecipes(pid, oldProgress);
+            var progress = BattlePassStore.ResetProgress(pid, season, preservePremium);
+            if (trackService.RefreshActiveTasks(pid, progress))
+            {
+                BattlePassStore.SaveProgress(pid, progress);
+            }
+
+            reset++;
+        }
+
+        return new
+        {
+            success = true,
+            reset,
+            preservePremium,
+            revokedPurchaseRights,
+            revokedRecipes,
+            message = $"已重置 {reset} 个玩家的完整通行证进度，收回 {revokedPurchaseRights} 项商人购买权和 {revokedRecipes} 个配方",
+        };
+    }
+
     [HttpGet("players")]
     public object GetPlayers([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
@@ -621,8 +826,12 @@ public class BattlePassAdminController(
             return new { success = false, message = "未授权" };
         }
 
-        var players = BattlePassStore
-            .ListProgressProfileIds()
+        var players = battlePassService
+            .ListProfileIds()
+            .Concat(BattlePassStore.ListProgressProfileIds())
+            .Where(pid => !string.IsNullOrWhiteSpace(pid))
+            .Where(pid => !battlePassService.IsHeadlessProfile(pid))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(pid =>
             {
                 var prog = BattlePassStore.GetProgress(pid);
@@ -630,6 +839,7 @@ public class BattlePassAdminController(
                 {
                     profileId = pid,
                     username = battlePassService.GetUsername(pid),
+                    nickname = battlePassService.GetNickname(pid),
                     prog.Level,
                     prog.Xp,
                     prog.PremiumUnlocked,

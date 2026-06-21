@@ -1,4 +1,5 @@
 using SPTarkov.Server.Core.BattlePass.Portal;
+using SPTarkov.Server.Core.BattlePass.Patches;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Models.Spt.Config;
@@ -18,20 +19,35 @@ public class BattlePassMod(
     ISptLogger<BattlePassMod> logger,
     ConfigServer configServer,
     BattlePassPortalBridgeService portalBridge,
-    BattlePassTraderSync traderSync
+    BattlePassTraderSync traderSync,
+    BattlePassRecipeSync recipeSync,
+    BattlePassService battlePassService,
+    BattlePassTraderAccessService traderAccessService
 ) : IOnLoad
 {
     public Task OnLoad()
     {
         BattlePassModConfig.Load();   // 确保 SPT_Data/battlepass/config.json 存在；首次运行自动写模板
         BattlePassStore.EnsureSeeded();
+        battlePassService.InitializeExistingRewardLedgers();
+        traderAccessService.Register();
         // 页面随 Assets 工程输出到 SPT_Data/battlepass/page/，无需运行期解压；
         // 静态页 /battlepass 由 BattlePassPageController（MVC catch-all）提供。
         traderSync.Sync(); // 注入「通行证商人」：货架/元信息全后台可配，购买权限逐玩家解锁
+        recipeSync.Sync(); // 注入自定义藏身处配方（锁定配方挂通行证虚拟任务锁，经奖励轨 recipe 解锁）
         portalBridge.Start(); // Portal 兼容 sidecar：作为"通行证管理"独立卡片自注册到 SptManagerPortal，支持 SSO 免密进管理页
 
-        // 任务进度由客户端插件战后上报（POST /battlepass/api/track）→ BattlePassTrackService 判定结算；
-        // 服务端不再注入任何原生 quest，加载链路零副作用。
+        try
+        {
+            new EndLocalRaidTrackPatch().Enable();
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[SPT-BattlePass] EndLocalRaid 任务追踪补丁启用失败，服务端权威追踪不可用: {ex.Message}");
+        }
+
+        // 任务进度由服务端 EndLocalRaid 战后档案权威结算；客户端插件只补 VisitZone/PlaceItem 与实时反馈。
+        // 服务端不注入任何原生 quest，加载链路零副作用。
         logger.Success("[SPT-BattlePass] loaded; player API /battlepass/api/*, admin API /battlepass/api/admin/*");
         PrintAddress();
         return Task.CompletedTask;

@@ -56,6 +56,25 @@
                     <input id="refresh-profile" placeholder="Profile ID（留空批量）" />
                     <button id="refresh-active-tasks" class="btn ghost small">刷新任务</button>
                 </div>
+
+                <details class="task-settings-box" id="task-settings">
+                    <summary>任务系统设置（全局）</summary>
+                    <p class="hint" style="margin:8px 0">控制每位玩家抽取的随机任务数、自动刷新周期，以及主动刷新次数；固定任务始终额外加入。保存即写入当前赛季。</p>
+                    <div class="ts-grid">
+                        <label>每日随机任务数<input id="ts-daily-count" type="number" min="0" /></label>
+                        <label>每周随机任务数<input id="ts-weekly-count" type="number" min="0" /></label>
+                        <label>赛季随机任务数<span class="ts-sub">0=全部</span><input id="ts-season-count" type="number" min="0" /></label>
+                        <label>主页同时显示<span class="ts-sub">其余滚动</span><input id="ts-display-count" type="number" min="1" /></label>
+                        <label>每日刷新周期(时)<input id="ts-daily-period" type="number" min="0" step="0.5" /></label>
+                        <label>每周刷新周期(时)<input id="ts-weekly-period" type="number" min="0" step="0.5" /></label>
+                        <label>赛季刷新周期(时)<span class="ts-sub">0=不自动</span><input id="ts-season-period" type="number" min="0" step="0.5" /></label>
+                        <label>每日免费刷新次数<input id="ts-daily-refresh" type="number" min="0" /></label>
+                        <label>每周免费刷新次数<input id="ts-weekly-refresh" type="number" min="0" /></label>
+                        <label>赛季免费刷新次数<span class="ts-sub">0=禁用</span><input id="ts-season-refresh" type="number" min="0" /></label>
+                    </div>
+                    <button id="save-task-settings" class="btn primary small" style="margin-top:8px">保存设置</button>
+                    <span id="ts-msg" class="muted" style="margin-left:8px;font-size:11px"></span>
+                </details>
             </aside>
 
             <!-- 右侧：编辑器 -->
@@ -119,36 +138,69 @@
                     <!-- 目标配置（按类型动态显示） -->
                     <div id="target-section" class="target-section"></div>
 
-                    <!-- Kills 细粒度选项（仅 Kills 显示） -->
-                    <details class="fine" id="kills-fine" style="display:none">
-                        <summary>细粒度击杀条件（可选）</summary>
-                        <div class="form-body">
-                            <label>目标阵营</label>
-                            <select id="f-target"><option value="Any">任意</option><option value="Savage">Scav</option><option value="AnyPmc">任意 PMC</option><option value="Bear">BEAR</option><option value="Usec">USEC</option><option value="Boss">Boss</option></select>
-                            <label>武器 tpl（逗号分隔）</label><input id="f-weapons" placeholder="如 5448bd6b4bdc2dfc2f8b4569" />
-                            <label>武器口径（逗号）</label><input id="f-calibers" placeholder="Caliber762x39" />
-                            <label>命中部位（逗号，如 Head,Chest）</label><input id="f-bodyparts" placeholder="Head / Chest / Stomach…" />
-                            <label>Scav 角色（逗号，target=Savage 时生效）</label><input id="f-savageroles" placeholder="bossKilla, marksman" />
-                            <div style="display:flex;gap:8px">
-                                <div style="flex:1">
-                                    <label>距离比较 / 阈值(米)</label>
-                                    <div style="display:flex;gap:4px">
-                                        <select id="f-distcompare" style="width:70px"><option value="">不限</option><option value="&gt;=">≥</option><option value="&lt;=">≤</option></select>
-                                        <input id="f-distval" type="number" placeholder="如 100" style="flex:1" />
-                                    </div>
-                                </div>
-                                <div style="flex:1">
-                                    <label>时段从/到（游戏时）</label>
-                                    <div style="display:flex;gap:4px">
-                                        <input id="f-daytimefrom" type="number" placeholder="from" /><input id="f-daytimeto" type="number" placeholder="to" />
-                                    </div>
+                    <!-- Kills 条件（仅 Kills 显示） -->
+                    <section class="kill-conditions" id="kills-fine" style="display:none">
+                        <div class="kill-conditions-head">
+                            <strong>击杀条件</strong><span>所有已填写条件需同时满足；留空表示不限</span>
+                        </div>
+                        <div class="kill-condition-grid">
+                            <div class="kill-condition-card">
+                                <h3>目标</h3>
+                                <label>目标阵营</label>
+                                <select id="f-target"><option value="Any">任意敌人</option><option value="Savage">Scav</option><option value="AnyPmc">任意 PMC</option><option value="Bear">BEAR</option><option value="Usec">USEC</option><option value="Boss">Boss</option></select>
+                                <label>Scav 角色</label>
+                                <div class="tag-picker">
+                                    <div class="tag-entry"><input id="f-savageroles-search" list="f-savageroles-options" placeholder="选择或输入角色后添加" /><button id="f-savageroles-add" type="button" class="btn ghost small">添加</button></div>
+                                    <input id="f-savageroles" type="hidden" />
+                                    <div id="f-savageroles-chips" class="multi-chips"></div>
+                                    <datalist id="f-savageroles-options"><option value="assault"></option><option value="marksman"></option><option value="cursedAssault"></option><option value="exUsec"></option><option value="pmcBot"></option><option value="bossKilla"></option><option value="bossTagilla"></option><option value="bossBully"></option><option value="bossGluhar"></option><option value="bossSanitar"></option><option value="bossKojaniy"></option></datalist>
                                 </div>
                             </div>
-                            <label>敌人穿戴装备 tpl（逗号）</label><input id="f-enemyequip" />
-                            <label>玩家自身装备 tpl（逗号）</label><input id="f-playerequip" />
-                            <label>武器改装件 tpl（逗号）</label><input id="f-weaponmods" />
+
+                            <div class="kill-condition-card">
+                                <h3>武器</h3>
+                                <label>指定武器</label>
+                                <div class="multi-item-picker" data-field="f-weapons">
+                                    <input id="f-weapons-search" placeholder="搜索武器名称或 tpl…" autocomplete="off" />
+                                    <div id="f-weapons-results" class="ip-results" style="display:none"></div>
+                                    <input id="f-weapons" type="hidden" />
+                                    <div id="f-weapons-chips" class="multi-chips"></div>
+                                </div>
+                                <label>指定口径</label>
+                                <div class="tag-picker">
+                                    <div class="tag-entry"><input id="f-calibers-search" list="f-calibers-options" placeholder="选择或输入口径后添加" /><button id="f-calibers-add" type="button" class="btn ghost small">添加</button></div>
+                                    <input id="f-calibers" type="hidden" />
+                                    <div id="f-calibers-chips" class="multi-chips"></div>
+                                    <datalist id="f-calibers-options"><option value="Caliber9x18PM"></option><option value="Caliber9x19PARA"></option><option value="Caliber9x21"></option><option value="Caliber45ACP"></option><option value="Caliber46x30"></option><option value="Caliber57x28"></option><option value="Caliber545x39"></option><option value="Caliber556x45NATO"></option><option value="Caliber762x25TT"></option><option value="Caliber762x35"></option><option value="Caliber762x39"></option><option value="Caliber762x51"></option><option value="Caliber762x54R"></option><option value="Caliber9x39"></option><option value="Caliber12g"></option><option value="Caliber20g"></option><option value="Caliber23x75"></option></datalist>
+                                </div>
+                            </div>
+
+                            <div class="kill-condition-card">
+                                <h3>命中与距离</h3>
+                                <label>命中部位</label>
+                                <div id="f-bodyparts" class="choice-grid">
+                                    <label><input type="checkbox" value="Head" />头部</label><label><input type="checkbox" value="Chest" />胸部</label>
+                                    <label><input type="checkbox" value="Stomach" />腹部</label><label><input type="checkbox" value="LeftArm" />左臂</label>
+                                    <label><input type="checkbox" value="RightArm" />右臂</label><label><input type="checkbox" value="LeftLeg" />左腿</label>
+                                    <label><input type="checkbox" value="RightLeg" />右腿</label>
+                                </div>
+                                <label>击杀距离（米）</label>
+                                <div class="condition-pair distance-pair">
+                                    <select id="f-distcompare"><option value="">不限</option><option value="&gt;=">至少</option><option value="&gt;">大于</option><option value="&lt;=">至多</option><option value="&lt;">小于</option><option value="=">等于</option></select>
+                                    <input id="f-distval" type="number" min="0" step="1" placeholder="距离" />
+                                </div>
+                            </div>
+
+                            <div class="kill-condition-card">
+                                <h3>游戏时段</h3>
+                                <p class="hint">支持跨午夜，例如 22:00 至 06:00。</p>
+                                <div class="condition-pair">
+                                    <div><label>开始</label><select id="f-daytimefrom"></select></div>
+                                    <div><label>结束</label><select id="f-daytimeto"></select></div>
+                                </div>
+                            </div>
                         </div>
-                    </details>
+                    </section>
 
                     <div class="form-actions">
                         <button id="save-task" class="btn primary">保存任务</button>

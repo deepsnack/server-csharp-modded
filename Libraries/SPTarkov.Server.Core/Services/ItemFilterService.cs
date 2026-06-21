@@ -106,6 +106,17 @@ public class ItemFilterService(ISptLogger<ItemFilterService> logger, ConfigServe
     }
 
     /// <summary>
+    ///     Drop the blacklist + lootable-blacklist caches so they lazily rebuild from the (possibly mutated)
+    ///     config sets on next query. Used after runtime edits to the underlying blacklists (e.g. global item bans)
+    ///     so additions/removals take effect immediately without a restart.
+    /// </summary>
+    public void RefreshBlacklistCaches()
+    {
+        ItemBlacklistCache.Clear();
+        LootableItemBlacklistCache.Clear();
+    }
+
+    /// <summary>
     ///     Check if the provided template id is boss item in config/item.json
     /// </summary>
     /// <param name="tpl"> Template id</param>

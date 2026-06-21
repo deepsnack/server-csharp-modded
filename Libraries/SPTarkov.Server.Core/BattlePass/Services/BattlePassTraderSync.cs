@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Enums;
@@ -15,9 +16,8 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     通行证商人：把一个完全由后台配置驱动的自定义商人注入 SPT 数据库（纯服务端，零 Harmony）。
 ///     - 商人元信息（名称/昵称/介绍/货币/头像等）来自 <c>trader-meta.json</c>。
 ///     - 货架商品（tpl/价格/库存/限购）来自 <c>trader.json</c>，每项以物易物计价。
-///     - 「购买权限」逐玩家解锁：每个 offer 绑定一个解锁 quest，写入 <c>questassort["success"]</c>；
-///       玩家在网页领取对应奖励后该 quest 置 Success（见 <see cref="BattlePassService"/>），原生
-///       <c>AssortHelper.StripLockedQuestAssort</c> 即对该玩家放出此货架项。
+///     - 「购买权限」逐玩家解锁：由 <see cref="BattlePassTraderAccessService"/> 按通行证自有账本过滤，
+///       不再依赖会被 SPT 存档修复器清除的虚拟任务。
 ///     - locale 经 <see cref="SPTarkov.Server.Core.Utils.Json.LazyLoad{T}.AddTransformer"/> 安全注入。
 ///     - 头像经 <see cref="ImageRouter.AddRoute"/> serve。
 ///     保存配置后可重复调用 <see cref="Sync"/> 热重注入（客户端商人界面可能需重进/重登刷新）。
@@ -26,6 +26,8 @@ namespace SPTarkov.Server.Core.BattlePass;
 public class BattlePassTraderSync(
     DatabaseService databaseService,
     ImageRouter imageRouter,
+    TraderAssortHelper traderAssortHelper,
+    TraderHelper traderHelper,
     ISptLogger<BattlePassTraderSync> logger
 )
 {
@@ -39,7 +41,7 @@ public class BattlePassTraderSync(
 
     public static MongoId TraderId => new(TraderIdHex);
 
-    /// <summary>某 offer 对应的「购买权限」解锁 quest id（确定性，跨重启稳定）。</summary>
+    /// <summary>旧版购买权虚拟任务 id；仅用于重置时清理历史存档残留。</summary>
     public static MongoId UnlockQuestId(string offerId) => DeterministicId(offerId, "bp-offer-unlock");
 
     /// <summary>某 offer 在货架里的根 item id（确定性，questassort/barter 据此挂钩）。</summary>
@@ -56,15 +58,17 @@ public class BattlePassTraderSync(
             var trader = new Trader
             {
                 Base = BuildBase(cfg),
-                Assort = BuildAssort(offers, out var questAssortSuccess),
+                Assort = BuildAssort(offers),
                 Dialogue = new Dictionary<string, List<string>?>(),
                 QuestAssort = new Dictionary<string, Dictionary<MongoId, MongoId>>
                 {
-                    ["success"] = questAssortSuccess,
+                    ["success"] = new(),
                 },
             };
 
+            traderHelper.SetTraderUpdateSeconds(TraderId, cfg.ResupplySeconds, cfg.Name);
             databaseService.GetTables().Traders[TraderId] = trader;
+            traderAssortHelper.InvalidateQuestAssortCache();
 
             RegisterAvatar(cfg);
             HookLocale(cfg);
@@ -155,12 +159,11 @@ public class BattlePassTraderSync(
         };
     }
 
-    private TraderAssort BuildAssort(List<BpTraderOffer> offers, out Dictionary<MongoId, MongoId> questAssortSuccess)
+    private TraderAssort BuildAssort(List<BpTraderOffer> offers)
     {
         var items = new List<Item>();
         var barter = new Dictionary<MongoId, List<List<BarterScheme>>>();
         var loyal = new Dictionary<MongoId, int>();
-        questAssortSuccess = new Dictionary<MongoId, MongoId>();
 
         foreach (var offer in offers)
         {
@@ -177,6 +180,13 @@ public class BattlePassTraderSync(
             catch
             {
                 logger.Warning($"[SPT-BattlePass] 货架项 {offer.Id} 的 tpl 非法，已跳过: {offer.Tpl}");
+                continue;
+            }
+
+            // mod 物品兜底：商品 tpl 不在物品库（mod 被删除）→ 跳过该货架项的注入，配置保留，mod 装回自动恢复
+            if (!databaseService.GetItems().ContainsKey(tpl))
+            {
+                logger.Warning($"[SPT-BattlePass] 货架项 {offer.Id} 的商品 {offer.Tpl} 不在物品库（mod 已删除？），本次未注入");
                 continue;
             }
 
@@ -220,10 +230,8 @@ public class BattlePassTraderSync(
             }
 
             barter[rootId] = new List<List<BarterScheme>> { scheme };
-            // 必须在 loyal_level_items 出现，否则不进 quest 门禁判定（StripLockedQuestAssort 只遍历此字典 key）
+            // 仍需出现在 loyal_level_items，供原生忠诚度与购买流程识别。
             loyal[rootId] = 1;
-            // 逐玩家门禁：领取购买权限 → 该解锁 quest 置 Success → 此货架项放出
-            questAssortSuccess[rootId] = UnlockQuestId(offer.Id);
         }
 
         return new TraderAssort

@@ -165,30 +165,55 @@ async function postTracksAndSeason(tracksPayload) {
 
 // 采集所有已渲染等级块回写模型（未渲染等级保留原值）
 function collectAllFromDom() {
+    rwInvalidCount = 0;
     document.querySelectorAll('#tracks-list .level-block').forEach(b => {
         allTracks[b.dataset.level] = { free: collectRewardsIn(b, 'free'), premium: collectRewardsIn(b, 'premium') };
     });
+    if (rwInvalidCount > 0) toast(`有 ${rwInvalidCount} 个奖励缺关键字段（已标红），保存后请补全`, false);
     syncTracksJson();
 }
 
+// 按类型收集与校验：item 需要 tpl；purchaseRight/recipe/title 需要对应引用 id（tpl 可空）。
+// 修复旧逻辑 if(!tpl) return 的静默丢卡——非物品奖励没填 tpl 会在保存时直接消失。
+// 完全空白的卡（新加未填）跳过；填了内容但缺关键字段的卡保留并标红提示，不再无声丢失。
 function collectRewardsIn(block, track) {
     const items = [];
     block.querySelectorAll(`.reward-cards[data-track="${track}"] .rw-card`).forEach(card => {
+        const type = card.querySelector('.rw-type')?.value || 'item';
         const tpl = card.querySelector('.rw-tpl')?.value?.trim() || '';
-        if (!tpl) return;
+        const name = card.querySelector('.rw-name')?.value?.trim() || null;
+        const offerId = card.querySelector('.rw-offerid')?.value?.trim() || null;
+        const recipeId = card.querySelector('.rw-recipeid')?.value?.trim() || null;
+        const titleId = card.querySelector('.rw-titleid')?.value?.trim() || null;
+
+        const keyField = { item: tpl, purchaseRight: offerId, recipe: recipeId, title: titleId }[type];
+        const isBlank = !tpl && !name && !offerId && !recipeId && !titleId;
+        if (isBlank) return; // 全空卡 = 未填的新卡，不入库
+
+        if (!keyField) {
+            card.classList.add('rw-invalid');
+            rwInvalidCount++;
+        } else {
+            card.classList.remove('rw-invalid');
+        }
+
         items.push({
-            tpl,
-            count: +(card.querySelector('.rw-count')?.value || 1),
-            name: card.querySelector('.rw-name')?.value?.trim() || null,
+            tpl: type === 'item' ? tpl : (tpl || null),
+            count: type === 'item' ? +(card.querySelector('.rw-count')?.value || 1) : 1,
+            name,
             featured: card.querySelector('.rw-featured')?.checked || false,
-            type: card.querySelector('.rw-type')?.value || 'item',
-            offerId: card.querySelector('.rw-offerid')?.value?.trim() || null,
-            recipeId: card.querySelector('.rw-recipeid')?.value?.trim() || null,
-            titleId: card.querySelector('.rw-titleid')?.value?.trim() || null,
+            foundInRaid: type === 'item' ? (card.querySelector('.rw-fir')?.checked || false) : false,
+            type,
+            offerId: type === 'purchaseRight' ? offerId : null,
+            recipeId: type === 'recipe' ? recipeId : null,
+            titleId: type === 'title' ? titleId : null,
         });
     });
     return items;
 }
+
+// 本轮收集中缺关键字段的卡数（collectAllFromDom 前清零，保存时提示）
+let rwInvalidCount = 0;
 
 function syncTracksJson() { el('tracks-json').value = JSON.stringify(allTracks, null, 2); }
 
@@ -234,11 +259,16 @@ function fillRewardCards(block, track, items) {
     if (!items.length) { box.innerHTML = '<div class="muted rw-empty">暂无，点「＋ 添加」</div>'; return; }
     box.innerHTML = items.map((r, i) => rewardCardHtml(track, r, i)).join('');
     box.querySelectorAll('.rw-tpl').forEach(inp => setupRwItemPicker(inp));
+    box.querySelectorAll('.rw-offerid').forEach(inp => setupRwRefPicker(inp, 'offer'));
+    box.querySelectorAll('.rw-recipeid').forEach(inp => setupRwRefPicker(inp, 'recipe'));
+    box.querySelectorAll('.rw-titleid').forEach(inp => setupRwRefPicker(inp, 'title'));
     box.querySelectorAll('.rw-type').forEach(sel => sel.addEventListener('change', () => onRwTypeChange(sel)));
 }
 
 function onRwTypeChange(sel) {
     const card = sel.closest('.rw-card');
+    const itemRow = card.querySelector('.rw-item-row');
+    if (itemRow) itemRow.style.display = sel.value === 'item' ? '' : 'none';
     card.querySelector('.rw-extra').style.display = sel.value === 'item' ? 'none' : '';
     ['.rw-offerid-row', '.rw-recipeid-row', '.rw-titleid-row'].forEach(s => { const e = card.querySelector(s); if (e) e.style.display = 'none'; });
     const map = { purchaseRight: '.rw-offerid-row', recipe: '.rw-recipeid-row', title: '.rw-titleid-row' };
@@ -268,40 +298,87 @@ function wireBlock(block) {
 }
 
 function rewardCardHtml(track, r, i) {
+    const type = r.type || 'item';
     const iconUrl = isTpl(r.tpl) ? ICON_API + r.tpl : '';
     const iconStyle = iconUrl ? '' : 'display:none';
-    const extraStyle = r.type && r.type !== 'item' ? '' : 'display:none';
-    const offerStyle = r.type === 'purchaseRight' ? '' : 'display:none';
-    const recipeStyle = r.type === 'recipe' ? '' : 'display:none';
-    const titleStyle = r.type === 'title' ? '' : 'display:none';
+    // 类型决定表单形态：item 显示物品搜索+数量；其余显示对应引用选择器，tpl/数量不再要求
+    const itemStyle = type === 'item' ? '' : 'display:none';
+    const extraStyle = type !== 'item' ? '' : 'display:none';
+    const offerStyle = type === 'purchaseRight' ? '' : 'display:none';
+    const recipeStyle = type === 'recipe' ? '' : 'display:none';
+    const titleStyle = type === 'title' ? '' : 'display:none';
     return `<div class="rw-card">
         <div class="rw-card-main">
             <div class="rw-icon-wrap"><img src="${iconUrl}" class="rw-icon" style="${iconStyle}" alt="" onerror="this.style.display='none'" /></div>
             <div class="rw-fields">
                 <div class="rw-row">
-                    <input class="rw-tpl" value="${esc(r.tpl || '')}" placeholder="搜索物品名称或 tpl…" autocomplete="off" />
-                    <div class="rw-tpl-results" style="display:none"></div>
-                </div>
-                <div class="rw-row">
-                    <input class="rw-name" value="${esc(r.name || '')}" placeholder="展示名（可空）" style="flex:1" />
-                    <input class="rw-count" type="number" value="${r.count || 1}" min="1" style="width:58px" title="数量" />
                     <select class="rw-type" style="width:90px">
-                        <option value="item" ${(!r.type||r.type==='item')?'selected':''}>物品</option>
-                        <option value="purchaseRight" ${r.type==='purchaseRight'?'selected':''}>购买权</option>
-                        <option value="recipe" ${r.type==='recipe'?'selected':''}>配方</option>
-                        <option value="title" ${r.type==='title'?'selected':''}>称号</option>
+                        <option value="item" ${type==='item'?'selected':''}>物品</option>
+                        <option value="purchaseRight" ${type==='purchaseRight'?'selected':''}>购买权</option>
+                        <option value="recipe" ${type==='recipe'?'selected':''}>配方</option>
+                        <option value="title" ${type==='title'?'selected':''}>称号</option>
                     </select>
+                    <input class="rw-name" value="${esc(r.name || '')}" placeholder="展示名（可空）" style="flex:1" />
                     <label class="with-cb" style="white-space:nowrap"><input class="rw-featured" type="checkbox" ${r.featured?'checked':''} /> 大奖</label>
                     <button class="mini del rw-del" title="删除" onclick="this.closest('.rw-card').remove()">×</button>
                 </div>
+                <div class="rw-row rw-item-row" style="${itemStyle}">
+                    <input class="rw-tpl" value="${esc(r.tpl || '')}" placeholder="搜索物品名称或 tpl…" autocomplete="off" />
+                    <input class="rw-count" type="number" value="${r.count || 1}" min="1" style="width:58px" title="数量" />
+                    <label class="with-cb" style="white-space:nowrap" title="发放物品标记为战局内找到（SpawnedInSession）"><input class="rw-fir" type="checkbox" ${r.foundInRaid?'checked':''} /> FIR</label>
+                    <div class="rw-tpl-results" style="display:none"></div>
+                </div>
                 <div class="rw-extra" style="${extraStyle}">
-                    <div class="rw-row rw-offerid-row" style="${offerStyle}"><label style="font-size:10px">offerId</label><input class="rw-offerid" value="${esc(r.offerId||'')}" placeholder="货架项 id" /></div>
-                    <div class="rw-row rw-recipeid-row" style="${recipeStyle}"><label style="font-size:10px">recipeId</label><input class="rw-recipeid" value="${esc(r.recipeId||'')}" placeholder="配方 production id" /></div>
-                    <div class="rw-row rw-titleid-row" style="${titleStyle}"><label style="font-size:10px">titleId</label><input class="rw-titleid" value="${esc(r.titleId||'')}" placeholder="称号 id" /></div>
+                    <div class="rw-row rw-offerid-row" style="${offerStyle}">
+                        <label style="font-size:10px">购买权</label>
+                        <input class="rw-offerid" value="${esc(r.offerId||'')}" placeholder="聚焦列出 / 搜索货架项…" style="flex:1" autocomplete="off" />
+                        <div class="rw-offerid-results rw-tpl-results" style="display:none"></div>
+                    </div>
+                    <div class="rw-row rw-recipeid-row" style="${recipeStyle}">
+                        <label style="font-size:10px">配方</label>
+                        <input class="rw-recipeid" value="${esc(r.recipeId||'')}" placeholder="搜索配方产物名称或 id…" style="flex:1" autocomplete="off" />
+                        <div class="rw-recipeid-results rw-tpl-results" style="display:none"></div>
+                    </div>
+                    <div class="rw-row rw-titleid-row" style="${titleStyle}">
+                        <label style="font-size:10px">称号</label>
+                        <input class="rw-titleid" value="${esc(r.titleId||'')}" placeholder="聚焦列出 / 搜索称号…" style="flex:1" autocomplete="off" />
+                        <div class="rw-titleid-results rw-tpl-results" style="display:none"></div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>`;
+}
+
+// 奖励项引用选择器（购买权→货架项 / 配方→藏身处配方 / 称号；统一组件 BpPicker）。
+// 货架/称号数据量少：minChars=0 聚焦即列出全部；配方多：输 2 字后按产物名检索。
+// 选中后回填 id；物品类引用（货架商品/配方产物）顺带把卡片图标换成对应物品。
+function setupRwRefPicker(input, kind) {
+    const card = input.closest('.rw-card');
+    const results = input.parentElement.querySelector('.rw-tpl-results');
+    if (!results) return;
+    const icon = card.querySelector('.rw-icon');
+    const attach = { offer: BpPicker.attachOffer, recipe: BpPicker.attachRecipe, title: BpPicker.attachTitle }[kind];
+    const minChars = kind === 'recipe' ? 2 : 0;
+    attach(input, results, ds => {
+        input.value = ds.id;
+        card.classList.remove('rw-invalid');
+        if (ds.tpl && BpPicker.isTpl(ds.tpl)) {
+            icon.src = BpPicker.ICON_API + ds.tpl; icon.style.display = '';
+            icon.onerror = () => { icon.style.display = 'none'; };
+        }
+    }, { limit: 8, minChars });
+    // 配方下拉底部固定一条「＋ 新建自定义配方」直达配方管理页
+    if (kind === 'recipe') {
+        input.addEventListener('focus', () => {
+            setTimeout(() => {
+                if (results.querySelector('.sr-new-link')) return;
+                const a = document.createElement('a');
+                a.className = 'sr-new-link'; a.textContent = '＋ 新建自定义配方（配方管理页）'; a.href = 'recipes.html'; a.target = '_blank';
+                results.appendChild(a);
+            }, 350);
+        });
+    }
 }
 
 // 奖励项物品选择器（统一组件 BpPicker，见 picker.js；走统一查询接口）
@@ -381,13 +458,73 @@ async function loadCodes() {
 
 // ---- 玩家 ----
 el('refresh-players').onclick = loadPlayers;
+el('reset-selected-players').onclick = () => resetBattlePassProgress(false);
+el('reset-all-players').onclick = () => resetBattlePassProgress(true);
+let allPlayers = [];
+const selectedPlayerIdSet = new Set();
 async function loadPlayers() {
     const r = await api('/players');
     if (!r.success) return;
-    const rows = r.players.map(p =>
-        `<tr><td>${esc(p.username || '-')}</td><td>${p.level}</td><td>${p.xp}</td>
-         <td>${p.premiumUnlocked ? '✓' : '-'}</td><td>${p.seasonId}</td><td class="meta">${p.profileId.slice(0, 8)}</td></tr>`).join('');
-    el('player-rows').innerHTML = `<table class="grid"><tr><th>账号</th><th>等级</th><th>经验</th><th>付费</th><th>赛季</th><th>ID</th></tr>${rows}</table>`;
+    allPlayers = r.players || [];
+    const validIds = new Set(allPlayers.map(p => String(p.profileId || '')));
+    for (const id of selectedPlayerIdSet) if (!validIds.has(id)) selectedPlayerIdSet.delete(id);
+    renderPlayers();
+}
+
+function renderPlayers() {
+    const query = el('player-search').value.trim().toLowerCase();
+    const players = allPlayers.filter(p => !query || [p.username, p.nickname, p.profileId]
+        .some(value => String(value || '').toLowerCase().includes(query)));
+    const rows = players.map(p => {
+        const pid = String(p.profileId || '');
+        return `<tr><td><input class="player-check" type="checkbox" value="${esc(pid)}"${selectedPlayerIdSet.has(pid) ? ' checked' : ''} /></td>
+         <td>${esc(p.username || '-')}</td><td>${esc(p.nickname || '-')}</td><td>${p.level}</td><td>${p.xp}</td>
+         <td>${p.premiumUnlocked ? '✓' : '-'}</td><td>${esc(p.seasonId || '-')}</td><td class="meta">${esc(pid.slice(0, 8))}</td></tr>`;
+    }).join('');
+    el('player-rows').innerHTML = `<table class="grid"><tr><th><input id="player-check-all" type="checkbox" /></th><th>账号</th><th>角色昵称</th><th>等级</th><th>经验</th><th>付费</th><th>赛季</th><th>ID</th></tr>${rows || '<tr><td colspan="8" class="muted">没有匹配的玩家</td></tr>'}</table>`;
+    el('player-filter-hint').textContent = `显示 ${players.length} / ${allPlayers.length}`;
+    const all = el('player-check-all');
+    document.querySelectorAll('.player-check').forEach(cb => {
+        cb.onchange = () => cb.checked ? selectedPlayerIdSet.add(cb.value) : selectedPlayerIdSet.delete(cb.value);
+    });
+    if (all) {
+        const visible = Array.from(document.querySelectorAll('.player-check'));
+        all.checked = visible.length > 0 && visible.every(cb => cb.checked);
+        all.onchange = () => visible.forEach(cb => {
+            cb.checked = all.checked;
+            if (all.checked) selectedPlayerIdSet.add(cb.value); else selectedPlayerIdSet.delete(cb.value);
+        });
+    }
+}
+el('player-search').addEventListener('input', renderPlayers);
+
+function selectedPlayerIds() {
+    return Array.from(selectedPlayerIdSet).filter(Boolean);
+}
+
+async function resetBattlePassProgress(all) {
+    const preservePremium = el('bp-reset-preserve-premium').checked;
+    const ids = all ? [] : selectedPlayerIds();
+    if (!all && ids.length === 0) {
+        toast('请先勾选要重置的玩家', false);
+        return;
+    }
+
+    const scopeText = all ? '所有玩家' : `${ids.length} 名选中玩家`;
+    const premiumText = preservePremium ? '保留付费轨解锁' : '同时清除付费轨解锁';
+    if (!confirm(`确认重置${scopeText}的完整通行证进度？\n\n等级、经验、领取记录、循环进度、任务和补偿账本会回到当前赛季初始状态，并收回通行证商人购买权与配方；永久称号保留；${premiumText}。`)) {
+        return;
+    }
+
+    const r = await api('/players/reset-progress', 'POST', all
+        ? { all: true, preservePremium }
+        : { profileIds: ids, preservePremium });
+    toast(r.success ? (r.message || '已重置') : (r.message || '重置失败'), r.success);
+    if (r.success) {
+        selectedPlayerIdSet.clear();
+        await loadPlayers();
+        el('player-action-hint').textContent = `上次操作：${r.message || '已重置'}`;
+    }
 }
 
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }

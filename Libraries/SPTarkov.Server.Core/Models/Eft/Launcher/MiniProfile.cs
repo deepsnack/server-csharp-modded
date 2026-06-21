@@ -34,6 +34,9 @@ public record MiniProfile
     [JsonPropertyName("profileId")]
     public string? ProfileId { get; set; }
 
+    [JsonPropertyName("wipe")]
+    public bool? Wipe { get; set; }
+
     [JsonPropertyName("invalidOrUnloadableProfile")]
     public bool? InvalidOrUnloadableProfile { get; set; }
 

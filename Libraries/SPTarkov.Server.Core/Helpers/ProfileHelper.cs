@@ -58,6 +58,16 @@ public class ProfileHelper(
     }
 
     /// <summary>
+    ///     懒加载时只返回已加载档快照，否则返回全部档（供市场扫描等批处理用，避免强制物化离线档）。
+    ///     封装于此而非各控制器直接依赖 SaveServer，以保持控制器构造签名与上游一致（兼容继承覆盖型模组）。
+    /// </summary>
+    /// <returns>Dictionary of profiles to process</returns>
+    public Dictionary<MongoId, SptProfile> GetActiveProfilesSnapshot()
+    {
+        return saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+    }
+
+    /// <summary>
     ///     Get the pmc and scav profiles as an array by profile id
     /// </summary>
     /// <param name="sessionId">Session/Player id</param>

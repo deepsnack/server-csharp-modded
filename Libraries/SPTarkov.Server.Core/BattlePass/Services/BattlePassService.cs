@@ -1,10 +1,12 @@
 using SPTarkov.DI.Annotations;
+using System.Collections.Concurrent;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass;
 
@@ -16,10 +18,13 @@ public class BattlePassService(
     SaveServer saveServer,
     BattlePassRewardService rewardService,
     ProfileHelper profileHelper,
+    PasswordStoreService passwordStoreService,
     ISptLogger<BattlePassService> logger
 )
 {
-    /// <summary>用用户名+密码校验，成功返回 profileId，失败返回 null。复用存档 Info.Password（A1 树内统一存储，SHA256）。</summary>
+    private readonly ConcurrentDictionary<string, object> compensationLocks = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>用用户名+密码校验，成功返回 profileId，失败返回 null。</summary>
     public string? VerifyLogin(string? username, string? password)
     {
         if (string.IsNullOrWhiteSpace(username))
@@ -33,24 +38,13 @@ public class BattlePassService(
             return null;
         }
 
-        var stored = saveServer.GetProfiles().TryGetValue(new MongoId(profileId), out var authProfile)
-            ? authProfile.ProfileInfo?.Password
-            : null;
-
-        // 老存档可能尚未设密码：无密码记录则拒绝网页登录（网页登录要求已设密码）。
-        if (string.IsNullOrEmpty(stored))
+        var sessionId = new MongoId(profileId);
+        if (passwordStoreService.GetHash(sessionId) is null)
         {
             return null;
         }
 
-        return stored == EncryptPassword(password ?? string.Empty) ? profileId : null;
-    }
-
-    /// <summary>SHA256 → 大写无分隔十六进制，与 LauncherController.EncryptPassword 同源算法。</summary>
-    private static string EncryptPassword(string password)
-    {
-        using var sha256 = System.Security.Cryptography.SHA256.Create();
-        return Convert.ToHexString(sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(password)));
+        return passwordStoreService.Verify(sessionId, password) ? profileId : null;
     }
 
     /// <summary>按用户名（忽略大小写）在已加载档案中查 profileId。</summary>
@@ -70,15 +64,91 @@ public class BattlePassService(
 
     public string? GetUsername(string profileId)
     {
-        foreach (var (id, profile) in saveServer.GetProfiles())
+        if (!MongoId.IsValidMongoId(profileId))
         {
-            if (id.ToString() == profileId)
-            {
-                return profile.ProfileInfo?.Username;
-            }
+            return null;
+        }
+
+        var sessionId = new MongoId(profileId);
+        if (saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
+        {
+            return profile.ProfileInfo?.Username;
+        }
+
+        if (saveServer.LazyEnabled && saveServer.GetLazyHeaders().TryGetValue(sessionId, out var header))
+        {
+            return header.ProfileInfo.Username;
         }
 
         return null;
+    }
+
+    public string? GetNickname(string profileId)
+    {
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return null;
+        }
+
+        var sessionId = new MongoId(profileId);
+        return saveServer.GetProfiles().TryGetValue(sessionId, out var profile)
+            ? profile.CharacterData?.PmcData?.Info?.Nickname
+            : null;
+    }
+
+    /// <summary>Fika headless 自动档案不属于通行证管理范围。</summary>
+    public bool IsHeadlessProfile(string profileId)
+    {
+        return IsHeadlessUsername(GetUsername(profileId));
+    }
+
+    internal static bool IsHeadlessUsername(string? username) =>
+        username?.StartsWith("headless_", StringComparison.OrdinalIgnoreCase) == true;
+
+    public List<string> ListProfileIds()
+    {
+        var ids = saveServer.GetProfiles().Keys.Select(id => id.ToString());
+        if (saveServer.LazyEnabled)
+        {
+            ids = ids.Concat(saveServer.GetLazyHeaders().Keys.Select(id => id.ToString()));
+        }
+
+        return ids.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    ///     按昵称（PMC 主昵称，忽略大小写）批量解析当前佩戴的称号——主菜单在线玩家列表用。
+    ///     只遍历一次已加载档案；无对应档案/未佩戴的昵称对应值为 null。
+    /// </summary>
+    public Dictionary<string, BpTitleView?> GetEquippedTitlesByNickname(IEnumerable<string> nicknames)
+    {
+        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var n in nicknames)
+        {
+            if (!string.IsNullOrWhiteSpace(n))
+            {
+                wanted.Add(n.Trim());
+            }
+        }
+
+        var result = new Dictionary<string, BpTitleView?>(StringComparer.OrdinalIgnoreCase);
+        if (wanted.Count == 0)
+        {
+            return result;
+        }
+
+        foreach (var (id, profile) in saveServer.GetProfiles())
+        {
+            var nick = profile.CharacterData?.PmcData?.Info?.Nickname;
+            if (string.IsNullOrEmpty(nick) || !wanted.Contains(nick) || result.ContainsKey(nick))
+            {
+                continue;
+            }
+
+            result[nick] = BattlePassTitleApi.GetEquippedTitle(id.ToString());
+        }
+
+        return result;
     }
 
     /// <summary>确保进度对应当前赛季；跨赛季则重置（保留壳，归档留待后续增强）。</summary>
@@ -87,11 +157,67 @@ public class BattlePassService(
         var prog = BattlePassStore.GetProgress(profileId);
         if (prog.SeasonId != season.SeasonId)
         {
-            prog = new BpProgress { SeasonId = season.SeasonId };
+            prog = new BpProgress { SeasonId = season.SeasonId, RewardLedgerInitialized = true };
+            BattlePassStore.SaveProgress(profileId, prog);
+        }
+        else if (!prog.RewardLedgerInitialized)
+        {
+            BattlePassRewardLedger.InitializeBaseline(prog, BattlePassStore.GetTracks());
+            BattlePassStore.SaveProgress(profileId, prog);
+        }
+
+        if (BattlePassPurchaseRights.Migrate(prog, BattlePassStore.GetTracks()))
+        {
             BattlePassStore.SaveProgress(profileId, prog);
         }
 
         return prog;
+    }
+
+    /// <summary>启动时迁移现有当前赛季进度，建立补偿基线并恢复旧版购买权。</summary>
+    public void InitializeExistingRewardLedgers()
+    {
+        var season = BattlePassStore.GetSeason();
+        var tracks = BattlePassStore.GetTracks();
+        var initialized = 0;
+        var migratedRights = 0;
+
+        foreach (var profileId in BattlePassStore.ListProgressProfileIds())
+        {
+            var progress = BattlePassStore.GetProgress(profileId);
+            if (progress.SeasonId != season.SeasonId)
+            {
+                continue;
+            }
+
+            var changed = false;
+            if (!progress.RewardLedgerInitialized)
+            {
+                BattlePassRewardLedger.InitializeBaseline(progress, tracks);
+                initialized++;
+                changed = true;
+            }
+
+            if (BattlePassPurchaseRights.Migrate(progress, tracks))
+            {
+                migratedRights++;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                BattlePassStore.SaveProgress(profileId, progress);
+            }
+        }
+
+        if (initialized > 0)
+        {
+            logger.Info($"[SPT-BattlePass] 已为 {initialized} 份现有进度建立奖励补偿基线");
+        }
+        if (migratedRights > 0)
+        {
+            logger.Info($"[SPT-BattlePass] 已为 {migratedRights} 份现有进度迁移持久化商人购买权");
+        }
     }
 
     /// <summary>累加 BP 经验并按曲线进位等级（不超过 MaxLevel）。返回是否有等级变化。</summary>
@@ -184,6 +310,7 @@ public class BattlePassService(
         var rewards = isPremium ? levelRewards.Premium : levelRewards.Free;
         if (rewards.Count == 0)
         {
+            BattlePassRewardLedger.RecordTrack(prog, level, isPremium, rewards);
             claimedSet.Add(level); // 无奖励也标记，避免反复点击
             BattlePassStore.SaveProgress(profileId, prog);
             return (true, "该等级该轨无奖励");
@@ -191,13 +318,184 @@ public class BattlePassService(
 
         var message = GrantRewardList(
             profileId,
+            prog,
             rewards,
             $"【通行证】赛季「{season.Name}」{(isPremium ? "付费" : "免费")}轨 {level} 级奖励，请查收。"
         );
 
+        BattlePassRewardLedger.RecordTrack(prog, level, isPremium, rewards);
         claimedSet.Add(level);
         BattlePassStore.SaveProgress(profileId, prog);
         return (true, message);
+    }
+
+    /// <summary>返回所有已领取普通等级轨中，管理员后续追加且尚未补发的奖励项数量。</summary>
+    public int GetPendingCompensationCount(BpProgress progress)
+    {
+        return BattlePassRewardLedger.GetPending(progress, BattlePassStore.GetTracks()).Count;
+    }
+
+    /// <summary>一次性补发所有已领取普通等级轨里的新增奖励；循环奖励不参与补偿。</summary>
+    public (bool ok, string message, int granted) ClaimCompensation(string profileId, BpSeason season)
+    {
+        var claimLock = compensationLocks.GetOrAdd(profileId, _ => new object());
+        lock (claimLock)
+        {
+            var progress = GetOrResetProgress(profileId, season);
+            var pending = BattlePassRewardLedger.GetPending(progress, BattlePassStore.GetTracks());
+            if (pending.Count == 0)
+            {
+                return (false, "当前没有可领取的新增补偿", 0);
+            }
+
+            var message = GrantRewardList(
+                profileId,
+                progress,
+                pending.Select(x => x.Reward).ToList(),
+                $"【通行证】赛季「{season.Name}」奖励轨新增补偿，请查收。"
+            );
+
+            BattlePassRewardLedger.RecordPending(progress, pending);
+            BattlePassStore.SaveProgress(profileId, progress);
+            return (true, $"已补领 {pending.Count} 项新增奖励。{message}", pending.Count);
+        }
+    }
+
+    /// <summary>
+    ///     收回玩家全部通行证商人购买权，并清理旧版遗留的虚拟任务状态。
+    /// </summary>
+    public int RevokePurchaseRights(string profileId, BpProgress progress)
+    {
+        BattlePassPurchaseRights.Migrate(progress, BattlePassStore.GetTracks());
+        var offerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        offerIds.UnionWith(progress.PurchaseRights);
+        foreach (var offer in BattlePassStore.GetOffers())
+        {
+            if (!string.IsNullOrWhiteSpace(offer.Id))
+            {
+                offerIds.Add(offer.Id.Trim());
+            }
+        }
+
+        foreach (var levelRewards in BattlePassStore.GetTracks().Values)
+        {
+            foreach (var reward in levelRewards.Free.Concat(levelRewards.Premium))
+            {
+                if (string.Equals(reward.Type, "purchaseRight", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(reward.OfferId))
+                {
+                    offerIds.Add(reward.OfferId.Trim());
+                }
+            }
+        }
+
+        const string ledgerPrefix = "purchaseright:";
+        foreach (var rewardKey in (progress.GrantedTrackRewards ?? new Dictionary<string, HashSet<string>>()).Values.SelectMany(x => x ?? []))
+        {
+            if (rewardKey.StartsWith(ledgerPrefix, StringComparison.OrdinalIgnoreCase) && rewardKey.Length > ledgerPrefix.Length)
+            {
+                offerIds.Add(rewardKey[ledgerPrefix.Length..]);
+            }
+        }
+
+        var revoked = BattlePassPurchaseRights.RevokeAll(progress);
+        BattlePassStore.SaveProgress(profileId, progress);
+
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return revoked;
+        }
+
+        var unlockQuestIds = offerIds.Select(BattlePassTraderSync.UnlockQuestId).ToHashSet();
+        try
+        {
+            var pmc = profileHelper.GetPmcProfile(new MongoId(profileId));
+            if (pmc?.Quests is null || unlockQuestIds.Count == 0)
+            {
+                return revoked;
+            }
+
+            var removedLegacyQuests = pmc.Quests.RemoveAll(q => unlockQuestIds.Contains(q.QId));
+            if (removedLegacyQuests > 0)
+            {
+                PersistProfile(profileId);
+            }
+
+            return revoked;
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[SPT-BattlePass] 无法加载档案，购买权未收回 profile={profileId}: {ex.Message}");
+            return revoked;
+        }
+    }
+
+    /// <summary>收回玩家全部可追溯的通行证配方解锁并持久化档案。</summary>
+    public int RevokeRecipes(string profileId, BpProgress progress)
+    {
+        if (!MongoId.IsValidMongoId(profileId))
+        {
+            return 0;
+        }
+
+        var recipeIds = BattlePassStore
+            .GetCustomRecipes()
+            .Select(x => x.Id)
+            .Where(MongoId.IsValidMongoId)
+            .Select(x => new MongoId(x))
+            .ToHashSet();
+
+        foreach (var levelRewards in BattlePassStore.GetTracks().Values)
+        {
+            foreach (var reward in levelRewards.Free.Concat(levelRewards.Premium))
+            {
+                if (string.Equals(reward.Type, "recipe", StringComparison.OrdinalIgnoreCase)
+                    && MongoId.IsValidMongoId(reward.RecipeId))
+                {
+                    recipeIds.Add(new MongoId(reward.RecipeId!));
+                }
+            }
+        }
+
+        const string ledgerPrefix = "recipe:";
+        foreach (var rewardKey in (progress.GrantedTrackRewards ?? new Dictionary<string, HashSet<string>>()).Values.SelectMany(x => x ?? []))
+        {
+            if (rewardKey.StartsWith(ledgerPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var recipeId = rewardKey[ledgerPrefix.Length..];
+                if (MongoId.IsValidMongoId(recipeId))
+                {
+                    recipeIds.Add(new MongoId(recipeId));
+                }
+            }
+        }
+
+        HashSet<MongoId>? unlocked;
+        try
+        {
+            unlocked = profileHelper
+                .GetPmcProfile(new MongoId(profileId))
+                ?.UnlockedInfo
+                ?.UnlockedProductionRecipe;
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[SPT-BattlePass] 无法加载档案，配方未收回 profile={profileId}: {ex.Message}");
+            return 0;
+        }
+
+        if (unlocked is null || recipeIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var revoked = unlocked.RemoveWhere(recipeIds.Contains);
+        if (revoked > 0)
+        {
+            PersistProfile(profileId);
+        }
+
+        return revoked;
     }
 
     /// <summary>
@@ -240,6 +538,7 @@ public class BattlePassService(
 
         var message = GrantRewardList(
             profileId,
+            prog,
             rewards,
             $"【通行证】赛季「{season.Name}」{(isPremium ? "付费" : "免费")}轨 循环奖励第 {cycle} 轮，请查收。"
         );
@@ -253,12 +552,13 @@ public class BattlePassService(
     ///     发放一组奖励（按类型分流：item 邮寄；purchaseRight 解锁商人货架；recipe 解锁配方；title 解锁称号），
     ///     必要时持久化游戏档案。返回展示消息。等级奖励与循环奖励共用。
     /// </summary>
-    private string GrantRewardList(string profileId, List<BpReward> rewards, string mailMessage)
+    private string GrantRewardList(string profileId, BpProgress progress, List<BpReward> rewards, string mailMessage)
     {
         var itemRewards = new List<BpReward>();
         var unlockedOffers = 0;
         var unlockedRecipes = 0;
         var unlockedTitles = 0;
+        var skippedOwnedEntitlements = 0;
         var profileTouched = false;
 
         foreach (var r in rewards)
@@ -266,24 +566,47 @@ public class BattlePassService(
             switch ((r.Type ?? "item").Trim().ToLowerInvariant())
             {
                 case "purchaseright":
-                    if (!string.IsNullOrWhiteSpace(r.OfferId) && UnlockPurchaseRight(profileId, r.OfferId!))
+                    if (!string.IsNullOrWhiteSpace(r.OfferId))
                     {
-                        unlockedOffers++;
-                        profileTouched = true;
+                        var offerId = r.OfferId.Trim();
+                        if (BattlePassPurchaseRights.Has(progress, offerId))
+                        {
+                            skippedOwnedEntitlements++;
+                        }
+                        else if (BattlePassPurchaseRights.Grant(progress, offerId))
+                        {
+                            unlockedOffers++;
+                        }
                     }
                     break;
                 case "recipe":
-                    if (!string.IsNullOrWhiteSpace(r.RecipeId) && UnlockRecipe(profileId, r.RecipeId!))
+                    if (!string.IsNullOrWhiteSpace(r.RecipeId))
                     {
-                        unlockedRecipes++;
-                        profileTouched = true;
+                        var recipeId = r.RecipeId.Trim();
+                        if (HasRecipe(profileId, recipeId))
+                        {
+                            skippedOwnedEntitlements++;
+                        }
+                        else if (UnlockRecipe(profileId, recipeId))
+                        {
+                            unlockedRecipes++;
+                            profileTouched = true;
+                        }
                     }
                     break;
                 case "title":
                     // 称号存自有文件（titles/{profileId}.json），不动 EFT 档案，无需 PersistProfile
-                    if (!string.IsNullOrWhiteSpace(r.TitleId) && BattlePassStore.GrantTitle(profileId, r.TitleId!))
+                    if (!string.IsNullOrWhiteSpace(r.TitleId))
                     {
-                        unlockedTitles++;
+                        var titleId = r.TitleId.Trim();
+                        if (BattlePassStore.GetPlayerTitles(profileId).Owned.Contains(titleId))
+                        {
+                            skippedOwnedEntitlements++;
+                        }
+                        else if (BattlePassStore.GrantTitle(profileId, titleId))
+                        {
+                            unlockedTitles++;
+                        }
                     }
                     break;
                 default:
@@ -319,51 +642,12 @@ public class BattlePassService(
         {
             parts.Add($"已解锁 {unlockedTitles} 个称号");
         }
+        if (skippedOwnedEntitlements > 0)
+        {
+            parts.Add($"已跳过 {skippedOwnedEntitlements} 项已拥有权益");
+        }
 
         return parts.Count > 0 ? "领取成功：" + string.Join("；", parts) : "领取成功";
-    }
-
-    /// <summary>
-    ///     解锁某货架 offer 的购买权限：在玩家档案把对应「解锁 quest」置 Success，
-    ///     原生 questassort 据此对该玩家放出此商品。幂等（已解锁返回 false）。
-    /// </summary>
-    private bool UnlockPurchaseRight(string profileId, string offerId)
-    {
-        var pmc = profileHelper.GetPmcProfile(new MongoId(profileId));
-        if (pmc is null)
-        {
-            return false;
-        }
-
-        var questId = BattlePassTraderSync.UnlockQuestId(offerId);
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        pmc.Quests ??= new List<QuestStatus>();
-
-        var existing = pmc.Quests.FirstOrDefault(q => q.QId == questId);
-        if (existing is null)
-        {
-            pmc.Quests.Add(
-                new QuestStatus
-                {
-                    QId = questId,
-                    StartTime = now,
-                    Status = QuestStatusEnum.Success,
-                    StatusTimers = new Dictionary<QuestStatusEnum, double> { [QuestStatusEnum.Success] = now },
-                    CompletedConditions = new List<string>(),
-                }
-            );
-            return true;
-        }
-
-        if (existing.Status == QuestStatusEnum.Success)
-        {
-            return false; // 已解锁
-        }
-
-        existing.Status = QuestStatusEnum.Success;
-        existing.StatusTimers ??= new Dictionary<QuestStatusEnum, double>();
-        existing.StatusTimers[QuestStatusEnum.Success] = now;
-        return true;
     }
 
     /// <summary>解锁某藏身处制造配方（直接写玩家档案 UnlockedProductionRecipe，不经商人）。</summary>
@@ -390,7 +674,18 @@ public class BattlePassService(
         return pmc.UnlockedInfo.UnlockedProductionRecipe.Add(rid);
     }
 
-    /// <summary>持久化游戏档案（领取购买权限/配方修改了 PMC 档案，需落盘以跨重启保留）。</summary>
+    private bool HasRecipe(string profileId, string recipeId)
+    {
+        if (!MongoId.IsValidMongoId(recipeId))
+        {
+            return false;
+        }
+
+        var pmc = profileHelper.GetPmcProfile(new MongoId(profileId));
+        return pmc?.UnlockedInfo?.UnlockedProductionRecipe?.Contains(new MongoId(recipeId)) == true;
+    }
+
+    /// <summary>持久化游戏档案（配方修改了 PMC 档案，需落盘以跨重启保留）。</summary>
     private void PersistProfile(string profileId)
     {
         try

@@ -82,12 +82,89 @@ async function loadState() {
     if (r.progress.premiumUnlocked) { pf.textContent = '付费轨 PREMIUM'; pf.classList.add('on'); }
     else { pf.textContent = '免费轨 FREE'; pf.classList.remove('on'); }
 
+    updateCompensation(r.compensation);
     renderRail(r.levels, r.progress.premiumUnlocked);
     renderCycle(r.cycle, r.progress, r.season);
 }
 
+function updateCompensation(compensation) {
+    const count = Math.max(0, Number((compensation && compensation.pendingCount) || 0));
+    const panel = el('compensation-panel');
+    const btn = el('compensation-btn');
+    panel.classList.toggle('ready', count > 0);
+    btn.classList.toggle('ready', count > 0);
+    btn.disabled = count <= 0;
+    btn.textContent = count > 0 ? `领取全部补偿（${count}）` : '暂无可领取补偿';
+    el('compensation-status').textContent = count > 0
+        ? `检测到 ${count} 项已领取奖励轨的新增奖励，点击一次统一领取`
+        : '当前没有新增奖励';
+}
+
+async function claimCompensation() {
+    const btn = el('compensation-btn');
+    btn.disabled = true;
+    const r = await api('/claim-compensation', 'POST');
+    toast(r.message || (r.success ? '补偿领取成功' : '补偿领取失败'), r.success);
+    await loadState();
+}
+
 // ---- 满级循环奖励 ----
 let cycleState = null; // 缓存当前循环奖励，供「一键领取」用
+
+// 奖励类型可读名（非物品奖励无 tpl 时的展示兜底）
+function rewardTypeLabel(r) {
+    switch ((r.type || 'item').toLowerCase()) {
+        case 'purchaseright': return '商人购买权';
+        case 'recipe': return '藏身处配方';
+        case 'title': return '称号';
+        default: return '奖励';
+    }
+}
+
+// ---- 多奖励展开浮层（全局单例；展开仅展示，领取仍是整格一键领）----
+function ensureRewardOverlay() {
+    let ov = el('rw-overlay');
+    if (ov) return ov;
+    ov = document.createElement('div');
+    ov.id = 'rw-overlay'; ov.className = 'rw-overlay hidden';
+    ov.innerHTML = '<div class="rw-overlay-box"><div class="rw-overlay-head"><span id="rw-overlay-title">本级全部奖励</span><button id="rw-overlay-close">×</button></div><div id="rw-overlay-list"></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) ov.classList.add('hidden'); });
+    ov.querySelector('#rw-overlay-close').onclick = () => ov.classList.add('hidden');
+    return ov;
+}
+
+function showRewardOverlay(rewards, title) {
+    const ov = ensureRewardOverlay();
+    ov.querySelector('#rw-overlay-title').textContent = title || '本级全部奖励';
+    const list = ov.querySelector('#rw-overlay-list');
+    list.innerHTML = '';
+    rewards.forEach(r => {
+        const row = document.createElement('div');
+        row.className = 'rw-overlay-row';
+        const hasTpl = r.tpl && /^[a-fA-F0-9]{24}$/.test(r.tpl);
+        const rtype = (r.type || 'item').toLowerCase();
+        row.innerHTML = `
+            ${hasTpl ? `<img class="rw-icon" src="${API}/icons/${r.tpl}" alt="" onerror="this.remove()" />` : '<span class="rw-icon rw-icon-ph"></span>'}
+            <span class="rw-ov-name">${(r.name || (hasTpl ? r.tpl.slice(0, 8) + '…' : rewardTypeLabel(r)))}</span>
+            ${rtype === 'item' ? `<span class="rw-ov-count">×${r.count || 1}</span>` : `<span class="rw-ov-badge">${rewardTypeLabel(r)}</span>`}
+            ${r.foundInRaid ? '<span class="rw-ov-badge">FIR</span>' : ''}
+            ${r.featured ? '<span class="rw-ov-badge featured">大奖</span>' : ''}`;
+        list.appendChild(row);
+    });
+    ov.classList.remove('hidden');
+}
+
+// 多奖励格：右上角可点角标 +N，点击弹浮层展示全部
+function attachExpandBadge(cell, rewards, title) {
+    if (!rewards || rewards.length <= 1) return;
+    const b = document.createElement('button');
+    b.className = 'rw-expand';
+    b.textContent = '+' + (rewards.length - 1);
+    b.title = '查看本格全部 ' + rewards.length + ' 项奖励';
+    b.onclick = e => { e.stopPropagation(); showRewardOverlay(rewards, title); };
+    cell.appendChild(b);
+}
 
 function cycleCellContent(rewards) {
     const cell = document.createElement('div');
@@ -103,10 +180,11 @@ function cycleCellContent(rewards) {
         cell.appendChild(icon);
     }
     const name = document.createElement('div'); name.className = 'rw-name';
-    name.textContent = main.name || (main.tpl ? main.tpl.slice(0, 8) : '奖励');
+    name.textContent = main.name || (main.tpl ? main.tpl.slice(0, 8) : rewardTypeLabel(main));
     const cnt = document.createElement('div'); cnt.className = 'rw-count';
-    cnt.textContent = '×' + main.count + (rewards.length > 1 ? ' +' + (rewards.length - 1) : '');
+    cnt.textContent = '×' + main.count;
     cell.appendChild(name); cell.appendChild(cnt);
+    attachExpandBadge(cell, rewards, '循环奖励 · 全部');
     return cell;
 }
 
@@ -200,10 +278,13 @@ function rewardCell(rewards, type, level, reached, claimed, premiumUnlocked) {
         icon.onerror = () => icon.remove();
         cell.appendChild(icon);
     }
-    const name = document.createElement('div'); name.className = 'rw-name'; name.textContent = main.name || main.tpl.slice(0, 8);
+    // 非物品奖励可能无 tpl：名称兜底到类型可读名，避免空引用
+    const name = document.createElement('div'); name.className = 'rw-name';
+    name.textContent = main.name || (main.tpl ? main.tpl.slice(0, 8) : rewardTypeLabel(main));
     const cnt = document.createElement('div'); cnt.className = 'rw-count';
-    cnt.textContent = '×' + main.count + (rewards.length > 1 ? ' +' + (rewards.length - 1) : '');
+    cnt.textContent = '×' + main.count;
     cell.appendChild(name); cell.appendChild(cnt);
+    attachExpandBadge(cell, rewards, 'Lv' + level + ' · ' + (type === 'free' ? '免费' : '付费') + '轨全部奖励');
 
     // 奖励类型角标：区分「商人购买权」「藏身处配方」与普通直发物品
     const rtype = (main.type || 'item').toLowerCase();
@@ -218,6 +299,8 @@ function rewardCell(rewards, type, level, reached, claimed, premiumUnlocked) {
     if (!reached) { cell.classList.add('locked'); return cell; }
     if (type === 'premium' && !premiumUnlocked) { cell.classList.add('locktrack', 'locked'); return cell; }
 
+    // 已解锁且可领取：强高亮 + 发光，突出「通行证可用」状态
+    cell.classList.add('claimable');
     const btn = document.createElement('button'); btn.className = 'claim'; btn.textContent = '领取';
     btn.onclick = () => claim(level, type);
     cell.appendChild(btn);
@@ -245,34 +328,90 @@ async function claim(level, track) {
 }
 
 // ---- 任务 ----
+let taskDisplayCount = 4;
 async function loadTasks() {
-    const r = await api('/tasks');
-    if (!r.success) return;
-
-    el('rerolls').textContent = '免费刷新 ' + r.freeRerollsLeft;
-    const refreshBtn = el('refresh-daily');
-    refreshBtn.disabled = r.freeRerollsLeft <= 0;
     const list = el('task-list');
+    list.innerHTML = '<div class="task-empty">任务加载中...</div>';
+
+    const r = await api('/tasks');
+    if (!r || !r.success) {
+        updateRefreshButtons([], {});
+        list.innerHTML = `<div class="task-empty">${esc((r && r.message) || '任务加载失败')}</div>`;
+        if (r && r.message && r.message.indexOf('未登录') >= 0) { logout(); }
+        return;
+    }
+
+    const tasks = Array.isArray(r.tasks) ? r.tasks : [];
+    const refreshLeft = r.refreshLeft || {};
+    taskDisplayCount = Number(r.displayCount) > 0 ? Number(r.displayCount) : 4;
+    updateRefreshButtons(tasks, refreshLeft);
     list.innerHTML = '';
 
-    r.tasks.forEach(t => {
+    tasks.forEach(t => {
+        const taskId = t.taskId || t.TaskId || '';
+        const scope = String(t.scope || t.Scope || '').toLowerCase();
+        const rotation = String(t.rotation || t.Rotation || '').toLowerCase();
+        const conditionType = String(t.conditionType || t.ConditionType || '').toLowerCase();
+        const completed = !!(t.completed ?? t.done);
+        const progress = Math.max(0, Number(t.progress || 0));
+        const target = Math.max(0, Number(t.target || t.count || 0));
+        const xp = Math.max(0, Number(t.xp || 0));
+        const pct = target > 0 ? Math.min(100, (progress / target) * 100) : (completed ? 100 : 0);
+        const dailyLeft = Math.max(0, Number(refreshLeft.daily ?? r.freeRerollsLeft ?? 0));
+        const canReroll = !!taskId && !completed && rotation !== 'fixed' && scope === 'daily' && dailyLeft > 0;
         const div = document.createElement('div');
-        div.className = 'task' + (t.completed ? ' done' : '');
-        const pct = t.target > 0 ? Math.min(100, (t.progress / t.target) * 100) : (t.completed ? 100 : 0);
-        const canReroll = !t.completed && t.rotation !== 'fixed' && t.scope === 'daily' && r.freeRerollsLeft > 0;
+        div.className = 'task' + (completed ? ' done' : '');
         div.innerHTML =
-            `<div class="t-head"><span class="t-title">${esc(t.title)}</span><span class="t-scope">${t.scope}</span></div>
+            `<div class="t-head"><span class="t-title">${esc(t.title || taskId || '未命名任务')}</span><span class="t-scope">${esc(scope || 'task')}</span></div>
              <div class="t-desc">${esc(t.description)}</div>
              <div class="t-prog"><div class="pf" style="width:${pct}%"></div></div>
-             <div class="t-foot"><span class="t-xp">+${t.xp} XP · ${t.progress}/${t.target}</span></div>`;
+             <div class="t-foot"><span class="t-xp">+${xp} XP · ${progress}/${target}</span></div>`;
         if (canReroll) {
             const rb = document.createElement('button'); rb.className = 't-reroll'; rb.textContent = '刷新';
-            rb.onclick = () => reroll(t.taskId);
+            rb.onclick = () => reroll(taskId);
             div.querySelector('.t-foot').appendChild(rb);
+        }
+        // 上交物品任务：网页内上交入口（读取存档匹配物品 → 移除 → 计进度）
+        if (conditionType === 'handoveritem' && !completed && taskId) {
+            const hb = document.createElement('button'); hb.className = 't-handover'; hb.textContent = '上交物品';
+            const panel = document.createElement('div'); panel.className = 't-handover-panel'; panel.style.display = 'none';
+            hb.onclick = () => toggleHandover(taskId, panel);
+            div.querySelector('.t-foot').appendChild(hb);
+            div.appendChild(panel);
         }
         list.appendChild(div);
     });
-    if (r.tasks.length === 0) list.innerHTML = '<div class="t-desc">暂无任务</div>';
+    if (tasks.length === 0) list.innerHTML = '<div class="task-empty">暂无任务</div>';
+    applyTaskDisplayLimit();
+}
+
+// 三类任务各自的「主动刷新」按钮：仅当该类有活跃任务时显示，剩余次数为 0 时禁用
+function updateRefreshButtons(tasks, left) {
+    [['daily', 'refresh-daily', '刷新每日'], ['weekly', 'refresh-weekly', '刷新每周'], ['season', 'refresh-season', '刷新赛季']]
+        .forEach(([scope, id, label]) => {
+            const btn = el(id);
+            if (!btn) return;
+            const hasScope = (tasks || []).some(t => String(t.scope || t.Scope || '').toLowerCase() === scope);
+            const n = Math.max(0, Number((left || {})[scope] ?? 0));
+            btn.style.display = hasScope ? '' : 'none';
+            btn.disabled = n <= 0;
+            btn.textContent = `${label}（剩${n}）`;
+        });
+}
+
+// 主页任务区只显示 displayCount 张卡，其余靠滚轮/滑块查看
+function applyTaskDisplayLimit() {
+    const list = el('task-list');
+    requestAnimationFrame(() => {
+        list.style.maxHeight = '';
+        const cards = list.querySelectorAll('.task');
+        if (taskDisplayCount > 0 && cards.length > taskDisplayCount) {
+            const h = cards[taskDisplayCount].offsetTop - cards[0].offsetTop;
+            list.style.maxHeight = h > 0 ? `min(${h}px, 62vh)` : '';
+        } else {
+            list.style.maxHeight = '';
+        }
+    });
 }
 
 async function reroll(taskId) {
@@ -281,9 +420,45 @@ async function reroll(taskId) {
     if (r.success) loadTasks();
 }
 
-async function refreshDailyTasks() {
-    const r = await api('/tasks/refresh', 'POST', { scope: 'daily' });
-    toast(r.success ? '每日任务已刷新' : (r.message || '刷新失败'), r.success);
+// ---- 上交物品（网页入口）----
+async function toggleHandover(taskId, panel) {
+    if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    panel.innerHTML = '<div class="t-desc">加载中…</div>';
+    const r = await api('/handover/' + encodeURIComponent(taskId));
+    if (!r.success) { panel.innerHTML = `<div class="t-desc">${esc(r.message || '加载失败')}</div>`; return; }
+    const info = r.info || {};
+    const items = info.items || [];
+    const rows = items.length ? items.map(it => `
+        <div class="ho-row">
+            <img class="rw-icon" src="${API}/icons/${it.tpl}" alt="" onerror="this.remove()" />
+            <span class="ho-name">${esc(it.name || it.tpl)}</span>
+            <span class="ho-id">${esc(it.tpl)}</span>
+            <span class="ho-have">存档可交 ${it.available}</span>
+        </div>`).join('') : '<div class="t-desc">存档中没有匹配的可上交物品</div>';
+    const totalAvail = items.reduce((s, it) => s + (it.available || 0), 0);
+    const canGo = totalAvail > 0 && info.remaining > 0;
+    panel.innerHTML = `
+        <div class="ho-head">还需上交 ${info.remaining}${info.findInRaid ? ' · 仅限战局中找到(FiR)' : ''}</div>
+        ${rows}
+        <button class="t-handover-go"${canGo ? '' : ' disabled'}>确认上交（本次最多 ${Math.max(0, Math.min(totalAvail, info.remaining))}）</button>`;
+    const go = panel.querySelector('.t-handover-go');
+    if (go && canGo) go.addEventListener('click', () => doHandover(taskId));
+}
+
+async function doHandover(taskId) {
+    const r = await api('/handover', 'POST', { taskId });
+    if (!r.success) { toast(r.message || '上交失败', false); return; }
+    const res = r.result || {};
+    toast(res.completed ? `上交完成！+${res.gainedXp} XP` : `已上交 ${res.handed}，进度 ${res.progress}/${res.target}`, true);
+    loadState();
+    loadTasks();
+}
+
+async function refreshScope(scope) {
+    const label = { daily: '每日', weekly: '每周', season: '赛季' }[scope] || '';
+    const r = await api('/tasks/refresh', 'POST', { scope });
+    toast(r.success ? `${label}任务已刷新` : (r.message || '刷新失败'), r.success);
     if (r.success) {
         loadState();
         loadTasks();
@@ -299,15 +474,19 @@ async function redeem() {
     if (r.success) { el('redeem-code').value = ''; loadState(); }
 }
 
-function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // ---- 绑定 ----
 el('login-btn').onclick = doLogin;
 el('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 el('logout-btn').onclick = logout;
 el('redeem-btn').onclick = redeem;
-el('refresh-daily').onclick = refreshDailyTasks;
+el('refresh-daily').onclick = () => refreshScope('daily');
+el('refresh-weekly').onclick = () => refreshScope('weekly');
+el('refresh-season').onclick = () => refreshScope('season');
 el('cycle-free-all').onclick = () => claimAllCycle('free');
 el('cycle-premium-all').onclick = () => claimAllCycle('premium');
+el('compensation-btn').onclick = claimCompensation;
+window.addEventListener('resize', applyTaskDisplayLimit);
 
 if (TOKEN) { showMain(); }

@@ -31,6 +31,15 @@ public class TraderAssortHelper(
     }
 
     /// <summary>
+    ///     Invalidate the merged quest-assort index after a trader is added or replaced at runtime.
+    ///     The next assort request will rebuild it from the current trader database.
+    /// </summary>
+    public void InvalidateQuestAssortCache()
+    {
+        _mergedQuestAssorts = null;
+    }
+
+    /// <summary>
     ///     Get a traders assorts
     ///     Can be used for returning ragfair / fence assorts
     ///     Filter out assorts not unlocked due to level OR quest completion
@@ -109,7 +118,7 @@ public class TraderAssortHelper(
             traderClone.Assort.RemoveItemsFromAssort(fullProfile.SptData.BlacklistedItemTemplates);
         }
 
-        return traderClone.Assort;
+        return TraderAssortAccessPolicy.Apply(sessionId, traderId, traderClone.Assort, showLockedAssorts);
     }
 
     /// <summary>

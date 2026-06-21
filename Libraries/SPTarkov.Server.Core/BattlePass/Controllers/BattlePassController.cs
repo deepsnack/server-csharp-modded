@@ -19,10 +19,64 @@ public class BattlePassController(
     BattlePassService battlePassService,
     BattlePassTrackService trackService,
     ActivationCodeService activationCodeService,
+    Services.DatabaseService databaseService,
+    ItemControl.ItemSearchService itemSearchService,
+    BattlePassHandoverService handoverService,
     ISptLogger<BattlePassController> logger
-)
+) : ControllerBase
 {
-    private const int FreeDailyRerolls = 1;
+    /// <summary>
+    ///     mod 物品兜底：item 类奖励的 tpl 不在物品库（mod 被删除）时从玩家页下发数据中剔除——
+    ///     该格自然回退为空（全部剔除时空格）。只过滤下发，存储配置不动：mod 装回后奖励自动恢复。
+    ///     非 item 类型（购买权/配方/称号）不在此过滤，其引用失效由各自领取链路兜底。
+    ///     展示名兜底：item 类奖励未填展示名时，按本地化解析物品名（原版/mod 通用）下发，
+    ///     解析不到才让前端回退到 MongoID——即 展示名 → 物品名 → MongoID。用 record with 生成
+    ///     下发副本，不改存储配置。
+    /// </summary>
+    private List<BpReward> SanitizeRewards(List<BpReward>? rewards)
+    {
+        if (rewards is null || rewards.Count == 0)
+        {
+            return [];
+        }
+
+        var items = databaseService.GetItems();
+        return rewards
+            .Where(r =>
+            {
+                var type = (r.Type ?? "item").Trim().ToLowerInvariant();
+                if (type is "purchaseright" or "recipe" or "title")
+                {
+                    return true;
+                }
+
+                var tpl = r.Tpl?.Trim() ?? "";
+                return Models.Common.MongoId.IsValidMongoId(tpl) && items.ContainsKey(new Models.Common.MongoId(tpl));
+            })
+            .Select(r =>
+            {
+                var type = (r.Type ?? "item").Trim().ToLowerInvariant();
+                var tpl = r.Tpl?.Trim() ?? "";
+                if (type == "item" && Models.Common.MongoId.IsValidMongoId(tpl))
+                {
+                    // 展示名 → 物品名 → MongoID：展示名为空、等于 tpl、或本身就是一个 MongoID
+                    //（旧数据把 id 当名字存）时，一律按本地化解析物品名；解析不到则清空 Name，
+                    // 交前端回退到 tpl（即 MongoID）。每级回退保证健壮性。
+                    var displayName = r.Name?.Trim();
+                    var nameLooksLikeId = string.IsNullOrWhiteSpace(displayName)
+                        || string.Equals(displayName, tpl, StringComparison.OrdinalIgnoreCase)
+                        || Models.Common.MongoId.IsValidMongoId(displayName);
+                    if (nameLooksLikeId)
+                    {
+                        var resolved = itemSearchService.ResolveItemName(new Models.Common.MongoId(tpl));
+                        return r with { Name = string.IsNullOrWhiteSpace(resolved) ? null : resolved };
+                    }
+                }
+
+                return r;
+            })
+            .ToList();
+    }
 
     /// <summary>从 SPT 客户端请求的 PHPSESSID cookie 解析会话 id（= profileId）。客户端插件经 RequestHandler 自动携带。</summary>
     private static string? ResolveSptSession(string? cookieHeader)
@@ -89,13 +143,14 @@ public class BattlePassController(
             }
 
             var tracks = BattlePassStore.GetTracks();
+            var pendingCompensation = battlePassService.GetPendingCompensationCount(prog);
             var levels = tracks
                 .OrderBy(kv => kv.Key)
                 .Select(kv => new
                 {
                     level = kv.Key,
-                    free = kv.Value.Free,
-                    premium = kv.Value.Premium,
+                    free = SanitizeRewards(kv.Value.Free),
+                    premium = SanitizeRewards(kv.Value.Premium),
                     claimedFree = prog.ClaimedFree.Contains(kv.Key),
                     claimedPremium = prog.ClaimedPremium.Contains(kv.Key),
                     unlocked = kv.Key <= prog.Level,
@@ -128,11 +183,16 @@ public class BattlePassController(
                     atMaxLevel,
                     username = battlePassService.GetUsername(profileId),
                 },
+                compensation = new
+                {
+                    available = pendingCompensation > 0,
+                    pendingCount = pendingCompensation,
+                },
                 levels,
                 cycle = new
                 {
-                    free = cycleRewards?.Free ?? new List<BpReward>(),
-                    premium = cycleRewards?.Premium ?? new List<BpReward>(),
+                    free = SanitizeRewards(cycleRewards?.Free),
+                    premium = SanitizeRewards(cycleRewards?.Premium),
                     completed = prog.CyclesCompleted,
                     claimedFree = prog.ClaimedCycleFree,
                     claimedPremium = prog.ClaimedCyclePremium,
@@ -182,6 +242,7 @@ public class BattlePassController(
                         progress = a.Progress,
                         completed = a.CreditedXp,
                         rotation = tpl?.Rotation ?? "fixed",
+                        conditionType = tpl?.ConditionType ?? "Kills",
                     };
                 })
                 .ToList();
@@ -190,8 +251,53 @@ public class BattlePassController(
             {
                 success = true,
                 tasks,
-                freeRerollsLeft = Math.Max(0, FreeDailyRerolls - prog.DailyRerollsUsed),
+                freeRerollsLeft = Math.Max(0, season.DailyRefreshLimit - prog.DailyRerollsUsed),
+                refreshLeft = BuildRefreshLeft(season, prog),
+                displayCount = season.TaskDisplayCount,
             };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, message = ex.Message };
+        }
+    }
+
+    /// <summary>列出某「上交物品」任务当前存档中可上交的物品明细（ID/名称/可上交数量）。</summary>
+    [HttpGet("handover/{taskId}")]
+    public object GetHandover(string taskId, [FromHeader(Name = "X-BP-Token")] string? token = null)
+    {
+        var profileId = BattlePassSession.Resolve(token);
+        if (profileId is null)
+        {
+            return new { success = false, message = "未登录或会话已过期" };
+        }
+
+        try
+        {
+            var (ok, message, info) = handoverService.GetEligible(profileId, taskId);
+            return ok ? new { success = true, info } : new { success = false, message };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, message = ex.Message };
+        }
+    }
+
+    /// <summary>对某「上交物品」任务执行网页上交：从存档仓库移除匹配物品并累计任务进度。</summary>
+    [HttpPost("handover")]
+    public object Handover([FromBody] JsonElement request, [FromHeader(Name = "X-BP-Token")] string? token = null)
+    {
+        var profileId = BattlePassSession.Resolve(token);
+        if (profileId is null)
+        {
+            return new { success = false, message = "未登录或会话已过期" };
+        }
+
+        try
+        {
+            var taskId = request.TryGetProperty("taskId", out var t) ? t.GetString() : null;
+            var (ok, message, result) = handoverService.Handover(profileId, taskId);
+            return ok ? new { success = true, result } : new { success = false, message };
         }
         catch (Exception ex)
         {
@@ -210,36 +316,92 @@ public class BattlePassController(
 
         try
         {
-            var scope = request.TryGetProperty("scope", out var s) ? s.GetString() ?? "daily" : "daily";
-            if (!string.Equals(scope, "daily", StringComparison.OrdinalIgnoreCase))
+            var scope = (request.TryGetProperty("scope", out var s) ? s.GetString() ?? "daily" : "daily")
+                .Trim().ToLowerInvariant();
+            if (scope is not ("daily" or "weekly" or "season"))
             {
-                return new { success = false, message = "玩家端仅支持刷新每日任务" };
+                return new { success = false, message = "无效的刷新范围" };
             }
 
             var season = BattlePassStore.GetSeason();
             var prog = battlePassService.GetOrResetProgress(profileId, season);
+            // 先按周期自动滚动（可能重置对应 scope 的刷新预算），再判定主动刷新额度
             trackService.RefreshActiveTasks(profileId, prog);
 
-            if (prog.DailyRerollsUsed >= FreeDailyRerolls)
+            var limit = RefreshLimitForScope(season, scope);
+            if (limit <= 0)
             {
                 BattlePassStore.SaveProgress(profileId, prog);
-                return new { success = false, message = "今日免费刷新次数已用完" };
+                return new { success = false, message = "该类任务不支持主动刷新" };
             }
 
-            if (!trackService.ForceRefreshTasks(profileId, prog, "daily"))
+            if (RefreshUsedForScope(prog, scope) >= limit)
             {
                 BattlePassStore.SaveProgress(profileId, prog);
-                return new { success = false, message = "无可刷新的每日任务" };
+                return new { success = false, message = "刷新次数已用完" };
             }
 
-            prog.DailyRerollsUsed++;
+            if (!trackService.ForceRefreshTasks(profileId, prog, scope))
+            {
+                BattlePassStore.SaveProgress(profileId, prog);
+                return new { success = false, message = "无可刷新的任务" };
+            }
+
+            SetRefreshUsedForScope(prog, scope, RefreshUsedForScope(prog, scope) + 1);
             BattlePassStore.SaveProgress(profileId, prog);
-            return new { success = true, freeRerollsLeft = Math.Max(0, FreeDailyRerolls - prog.DailyRerollsUsed) };
+            return new { success = true, refreshLeft = BuildRefreshLeft(season, prog) };
         }
         catch (Exception ex)
         {
             return new { success = false, message = ex.Message };
         }
+    }
+
+    private static int RefreshLimitForScope(BpSeason season, string scope)
+    {
+        return scope switch
+        {
+            "weekly" => season.WeeklyRefreshLimit,
+            "season" => season.SeasonRefreshLimit,
+            _ => season.DailyRefreshLimit,
+        };
+    }
+
+    private static int RefreshUsedForScope(BpProgress prog, string scope)
+    {
+        return scope switch
+        {
+            "weekly" => prog.WeeklyRefreshUsed,
+            "season" => prog.SeasonRefreshUsed,
+            _ => prog.DailyRerollsUsed,
+        };
+    }
+
+    private static void SetRefreshUsedForScope(BpProgress prog, string scope, int value)
+    {
+        switch (scope)
+        {
+            case "weekly":
+                prog.WeeklyRefreshUsed = value;
+                break;
+            case "season":
+                prog.SeasonRefreshUsed = value;
+                break;
+            default:
+                prog.DailyRerollsUsed = value;
+                break;
+        }
+    }
+
+    /// <summary>三类任务各自剩余的主动刷新次数（供前端展示与按钮禁用）。</summary>
+    private static object BuildRefreshLeft(BpSeason season, BpProgress prog)
+    {
+        return new
+        {
+            daily = Math.Max(0, season.DailyRefreshLimit - prog.DailyRerollsUsed),
+            weekly = Math.Max(0, season.WeeklyRefreshLimit - prog.WeeklyRefreshUsed),
+            season = Math.Max(0, season.SeasonRefreshLimit - prog.SeasonRefreshUsed),
+        };
     }
 
     [HttpPost("tasks/reroll")]
@@ -276,7 +438,7 @@ public class BattlePassController(
                 return new { success = false, message = "该任务不可刷新" };
             }
 
-            if (prog.DailyRerollsUsed >= FreeDailyRerolls)
+            if (prog.DailyRerollsUsed >= season.DailyRefreshLimit)
             {
                 BattlePassStore.SaveProgress(profileId, prog);
                 return new { success = false, message = "今日免费刷新次数已用完" };
@@ -359,7 +521,7 @@ public class BattlePassController(
     ///     同时兼容浏览器直发的未压缩 JSON（便于调试）。会话来自 PHPSESSID cookie（= profileId）。</para>
     /// </summary>
     [HttpPost("track")]
-    public async Task<object> Track(HttpRequest request, [FromHeader(Name = "Cookie")] string? cookie = null)
+    public async Task<object> Track([FromHeader(Name = "Cookie")] string? cookie = null)
     {
         var profileId = ResolveSptSession(cookie);
         if (profileId is null)
@@ -369,7 +531,7 @@ public class BattlePassController(
 
         try
         {
-            var payload = await ReadTrackPayloadAsync(request);
+            var payload = await ReadTrackPayloadAsync(Request);
             if (payload is null)
             {
                 return new { success = false, message = "空载荷或解析失败" };
@@ -462,6 +624,29 @@ public class BattlePassController(
         }
         catch (Exception ex)
         {
+            return new { success = false, message = ex.Message };
+        }
+    }
+
+    /// <summary>一次性领取所有已领取普通奖励轨中由管理员后续追加的奖励。</summary>
+    [HttpPost("claim-compensation")]
+    public object ClaimCompensation([FromHeader(Name = "X-BP-Token")] string? token = null)
+    {
+        var profileId = BattlePassSession.Resolve(token);
+        if (profileId is null)
+        {
+            return new { success = false, message = "未登录或会话已过期" };
+        }
+
+        try
+        {
+            var season = BattlePassStore.GetSeason();
+            var (ok, message, granted) = battlePassService.ClaimCompensation(profileId, season);
+            return new { success = ok, message, granted };
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"[SPT-BattlePass] 补偿领取失败 profile={profileId}: {ex.Message}");
             return new { success = false, message = ex.Message };
         }
     }

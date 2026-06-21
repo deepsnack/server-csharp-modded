@@ -1,4 +1,5 @@
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
@@ -19,7 +20,8 @@ public class QuestRewardHelper(
     ProfileHelper profileHelper,
     RewardHelper rewardHelper,
     ServerLocalisationService serverLocalisationService,
-    ICloner cloner
+    ICloner cloner,
+    ItemAcquisitionMaskService acquisitionMask
 )
 {
     /// <summary>
@@ -84,6 +86,28 @@ public class QuestRewardHelper(
 
         // e.g. 'Success' or 'AvailableForFinish'
         var rewards = questDetails.Rewards[state.ToString()];
+
+        // 服务期屏蔽：剔除被标记移除的任务奖励物品（克隆后过滤，不破坏 DB 任务数据）
+        if (acquisitionMask.HasAny)
+        {
+            var rewardGroup = state.ToString();
+            var hasRemoval = rewards.Any(r =>
+                r.Type == RewardType.Item
+                && r.Items is not null
+                && r.Items.Any(it => acquisitionMask.IsQuestRewardRemoved(questId, rewardGroup, it.Template)));
+            if (hasRemoval)
+            {
+                var filtered = cloner.Clone(rewards.ToList());
+                foreach (var rw in filtered.Where(r => r.Type == RewardType.Item && r.Items is not null))
+                {
+                    rw.Items!.RemoveAll(it => acquisitionMask.IsQuestRewardRemoved(questId, rewardGroup, it.Template));
+                }
+                rewards = filtered
+                    .Where(r => !(r.Type == RewardType.Item && (r.Items is null || r.Items.Count == 0)))
+                    .ToList();
+            }
+        }
+
         return rewardHelper.ApplyRewards(rewards, CustomisationSource.UNLOCKED_IN_GAME, fullProfile, profileData, questId, questResponse);
     }
 

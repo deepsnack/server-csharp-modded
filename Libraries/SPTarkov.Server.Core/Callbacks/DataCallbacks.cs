@@ -1,10 +1,12 @@
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
 using SPTarkov.Server.Core.Models.Eft.Dialog;
 using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Utils;
+using SPTarkov.Server.Core.Utils.Cloners;
 
 namespace SPTarkov.Server.Core.Callbacks;
 
@@ -14,7 +16,9 @@ public class DataCallbacks(
     DatabaseService databaseService,
     TraderController traderController,
     HideoutController hideoutController,
-    LocaleService localeService
+    LocaleService localeService,
+    ItemAcquisitionMaskService acquisitionMask,
+    ICloner cloner
 )
 {
     /// <summary>
@@ -99,7 +103,24 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetHideoutProduction(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetHideout().Production));
+        var production = databaseService.GetHideout().Production;
+
+        // 服务期屏蔽：克隆后剔除被标记移除的配方/原料（不破坏 DB）
+        if (acquisitionMask.HasAny && production?.Recipes is not null)
+        {
+            production = cloner.Clone(production);
+            production!.Recipes = production.Recipes!
+                .Where(recipe => !acquisitionMask.IsRecipeOutputRemoved(recipe.EndProduct))
+                .ToList();
+            foreach (var recipe in production.Recipes.Where(recipe => recipe.Requirements is not null))
+            {
+                recipe.Requirements!.RemoveAll(req =>
+                    req.TemplateId is not null
+                    && acquisitionMask.IsIngredientRemoved(recipe.Id.ToString(), req.TemplateId.Value));
+            }
+        }
+
+        return new ValueTask<string>(httpResponseUtil.GetBody(production));
     }
 
     /// <summary>

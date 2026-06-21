@@ -17,6 +17,7 @@ public class BotLootCacheService(
     ItemHelper itemHelper,
     PMCLootGenerator pmcLootGenerator,
     ServerLocalisationService serverLocalisationService,
+    ItemFilterService itemFilterService,
     ICloner cloner
 )
 {
@@ -489,6 +490,13 @@ public class BotLootCacheService(
     {
         foreach (var (tpl, weight) in poolOfItemsToAdd)
         {
+            // Skip globally-blacklisted items (incl. mod-added items banned via the item-ban subsystem) so
+            // bot-carried loot honours the same blacklist as world loot / equipment generation
+            if (itemFilterService.IsItemBlacklisted(tpl))
+            {
+                continue;
+            }
+
             // Skip adding items that already exist
             poolToAddTo.TryAdd(tpl, weight);
         }

@@ -1,4 +1,5 @@
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Generators;
 using SPTarkov.Server.Core.Helpers;
@@ -27,7 +28,8 @@ public class TraderController(
     TraderPurchasePersisterService traderPurchasePersisterService,
     FenceService fenceService,
     FenceBaseAssortGenerator fenceBaseAssortGenerator,
-    ConfigServer configServer
+    ConfigServer configServer,
+    ItemAcquisitionMaskService acquisitionMask
 )
 {
     protected readonly TraderConfig TraderConfig = configServer.GetConfig<TraderConfig>();
@@ -95,9 +97,10 @@ public class TraderController(
     ///     If current time is > nextResupply(expire) time of trader, refresh traders assorts and
     ///     Fence is handled slightly differently
     /// </summary>
-    /// <returns>True if ran successfully</returns>
+    /// <returns>true = 本轮确实刷新了至少一个商人的 assort（含 fence partial refresh），调用方据此失效响应缓存</returns>
     public bool Update()
     {
+        var anyRefreshed = false;
         foreach (var (traderId, trader) in databaseService.GetTables().Traders)
         {
             if (traderId == Traders.LIGHTHOUSEKEEPER)
@@ -110,6 +113,7 @@ public class TraderController(
                 if (fenceService.NeedsPartialRefresh())
                 {
                     fenceService.GenerateFenceAssorts();
+                    anyRefreshed = true;
                 }
 
                 continue;
@@ -126,9 +130,10 @@ public class TraderController(
 
             // Reset purchase data per trader as they have independent reset times
             traderPurchasePersisterService.ResetTraderPurchasesStoredInProfile(traderId);
+            anyRefreshed = true;
         }
 
-        return true;
+        return anyRefreshed;
     }
 
     /// <summary>
@@ -190,7 +195,28 @@ public class TraderController(
     /// <returns></returns>
     public TraderAssort GetAssort(MongoId sessionId, MongoId traderId)
     {
-        return traderAssortHelper.GetAssort(sessionId, traderId);
+        var assort = traderAssortHelper.GetAssort(sessionId, traderId);
+
+        // 服务期屏蔽：剔除被标记移除的商人货架物品。置于控制器层（assort 已是克隆，不破坏 DB），
+        // 不改 TraderAssortHelper 构造签名——后者会被 SVM 等继承覆盖，加参数会令其基类构造失配而崩溃。
+        if (acquisitionMask.HasAny && assort?.Items is not null)
+        {
+            var removedRootIds = assort.Items
+                .Where(i => acquisitionMask.IsTraderItemRemoved(traderId, i.Template))
+                .Select(i => i.Id)
+                .ToHashSet();
+            if (removedRootIds.Count > 0)
+            {
+                assort.Items.RemoveAll(i => acquisitionMask.IsTraderItemRemoved(traderId, i.Template));
+                foreach (var rootId in removedRootIds)
+                {
+                    assort.BarterScheme?.Remove(rootId);
+                    assort.LoyalLevelItems?.Remove(rootId);
+                }
+            }
+        }
+
+        return assort;
     }
 
     /// <summary>

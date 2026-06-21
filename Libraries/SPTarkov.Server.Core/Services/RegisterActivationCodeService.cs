@@ -194,13 +194,40 @@ public class RegisterActivationCodeService(FileUtil fileUtil, JsonUtil jsonUtil,
         lock (gate)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("time,event,code,edition,email,username");
+            sb.AppendLine("time,event,code,edition,email,username,fromEdition,toEdition,itemCount,operatorName,profileId,rawEdition");
             foreach (var e in Log.Entries)
             {
-                sb.AppendLine($"{e.Time:O},{e.Event},{e.Code},{Csv(e.Edition)},{Csv(e.Email)},{Csv(e.Username)}");
+                sb.AppendLine(
+                    $"{e.Time:O},{e.Event},{e.Code},{Csv(e.Edition)},{Csv(e.Email)},{Csv(e.Username)},"
+                        + $"{Csv(e.FromEdition)},{Csv(e.ToEdition)},{e.ItemCount},{Csv(e.OperatorName)},{Csv(e.ProfileId)},{Csv(e.RawEdition)}"
+                );
             }
 
             return sb.ToString();
+        }
+    }
+
+    /// <summary>U4：写入版本升级事件（复用本表，event=upgrade）。</summary>
+    public void AppendUpgradeLog(string profileId, string fromEdition, string toEdition, int itemCount, string operatorName, string? username, string? rawEdition)
+    {
+        lock (gate)
+        {
+            Log.Entries.Add(
+                new ActivationLogEntry
+                {
+                    Time = DateTime.UtcNow,
+                    Event = "upgrade",
+                    Code = "-",
+                    ProfileId = profileId,
+                    FromEdition = fromEdition,
+                    ToEdition = toEdition,
+                    ItemCount = itemCount,
+                    OperatorName = operatorName,
+                    Username = username,
+                    RawEdition = rawEdition,
+                }
+            );
+            SaveLog();
         }
     }
 
@@ -403,6 +430,37 @@ public record ActivationLogEntry
 
     [JsonPropertyName("username")]
     public string? Username { get; set; }
+
+    // ---- U4：版本升级事件复用本表 ----
+    /// <summary>事件 upgrade 专用：源档位（标准链上）。</summary>
+    [JsonPropertyName("fromEdition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FromEdition { get; set; }
+
+    /// <summary>事件 upgrade 专用：目标档位（标准链上）。</summary>
+    [JsonPropertyName("toEdition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToEdition { get; set; }
+
+    /// <summary>事件 upgrade 专用：发送物品总数。</summary>
+    [JsonPropertyName("itemCount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ItemCount { get; set; }
+
+    /// <summary>事件 upgrade 专用：操作员标识。</summary>
+    [JsonPropertyName("operatorName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OperatorName { get; set; }
+
+    /// <summary>事件 upgrade 专用：升级目标存档 profileId。</summary>
+    [JsonPropertyName("profileId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProfileId { get; set; }
+
+    /// <summary>事件 upgrade 专用：升级前 profile.Info.Edition 原始字符串（可能是别名）。</summary>
+    [JsonPropertyName("rawEdition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RawEdition { get; set; }
 }
 
 public class ActivationLogFile

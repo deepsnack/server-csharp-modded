@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SPTarkov.Common\SPTarkov.Common.csproj" />
     <ProjectReference Include="..\SPTarkov.DI\SPTarkov.DI.csproj" />
+    <ProjectReference Include="..\SPTarkov.Reflection\SPTarkov.Reflection.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.IO.Hashing" Version="9.0.9" />

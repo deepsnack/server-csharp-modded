@@ -37,6 +37,8 @@ public static class BattlePassStore
 
     private static string ItemOverridesPath => Path.Combine(BaseDir, "item-overrides.json");
     private static string FleaControlPath => Path.Combine(BaseDir, "flea-control.json");
+    private static string ItemBansPath => Path.Combine(BaseDir, "item-bans.json");
+    private static string CustomRecipesPath => Path.Combine(BaseDir, "custom-recipes.json");
 
     /// <summary>商人头像文件的绝对路径（按配置的文件名，默认 trader-avatar.png）。</summary>
     public static string TraderAvatarPath(string? fileName = null)
@@ -100,6 +102,11 @@ public static class BattlePassStore
         {
             WriteJson(FleaControlPath, new BpFleaControl());
         }
+
+        if (!File.Exists(ItemBansPath))
+        {
+            WriteJson(ItemBansPath, new BpItemBans());
+        }
     }
 
     // ---- 赛季 ----
@@ -127,7 +134,8 @@ public static class BattlePassStore
     // ---- 任务模板 ----
     public static List<BpTaskTemplate> GetTasks()
     {
-        return ReadJson<List<BpTaskTemplate>>(TasksPath) ?? new List<BpTaskTemplate>();
+        var tasks = ReadJson<List<BpTaskTemplate>>(TasksPath);
+        return tasks ?? BattlePassDefaults.Tasks();
     }
 
     public static void SaveTasks(List<BpTaskTemplate> tasks)
@@ -144,6 +152,17 @@ public static class BattlePassStore
     public static void SaveCodes(List<BpActivationCode> codes)
     {
         WriteJson(CodesPath, codes);
+    }
+
+    // ---- 自定义藏身处配方 ----
+    public static List<BpCustomRecipe> GetCustomRecipes()
+    {
+        return ReadJson<List<BpCustomRecipe>>(CustomRecipesPath) ?? new List<BpCustomRecipe>();
+    }
+
+    public static void SaveCustomRecipes(List<BpCustomRecipe> recipes)
+    {
+        WriteJson(CustomRecipesPath, recipes);
     }
 
     // ---- 商人货架 offers ----
@@ -187,6 +206,21 @@ public static class BattlePassStore
         ProgressCache[profileId] = progress;
         var path = Path.Combine(ProgressDir, profileId + ".json");
         WriteJson(path, progress);
+    }
+
+    /// <summary>重置指定玩家当前赛季通行证进度；可选择保留付费轨解锁状态。</summary>
+    public static BpProgress ResetProgress(string profileId, BpSeason season, bool preservePremium)
+    {
+        var old = GetProgress(profileId);
+        var progress = new BpProgress
+        {
+            SeasonId = season.SeasonId,
+            PremiumUnlocked = preservePremium && old.PremiumUnlocked,
+            RewardLedgerInitialized = true,
+        };
+
+        SaveProgress(profileId, progress);
+        return progress;
     }
 
     /// <summary>列出所有有进度的 profileId（管理员总览用）。</summary>
@@ -344,6 +378,17 @@ public static class BattlePassStore
     public static void SaveFleaControl(BpFleaControl config)
     {
         WriteJson(FleaControlPath, config);
+    }
+
+    // ---- 全局物品封禁配置 ----
+    public static BpItemBans GetItemBans()
+    {
+        return ReadJson<BpItemBans>(ItemBansPath) ?? new BpItemBans();
+    }
+
+    public static void SaveItemBans(BpItemBans config)
+    {
+        WriteJson(ItemBansPath, config);
     }
 
     // ---- 底层读写 ----

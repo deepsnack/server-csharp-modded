@@ -14,8 +14,7 @@ public class LauncherCallbacks(
     LauncherController launcherController,
     ProfileController profileController,
     SaveServer saveServer,
-    Watermark watermark,
-    WebRegisterController webRegisterController
+    Watermark watermark
 )
 {
     public ValueTask<string> Connect()
@@ -44,7 +43,7 @@ public class LauncherCallbacks(
             id = miniProfile.ProfileId,
             username = miniProfile.Username,
             nickname = miniProfile.Nickname,
-            wipe = false,
+            wipe = miniProfile.Wipe ?? false,
             edition = miniProfile.Edition
         };
         return new ValueTask<string>(httpResponseUtil.NoBody(output));
@@ -88,11 +87,9 @@ public class LauncherCallbacks(
 
     public ValueTask<string> RemoveProfile(string url, RemoveProfileData info, MongoId sessionID)
     {
-        // 先删除用户的邮箱记录
-        webRegisterController.UnregisterEmailBySessionId(sessionID);
-        
-        // 然后删除profile
-        return new ValueTask<string>(httpResponseUtil.NoBody(saveServer.RemoveProfile(sessionID)));
+        // 启动器"删除存档"按本整合版语义是软重置：清空进度并保留账号、密码与注册邮箱。
+        // 真删除账号只留给注册管理后台的"删除账号"按钮（那里显式 force + 释放邮箱）。
+        return new ValueTask<string>(httpResponseUtil.NoBody(saveServer.SoftResetProfile(sessionID)));
     }
 
     public ValueTask<string> GetCompatibleTarkovVersion()
@@ -108,6 +105,11 @@ public class LauncherCallbacks(
     public ValueTask<string> GetServerModsProfileUsed(string url, EmptyRequestData _, MongoId sessionID)
     {
         return new ValueTask<string>(httpResponseUtil.NoBody(launcherController.GetServerModsProfileUsed(sessionID)));
+    }
+
+    public ValueTask<string> GetWebDavConfig()
+    {
+        return new ValueTask<string>(httpResponseUtil.NoBody(launcherController.GetWebDavConfig()));
     }
 
 }

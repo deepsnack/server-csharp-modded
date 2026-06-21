@@ -27,6 +27,33 @@ const MAP_NAMES = [
     ['Sandbox', '机房 (Ground Zero)'],
 ];
 
+// 区域 ID 候选（PlaceItem / VisitZone 用）。可下拉选择、也可自由输入自定义区域。
+// 扩展：新增区域只需在此数组加一行；各地图的精确区域 id 可在游戏内由客户端补丁「发现模式」Debug 日志获取
+//（安放/到访时会打印 zone=… / id=…）。
+const ZONE_NAMES = [
+    'ZoneDormitory',
+    'ZoneGasStation',
+    'ZoneOldAZS',
+    'ZoneCrossRoad',
+    'ZoneFactoryCenter',
+    'ZoneRailStrorage',
+    'ZoneScavBase',
+    'ZoneBoiler',
+    'ZoneBlockPost',
+    'ZoneCustoms',
+    'ZoneBunkerStorage',
+    'ZoneSubStorage',
+    'ZonePTOR',
+    'ZoneSnow',
+    'ZoneWood',
+];
+
+const MULTI_ITEM_FIELDS = {
+    'f-weapons': 'weapon',
+};
+const TAG_FIELDS = ['f-calibers', 'f-savageroles'];
+const multiItemLabels = {};
+
 function el(id) { return document.getElementById(id); }
 function toast(msg, ok) {
     const t = el('toast'); t.textContent = msg; t.className = 'toast show ' + (ok ? 'ok' : 'err');
@@ -53,7 +80,51 @@ async function adminLogin() {
     enterConsole();
 }
 function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('tasks-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
-function enterConsole() { el('login-view').classList.add('hidden'); el('tasks-view').classList.remove('hidden'); loadTasks(); }
+function enterConsole() { el('login-view').classList.add('hidden'); el('tasks-view').classList.remove('hidden'); loadTasks(); loadTaskSettings(); }
+
+// ---- 任务系统全局设置（写入当前赛季）----
+let taskSettingsSeason = null;
+function tsSet(id, v, dflt) { const e = el(id); if (e) e.value = (v ?? dflt); }
+function tsNum(id, dflt) { const v = el(id)?.value?.trim(); return (v === '' || v == null) ? dflt : +v; }
+async function loadTaskSettings() {
+    const r = await api('/season');
+    if (!r || !r.success) return;
+    const s = taskSettingsSeason = r.season || {};
+    tsSet('ts-daily-count', s.dailyTaskCount, 3);
+    tsSet('ts-weekly-count', s.weeklyTaskCount, 2);
+    tsSet('ts-season-count', s.seasonTaskCount, 0);
+    tsSet('ts-display-count', s.taskDisplayCount, 4);
+    tsSet('ts-daily-period', s.dailyPeriodHours, 24);
+    tsSet('ts-weekly-period', s.weeklyPeriodHours, 168);
+    tsSet('ts-season-period', s.seasonPeriodHours, 0);
+    tsSet('ts-daily-refresh', s.dailyRefreshLimit, 1);
+    tsSet('ts-weekly-refresh', s.weeklyRefreshLimit, 1);
+    tsSet('ts-season-refresh', s.seasonRefreshLimit, 0);
+}
+async function saveTaskSettings() {
+    if (!taskSettingsSeason) { const r = await api('/season'); taskSettingsSeason = (r && r.season) || {}; }
+    const payload = {
+        ...taskSettingsSeason,
+        dailyTaskCount: tsNum('ts-daily-count', 3),
+        weeklyTaskCount: tsNum('ts-weekly-count', 2),
+        seasonTaskCount: tsNum('ts-season-count', 0),
+        taskDisplayCount: Math.max(1, tsNum('ts-display-count', 4)),
+        dailyPeriodHours: tsNum('ts-daily-period', 24),
+        weeklyPeriodHours: tsNum('ts-weekly-period', 168),
+        seasonPeriodHours: tsNum('ts-season-period', 0),
+        dailyRefreshLimit: tsNum('ts-daily-refresh', 1),
+        weeklyRefreshLimit: tsNum('ts-weekly-refresh', 1),
+        seasonRefreshLimit: tsNum('ts-season-refresh', 0),
+    };
+    const r = await api('/season', 'POST', payload);
+    if (r && r.success) {
+        taskSettingsSeason = payload;
+        el('ts-msg').textContent = '已保存 ' + new Date().toLocaleTimeString();
+        toast('任务设置已保存', true);
+    } else {
+        toast((r && r.message) || '保存失败', false);
+    }
+}
 
 // ---- 类型卡片 ----
 let currentConditionType = 'Kills';
@@ -104,6 +175,83 @@ function pickItem(idx, tpl, name) {
     el(`fi-results-${idx}`).style.display = 'none';
 }
 
+function csvValues(id) {
+    const input = el(id);
+    if (!input) return [];
+    return input.value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function writeCsvValues(id, values) {
+    const input = el(id);
+    if (!input) return;
+    const unique = Array.from(new Set(values.filter(Boolean)));
+    input.value = unique.join(', ');
+    renderMultiChips(id);
+}
+
+function renderMultiChips(id) {
+    const box = el(`${id}-chips`);
+    if (!box) return;
+    const values = csvValues(id);
+    box.innerHTML = values.map(v => {
+        const label = multiItemLabels[id]?.[v];
+        const text = label ? `${label} · ${v.slice(0, 8)}…` : v;
+        return `<span class="multi-chip" title="${esc(v)}"><span>${esc(text)}</span><button type="button" data-tpl="${esc(v)}">×</button></span>`;
+    }).join('');
+    box.querySelectorAll('button').forEach(btn => {
+        btn.onclick = () => writeCsvValues(id, values.filter(v => v !== btn.dataset.tpl));
+    });
+}
+
+function setupMultiItemPicker(id, category) {
+    const search = el(`${id}-search`);
+    const results = el(`${id}-results`);
+    const valuesInput = el(id);
+    if (!search || !results || !valuesInput) return;
+
+    BpPicker.attachItem(search, results, ds => {
+        multiItemLabels[id] ??= {};
+        multiItemLabels[id][ds.tpl] = ds.name || ds.tpl;
+        writeCsvValues(id, [...csvValues(id), ds.tpl]);
+        search.value = '';
+    }, { limit: 8, category });
+
+    valuesInput.addEventListener('input', () => renderMultiChips(id));
+    renderMultiChips(id);
+}
+
+function setupTagPicker(id) {
+    const input = el(`${id}-search`);
+    const add = el(`${id}-add`);
+    if (!input || !add) return;
+    const commit = () => {
+        const value = input.value.trim();
+        if (!value) return;
+        writeCsvValues(id, [...csvValues(id), value]);
+        input.value = '';
+    };
+    add.onclick = commit;
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); commit(); }
+    });
+    renderMultiChips(id);
+}
+
+function choiceValues(id) {
+    return Array.from(el(id)?.querySelectorAll('input[type="checkbox"]:checked') || []).map(input => input.value);
+}
+
+function setChoiceValues(id, values) {
+    const selected = new Set(values || []);
+    el(id)?.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = selected.has(input.value); });
+}
+
+function setupHourSelects() {
+    const options = ['<option value="">不限</option>'];
+    for (let hour = 0; hour < 24; hour++) options.push(`<option value="${hour}">${String(hour).padStart(2, '0')}:00</option>`);
+    ['f-daytimefrom', 'f-daytimeto'].forEach(id => { if (el(id)) el(id).innerHTML = options.join(''); });
+}
+
 // ---- 目标配置区（按类型动态渲染）----
 function renderTargetSection() {
     const ct = currentConditionType;
@@ -139,7 +287,7 @@ function renderTargetSection() {
             </div>
             <div class="form-row two-col">
                 <div class="form-col"><label>地图</label>${mapSelect('f-location')}</div>
-                <div class="form-col"><label>区域 ID</label><input id="f-zone" placeholder="如 BotZone / ZoneDormitory" /></div>
+                <div class="form-col"><label>区域 ID</label>${zoneSelect('f-zone')}</div>
             </div>
         </div>`;
         setTimeout(() => setupItemPicker(0), 10);
@@ -149,7 +297,7 @@ function renderTargetSection() {
             <div class="form-col"><label>地图</label>${mapSelect('f-location')}</div>
         </div>
         <div class="form-row">
-            <div class="form-col"><label>区域 ID</label><input id="f-zone" placeholder="如 ZoneDormitory / BotZone" /></div>
+            <div class="form-col"><label>区域 ID</label>${zoneSelect('f-zone')}</div>
         </div>`;
     }
 }
@@ -157,6 +305,14 @@ function renderTargetSection() {
 function mapSelect(id) {
     let opts = MAP_NAMES.map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join('');
     return `<select id="${esc(id)}">${opts}</select>`;
+}
+
+// 区域 ID：可下拉选择常见区域、也可手填自定义区域（datalist）。与纯文本框读写兼容（el(id).value）。
+function zoneSelect(id) {
+    const listId = esc(id) + '-list';
+    const opts = ZONE_NAMES.map(z => `<option value="${esc(z)}"></option>`).join('');
+    return `<input id="${esc(id)}" list="${listId}" placeholder="选择或输入区域 ID（见游戏内发现日志）" autocomplete="off" />
+        <datalist id="${listId}">${opts}</datalist>`;
 }
 
 function itemPickerHtml(idx, label) {
@@ -176,7 +332,7 @@ function itemPickerHtml(idx, label) {
 
 // ---- CSV 辅助 ----
 function csv(id) { const v = el(id).value.trim(); if (!v) return null; const a = v.split(',').map(s => s.trim()).filter(Boolean); return a.length ? a : null; }
-function setCsv(id, arr) { el(id).value = Array.isArray(arr) ? arr.join(', ') : ''; }
+function setCsv(id, arr) { el(id).value = Array.isArray(arr) ? arr.join(', ') : ''; renderMultiChips(id); }
 function numOrNull(id) { const v = el(id).value.trim(); return v === '' ? null : +v; }
 function mapVal(id) { const v = el(id)?.value; return v === '' ? null : v; }
 
@@ -234,9 +390,8 @@ function fillForm(t) {
         if (el('f-plant-time')) el('f-plant-time').value = t.plantTime ?? '';
         if (el('f-find-in-raid')) el('f-find-in-raid').checked = !!t.findInRaid;
 
-        setCsv('f-weapons', t.weapons); setCsv('f-calibers', t.weaponCalibers); setCsv('f-bodyparts', t.bodyParts);
-        setCsv('f-savageroles', t.savageRoles); setCsv('f-enemyequip', t.enemyEquipment);
-        setCsv('f-playerequip', t.playerEquipment); setCsv('f-weaponmods', t.weaponMods);
+        setCsv('f-weapons', t.weapons); setCsv('f-calibers', t.weaponCalibers);
+        setChoiceValues('f-bodyparts', t.bodyParts); setCsv('f-savageroles', t.savageRoles);
         el('f-distcompare').value = t.distanceCompare || ''; el('f-distval').value = t.distanceValue ?? '';
         el('f-daytimefrom').value = t.daytimeFrom ?? ''; el('f-daytimeto').value = t.daytimeTo ?? '';
 
@@ -273,11 +428,13 @@ function clearForm() {
     renderTargetSection();
     setTimeout(() => {
         ['f-distcompare', 'f-distval', 'f-daytimefrom', 'f-daytimeto',
-            'f-weapons', 'f-calibers', 'f-bodyparts', 'f-savageroles',
-            'f-enemyequip', 'f-playerequip', 'f-weaponmods',
+            'f-weapons', 'f-calibers', 'f-savageroles',
             'f-zone', 'f-plant-time'].forEach(id => {
                 const e = el(id); if (e) { if (e.type === 'number') e.value = ''; else e.value = ''; }
             });
+        Object.keys(MULTI_ITEM_FIELDS).forEach(id => renderMultiChips(id));
+        TAG_FIELDS.forEach(id => renderMultiChips(id));
+        setChoiceValues('f-bodyparts', []);
         if (el('f-target')) el('f-target').value = 'Any';
         if (el('f-count')) el('f-count').value = 3;
         if (el('f-location')) el('f-location').value = '';
@@ -306,12 +463,10 @@ el('save-task').onclick = async () => {
         task.count = +(el('f-count')?.value || 3);
         task.location = mapVal('f-location');
         task.weapons = csv('f-weapons'); task.weaponCalibers = csv('f-calibers');
-        task.bodyParts = csv('f-bodyparts'); task.savageRoles = csv('f-savageroles');
+        task.bodyParts = choiceValues('f-bodyparts'); task.savageRoles = csv('f-savageroles');
         task.distanceCompare = el('f-distcompare')?.value || null;
         task.distanceValue = numOrNull('f-distval');
         task.daytimeFrom = numOrNull('f-daytimefrom'); task.daytimeTo = numOrNull('f-daytimeto');
-        task.enemyEquipment = csv('f-enemyequip'); task.playerEquipment = csv('f-playerequip');
-        task.weaponMods = csv('f-weaponmods');
     } else if (ct === 'Exploration') {
         task.count = +(el('f-count')?.value || 1);
         task.location = mapVal('f-location');
@@ -379,5 +534,9 @@ el('admin-login-btn').onclick = adminLogin;
 el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
 el('admin-logout').onclick = logout;
 el('refresh-active-tasks').onclick = refreshActiveTasks;
+el('save-task-settings').onclick = saveTaskSettings;
+Object.entries(MULTI_ITEM_FIELDS).forEach(([id, category]) => setupMultiItemPicker(id, category));
+TAG_FIELDS.forEach(setupTagPicker);
+setupHourSelects();
 
 if (ADMIN_TOKEN) enterConsole();

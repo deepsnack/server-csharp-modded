@@ -68,7 +68,9 @@ public class RagfairCallbacks(
     public ValueTask<string> Search(string url, SearchRequestData info, MongoId sessionID)
     {
         // 高频只读端点缓存 + 并发合并（原 RagfairSearchCachePatch 内联；开关关闭时直通）
-        var key = $"flea:search:{sessionID}:{jsonUtil.Serialize(info)?.GetHashCode()}";
+        // key 直接用完整请求 JSON：32 位 GetHashCode 碰撞会让玩家拿到另一搜索条件的缓存响应
+        //（客户端 selectedCategory 对不上 → 列表显示为空），完整串彻底消除碰撞
+        var key = $"flea:search:{sessionID}:{jsonUtil.Serialize(info)}";
         var body = fleaTraderCache.GetOrCompute(key, () => httpResponseUtil.GetBody(ragfairController.GetOffers(sessionID, info)));
         return new ValueTask<string>(body);
     }
@@ -82,8 +84,8 @@ public class RagfairCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetMarketPrice(string url, GetMarketPriceRequestData info, MongoId sessionID)
     {
-        // 原 RagfairMarketPriceCachePatch 内联（全局价格，无 session 差异）
-        var key = $"flea:mprice:{jsonUtil.Serialize(info)?.GetHashCode()}";
+        // 原 RagfairMarketPriceCachePatch 内联（全局价格，无 session 差异；完整 JSON 为键防碰撞）
+        var key = $"flea:mprice:{jsonUtil.Serialize(info)}";
         var body = fleaTraderCache.GetOrCompute(
             key,
             () => httpResponseUtil.GetBody(ragfairController.GetItemMinAvgMaxFleaPriceValues(info))

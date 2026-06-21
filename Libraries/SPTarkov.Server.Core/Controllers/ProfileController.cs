@@ -22,8 +22,7 @@ public class ProfileController(
     CreateProfileService createProfileService,
     ProfileFixerService profileFixerService,
     PlayerScavGenerator playerScavGenerator,
-    ProfileHelper profileHelper,
-    ProfileAutoRepairService profileAutoRepairService
+    ProfileHelper profileHelper
 )
 {
     /// <summary>
@@ -68,6 +67,7 @@ public class ProfileController(
                 MaxLevel = maxLvl,
                 Edition = profile.ProfileInfo?.Edition ?? string.Empty,
                 ProfileId = profile.ProfileInfo?.ProfileId ?? string.Empty,
+                Wipe = profile.ProfileInfo?.IsWiped,
                 InvalidOrUnloadableProfile = profile.ProfileInfo?.InvalidOrUnloadableProfile,
                 SptData = profileHelper.GetDefaultSptDataObject(),
             };
@@ -85,6 +85,7 @@ public class ProfileController(
             MaxLevel = maxLvl,
             Edition = profile.ProfileInfo?.Edition ?? string.Empty,
             ProfileId = profile.ProfileInfo?.ProfileId ?? string.Empty,
+            Wipe = profile.ProfileInfo?.IsWiped,
             InvalidOrUnloadableProfile = profile.ProfileInfo?.InvalidOrUnloadableProfile,
             SptData = profile.SptData,
         };
@@ -97,12 +98,8 @@ public class ProfileController(
     /// <returns>Return a full profile, scav and pmc profiles + meta data</returns>
     public virtual List<PmcData> GetCompleteProfile(MongoId sessionId)
     {
-        // 客户端拉取存档列表前自修复（开关在服务内部判断；原 ProfileGetCompleteProfileAutoRepairPatch 内联）
-        if (!saveServer.IsProfileInvalidOrUnloadable(sessionId))
-        {
-            profileAutoRepairService.RepairProfile(saveServer.GetProfile(sessionId), sessionId, "profile-list");
-        }
-
+        // 自修复已上移至 ProfileCallbacks.GetProfileData（callback 层），以保持本控制器构造签名与上游一致，
+        // 避免继承覆盖它的模组（如 SVM）因基类构造缺失而崩溃。
         var profile = profileHelper.GetCompleteProfile(sessionId);
 
         // Some users like to crank massive skill multipliers and send the client invalid information,

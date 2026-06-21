@@ -154,6 +154,23 @@ public record BpFleaControl
     public bool? EnableCustomItemCategoryList { get; set; }
 }
 
+/// <summary>
+///     全局物品封禁配置（item-bans.json）。把 tpl/分类注入各生成期黑名单（ItemConfig.Blacklist +
+///     LootableItemBlacklist + RagfairConfig），从而在 bot 装备/携带、世界战利品（静态+散落）、空投、
+///     跳蚤、fence、scavcase、邪教等所有生成途径一并屏蔽。非破坏式（不改物品 DB / 不动配置文件），
+///     运行时增删即时生效且可还原。支持 mod 物品（按 tpl 即可，无需在原版基线内）。
+/// </summary>
+public record BpItemBans
+{
+    /// <summary>按 tpl 全局封禁。</summary>
+    [JsonPropertyName("tpls")]
+    public HashSet<string> Tpls { get; set; } = new();
+
+    /// <summary>按父类/分类全局封禁（展开为该类下全部 tpl 注入黑名单 + 跳蚤分类黑名单）。</summary>
+    [JsonPropertyName("categories")]
+    public HashSet<string> Categories { get; set; } = new();
+}
+
 // ---- 对外只读视图（搜索 / 获取图谱） ----
 
 /// <summary>物品搜索结果项。</summary>

@@ -88,13 +88,16 @@ public class Watermark(
 
     /// <summary>
     ///     Get a version string (x.x.x) or (x.x.x-BLEEDINGEDGE) OR (X.X.X (18xxx))
+    ///     core.json 配置了 versionSuffix 时统一为 "{主版本}-{后缀}"（支持中文，仅展示层）
     /// </summary>
     /// <param name="withEftVersion">Include the eft version this spt version was made for</param>
     /// <returns></returns>
     public string GetVersionTag(bool withEftVersion = false)
     {
         var sptVersion = ProgramStatics.SPT_VERSION().ToString();
-        var versionTag = ProgramStatics.DEBUG() ? $"{sptVersion} - {serverLocalisationService.GetText("bleeding_edge_build")}" : sptVersion;
+        var versionTag = string.IsNullOrWhiteSpace(sptConfig.VersionSuffix)
+            ? (ProgramStatics.DEBUG() ? $"{sptVersion} - {serverLocalisationService.GetText("bleeding_edge_build")}" : sptVersion)
+            : $"{sptVersion}-{sptConfig.VersionSuffix.Trim()}";
 
         if (withEftVersion)
         {
@@ -113,11 +116,31 @@ public class Watermark(
     public string GetInGameVersionLabel()
     {
         var sptVersion = ProgramStatics.SPT_VERSION();
-        var versionTag = ProgramStatics.DEBUG()
-            ? $"{sptVersion} - BLEEDINGEDGE {ProgramStatics.COMMIT()?.Substring(0, 6) ?? ""}"
-            : $"{sptVersion} - {ProgramStatics.COMMIT()?.Substring(0, 6) ?? ""}";
+        // 此 label 经客户端 VersionLabelPatch 写入 EFT Taxonomy.Major，随 App-Version HTTP 头上报。
+        // HTTP 头仅允许 ASCII —— 非 ASCII 后缀（如中文）会让客户端抛
+        // "Header value contains invalid characters" 拒绝启动，故此面仅接受 ASCII 后缀，
+        // 否则回退原版格式。launcher / 水印 / 网页面不受此限制，中文后缀照常生效。
+        var suffix = sptConfig.VersionSuffix?.Trim();
+        var commit = ProgramStatics.COMMIT();
+        var shortCommit = commit[..Math.Min(commit.Length, 6)];
+        var fallbackVersionTag = ProgramStatics.DEBUG()
+            ? string.IsNullOrEmpty(shortCommit)
+                ? $"{sptVersion} - BLEEDINGEDGE"
+                : $"{sptVersion} - BLEEDINGEDGE {shortCommit}"
+            : string.IsNullOrEmpty(shortCommit)
+                ? sptVersion.ToString()
+                : $"{sptVersion} - {shortCommit}";
+        var versionTag = !string.IsNullOrEmpty(suffix) && IsHeaderSafeAscii(suffix)
+            ? $"{sptVersion}-{suffix}"
+            : fallbackVersionTag;
 
         return $"{sptConfig.ProjectName} {versionTag}";
+    }
+
+    /// <summary>可打印 ASCII（0x20-0x7E）才允许进 HTTP 头。</summary>
+    protected static bool IsHeaderSafeAscii(string value)
+    {
+        return value.All(c => c >= 0x20 && c <= 0x7E);
     }
 
     /// <summary>
