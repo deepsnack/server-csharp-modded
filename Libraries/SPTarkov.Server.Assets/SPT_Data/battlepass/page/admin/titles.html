@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证称号 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">通行证称号</h1>
+            <p class="brand-sub">TITLE&nbsp;CONSOLE</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="titles-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">通行证称号配置</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <button class="tab active" data-tab="catalog">称号目录</button>
+                <button class="tab" data-tab="grant">授予玩家</button>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <!-- 称号目录 -->
+            <div class="tab-pane" id="pane-catalog">
+                <h2>称号目录</h2>
+                <p class="hint">称号有两种形态：<b>文字</b>（可单色或双色线性渐变）与<b>图片</b>（约定横幅 <code>128×32</code> PNG 透明底）。
+                    奖励轨里把某条奖励设为 <code>{"type":"title","titleId":"此处 ID"}</code> 即可作为奖励发放。</p>
+                <div class="titles-admin">
+                    <div class="panel">
+                        <div class="panel-head"><h2 id="title-form-title">新增 / 编辑称号</h2></div>
+                        <div class="form-body">
+                            <label>称号 ID（唯一，字母/数字/_/-，被奖励 titleId 引用）</label><input id="t-id" placeholder="如 veteran" />
+                            <label>名称（管理标签）</label><input id="t-name" />
+                            <label>形态</label>
+                            <select id="t-type">
+                                <option value="text">文字</option>
+                                <option value="image">图片（128×32 PNG）</option>
+                            </select>
+
+                            <div id="text-fields">
+                                <label>显示文本</label><input id="t-text" />
+                                <label>主色</label>
+                                <div class="tpl-row"><input id="t-color" type="color" value="#E8B923" /><input id="t-color-hex" placeholder="#E8B923" /></div>
+                                <label class="chk"><input id="t-gradient" type="checkbox" /> 启用双色渐变</label>
+                                <div id="colorend-row" class="hidden">
+                                    <label>第二色（渐变终点）</label>
+                                    <div class="tpl-row"><input id="t-colorend" type="color" value="#AF002D" /><input id="t-colorend-hex" placeholder="#AF002D" /></div>
+                                </div>
+                            </div>
+
+                            <div id="image-fields" class="hidden">
+                                <label>上传图片（PNG，必须 128×32，透明底）</label>
+                                <input id="t-image-file" type="file" accept="image/png" />
+                                <p class="hint">先保存称号目录项（拿到 ID）后再上传图片。</p>
+                            </div>
+
+                            <label>说明（可空）</label><input id="t-desc" />
+
+                            <label>预览</label>
+                            <div class="title-preview" id="t-preview"></div>
+
+                            <button id="save-title" class="btn primary small">保存称号</button>
+                            <button id="upload-title-image" class="btn primary small hidden">上传图片并应用</button>
+                            <button id="clear-title" class="btn ghost small">清空</button>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="panel-head"><h2>现有称号</h2><button id="refresh-titles" class="btn ghost small">刷新</button></div>
+                        <div id="title-rows"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 授予玩家 -->
+            <div class="tab-pane hidden" id="pane-grant">
+                <h2>授予 / 撤销</h2>
+                <div class="titles-admin">
+                    <div class="panel">
+                        <div class="panel-head"><h2>操作</h2></div>
+                        <div class="form-body">
+                            <label>玩家（选择）</label>
+                            <select id="g-player"></select>
+                            <label>或直接填 profileId</label><input id="g-profileid" placeholder="24 位 hex（留空则用上方选择）" />
+                            <label>称号</label>
+                            <select id="g-title"></select>
+                            <div class="row">
+                                <button id="grant-btn" class="btn primary small">授予</button>
+                                <button id="revoke-btn" class="btn ghost small">撤销</button>
+                            </div>
+                            <p id="grant-msg" class="msg"></p>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="panel-head"><h2>持有总览</h2><button id="refresh-holders" class="btn ghost small">刷新</button></div>
+                        <div id="holder-rows"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="titles.js"></script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证管理后台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">通行证后台</h1>
+            <p class="brand-sub">ADMIN&nbsp;CONSOLE</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">密码在 SPT_Data/webregister/config.json 配置，与注册后台共用</p>
+        </div>
+    </section>
+
+    <section id="admin-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">通行证管理后台</span>
+            <nav class="tabs">
+                <button class="tab active" data-tab="season">赛季</button>
+                <button class="tab" data-tab="tracks">奖励轨</button>
+                <a class="tab" href="tasks.html">任务 →</a>
+                <button class="tab" data-tab="codes">激活码</button>
+                <button class="tab" data-tab="players">玩家</button>
+                <a class="tab" href="trader.html">商人 →</a>
+                <a class="tab" href="recipes.html">配方 →</a>
+                <a class="tab" href="titles.html">称号 →</a>
+                <a class="tab" href="items.html">物品 →</a>
+                <a class="tab" href="flea.html">跳蚤 →</a>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <!-- 赛季 -->
+            <div class="tab-pane" id="pane-season">
+                <h2>赛季配置</h2>
+                <p class="hint">图形化编辑赛季参数。下方为实时 JSON 预览（展开可直改，保存以直改内容为准）。</p>
+                <div class="panel" style="margin-bottom:14px">
+                    <div class="panel-head"><h2>基础设置</h2></div>
+                    <div class="form-body">
+                        <div class="form-row two-col">
+                            <div class="form-col"><label>赛季 ID</label><input id="s-id" placeholder="S1" /></div>
+                            <div class="form-col"><label>赛季名称</label><input id="s-name" placeholder="赛季一" /></div>
+                        </div>
+                        <div class="form-row three-col">
+                            <div class="form-col"><label>开始日期（本地时间）</label><input id="s-start" type="datetime-local" /></div>
+                            <div class="form-col"><label>结束日期（本地时间）</label><input id="s-end" type="datetime-local" /></div>
+                            <div class="form-col"><label>最大等级</label><input id="s-maxlevel" type="number" value="50" /></div>
+                        </div>
+                        <div class="form-row three-col">
+                            <div class="form-col"><label>基础经验 / 级</label><input id="s-basexp" type="number" value="1000" /></div>
+                            <div class="form-col"><label>每级经验增量</label><input id="s-growth" type="number" value="100" /></div>
+                            <div class="form-col"><label>付费轨倍率</label><input id="s-mult" type="number" value="1.25" step="0.05" /></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-col"><label>XP 曲线（逗号分隔，留空=按 baseXp+growth 线性推导）</label><input id="s-curve" placeholder="1000,1100,1200,…" /></div>
+                        </div>
+                    </div>
+                </div>
+                <details id="season-json-details">
+                    <summary>JSON 预览 / 直改（可编辑，保存以当前 JSON 为准）</summary>
+                    <textarea id="season-json" class="json-edit" spellcheck="false"></textarea>
+                </details>
+                <button id="save-season" class="btn primary small" style="margin-top:6px">保存赛季</button>
+            </div>
+
+            <!-- 奖励轨 -->
+            <div class="tab-pane hidden" id="pane-tracks">
+                <h2>双轨奖励表</h2>
+                <p class="hint">
+                    滚动浏览全部等级，逐级编辑免费 / 付费轨奖励。奖励 <code>type</code>：<code>item</code>（邮寄）/
+                    <code>purchaseRight</code>（商人购买，填 offerId）/ <code>recipe</code>（配方，填 recipeId）/
+                    <code>title</code>（称号，填 titleId）。满级后进入「♾️ 循环奖励」轮次（列表最底部，逐轮可领）。
+                </p>
+                <div class="tracks-toolbar">
+                    <label>等级上限 <input id="track-maxlevel" type="number" min="1" max="500" value="50" style="width:72px" /></label>
+                    <label title="满级后每满该经验得一轮循环奖励；0=用基础每级经验">循环每轮经验 <input id="track-cyclexp" type="number" min="0" value="0" style="width:96px" /></label>
+                    <span id="tracks-count-info" class="muted" style="font-size:11px;color:var(--text-dim)"></span>
+                    <div style="flex:1"></div>
+                    <button id="save-all-tracks" class="btn primary small">保存全部</button>
+                </div>
+                <div id="tracks-list" class="tracks-list"></div>
+                <div id="tracks-sentinel" style="height:1px"></div>
+                <details id="tracks-json-details" style="margin-top:14px">
+                    <summary>JSON 预览 / 直改（可编辑）</summary>
+                    <textarea id="tracks-json" class="json-edit tall" spellcheck="false"></textarea>
+                    <button id="save-json-tracks" class="btn ghost small" style="margin-top:6px">按 JSON 保存</button>
+                </details>
+                <div class="track-jump">
+                    <button id="jump-top" class="btn ghost small" title="回到顶部">↑ 顶部</button>
+                    <button id="jump-bottom" class="btn ghost small" title="前往底部">↓ 底部</button>
+                </div>
+            </div>
+
+            <!-- 激活码 -->
+            <div class="tab-pane hidden" id="pane-codes">
+                <h2>激活码</h2>
+                <div class="code-gen panel">
+                    <div class="form-body row">
+                        <div><label>类型</label><select id="c-type"><option value="premium">解锁付费轨</option><option value="levels">直升等级</option></select></div>
+                        <div><label>等级数（levels 时）</label><input id="c-value" type="number" value="5" /></div>
+                        <div><label>数量</label><input id="c-count" type="number" value="10" /></div>
+                        <div><label>批次标签</label><input id="c-batch" placeholder="可选" /></div>
+                        <button id="gen-codes" class="btn primary small">生成</button>
+                    </div>
+                    <textarea id="gen-out" class="json-edit" spellcheck="false" readonly placeholder="生成的激活码将显示在此，便于复制分发"></textarea>
+                </div>
+                <div class="panel">
+                    <div class="panel-head"><h2>已发激活码</h2><button id="refresh-codes" class="btn ghost small">刷新</button></div>
+                    <div id="code-rows"></div>
+                </div>
+            </div>
+
+            <!-- 玩家 -->
+            <div class="tab-pane hidden" id="pane-players">
+                <h2>玩家进度</h2>
+                <p class="hint">重置涵盖等级、经验、领取记录、循环进度、任务和补偿账本，并收回通行证商人购买权与配方；永久称号保留。列表和“重置全部”均自动排除 Fika Headless 存档。</p>
+                <div class="player-toolbar">
+                    <input id="player-search" type="search" placeholder="搜索账号、角色昵称或完整 Profile ID" autocomplete="off" />
+                    <button id="refresh-players" class="btn ghost small">刷新</button>
+                    <label class="with-cb"><input id="bp-reset-preserve-premium" type="checkbox" checked /> 保留付费轨</label>
+                    <button id="reset-selected-players" class="btn del small">重置选中</button>
+                    <button id="reset-all-players" class="btn del small">重置全部</button>
+                    <span id="player-filter-hint" class="muted"></span>
+                    <span id="player-action-hint" class="muted"></span>
+                </div>
+                <div id="player-rows"></div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

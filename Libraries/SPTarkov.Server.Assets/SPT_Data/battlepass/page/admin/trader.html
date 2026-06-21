@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证商人 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">通行证商人</h1>
+            <p class="brand-sub">TRADER&nbsp;CONSOLE</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="trader-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">通行证商人配置</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <button class="tab active" data-tab="meta">商人设置</button>
+                <button class="tab" data-tab="offers">货架管理</button>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <!-- 商人设置 -->
+            <div class="tab-pane" id="pane-meta">
+                <h2>商人自身信息</h2>
+                <p class="hint">名称/昵称/介绍等改动会即时重注入服务端；游戏内商人界面通常需<b>重进商人界面或重登</b>才刷新（含头像）。</p>
+                <div class="trader-meta">
+                    <div class="panel">
+                        <div class="panel-head"><h2>基础信息</h2></div>
+                        <div class="form-body">
+                            <label>名称（显示名）</label><input id="m-name" />
+                            <label>昵称（Nickname / 标签）</label><input id="m-nickname" />
+                            <label>姓（可空）</label><input id="m-surname" />
+                            <label>介绍</label><textarea id="m-desc" class="json-edit" style="min-height:70px"></textarea>
+                            <label>所在地文案</label><input id="m-location" />
+                            <label>主货币</label>
+                            <select id="m-currency"></select>
+                            <label>补货周期</label>
+                            <div class="resupply-editor">
+                                <input id="m-resupply-value" type="number" min="1" step="1" value="1" />
+                                <select id="m-resupply-unit">
+                                    <option value="60">分钟</option>
+                                    <option value="3600" selected>小时</option>
+                                    <option value="86400">天</option>
+                                    <option value="1">秒</option>
+                                </select>
+                            </div>
+                            <p class="hint">最短 60 秒；保存后下一轮补货开始持续使用该周期。</p>
+                            <label class="chk"><input id="m-unlocked" type="checkbox" checked /> 默认解锁（无需前置任务）</label>
+                            <label class="chk"><input id="m-insurance" type="checkbox" /> 提供保险</label>
+                            <label class="chk"><input id="m-repair" type="checkbox" /> 提供维修</label>
+                            <button id="save-meta" class="btn primary small">保存商人信息</button>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="panel-head"><h2>头像</h2></div>
+                        <div class="form-body">
+                            <div class="avatar-box"><img id="avatar-preview" alt="商人头像预览" /></div>
+                            <label>上传头像（PNG / JPG，≤2MB）</label>
+                            <input id="avatar-file" type="file" accept="image/png,image/jpeg" />
+                            <button id="upload-avatar" class="btn primary small">上传并应用</button>
+                            <p class="hint">不上传则使用内置默认头像。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 货架管理 -->
+            <div class="tab-pane hidden" id="pane-offers">
+                <h2>商人货架</h2>
+                <p class="hint">每个货架项是一份「购买权限」商品：玩家在通行证<b>网页领取对应奖励</b>后才会在商人处出现。奖励轨里把某条奖励设为
+                    <code>{"type":"purchaseRight","offerId":"此处 ID"}</code> 即可联动。价格按以物易物计，每行搜索一种支付物品或货币并填写数量。</p>
+                <div class="offers-admin">
+                    <div class="panel">
+                        <div class="panel-head"><h2 id="offer-form-title">新增 / 编辑货架项</h2></div>
+                        <div class="form-body">
+                            <label>货架项 ID（唯一，被奖励 offerId 引用）</label><input id="o-id" placeholder="如 offer_salewa" />
+                            <label>商品（搜索物品名称 / 简称 / tpl，支持 mod 物品）</label>
+                            <div class="tpl-row">
+                                <input id="o-tpl" placeholder="搜索物品名称或 tpl…" autocomplete="off" /><img id="o-tpl-icon" class="icon-preview" alt="" />
+                                <div id="o-tpl-results" class="rw-tpl-results" style="display:none"></div>
+                            </div>
+                            <label>展示名（可空）</label><input id="o-name" />
+                            <label>库存（&lt;=0 表示无限）</label><input id="o-stock" type="number" value="-1" />
+                            <label>每人限购（&lt;=0 表示不限）</label><input id="o-buylimit" type="number" value="0" />
+                            <label>价格 / 以物易物（搜索支付物品或货币并填写数量；可添加多项；留空=免费）</label>
+                            <div id="o-cost-editor"></div>
+                            <button id="save-offer" class="btn primary small">保存货架项</button>
+                            <button id="clear-offer" class="btn ghost small">清空</button>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="panel-head"><h2>现有货架</h2><button id="refresh-offers" class="btn ghost small">刷新</button></div>
+                        <div id="offer-rows"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="price.js"></script>
+    <script src="trader.js"></script>
+</body>
+</html>

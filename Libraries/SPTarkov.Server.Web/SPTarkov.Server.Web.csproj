@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <Import Project="..\..\Build.props" />
+  <PropertyGroup>
+    <PackageId>SPTarkov.Server.Web</PackageId>
+    <Authors>Single Player Tarkov</Authors>
+    <Description>Common shared library for the Single Player Tarkov projects.</Description>
+    <Copyright>Copyright (c) Single Player Tarkov 2026</Copyright>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://sp-tarkov.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/sp-tarkov/server-csharp</RepositoryUrl>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Library</OutputType>
+    <IsPackable>true</IsPackable>
+    <NoDefaultLaunchSettingsFile>true</NoDefaultLaunchSettingsFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Has to be enabled for SPTarkov.Server.Web to function properly-->
+    <StaticWebAssetsEnabled>true</StaticWebAssetsEnabled>
+    <StaticWebAssetBasePath>SPTarkov.Server.Web</StaticWebAssetBasePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\..\LICENSE" Pack="true" Visible="false" PackagePath="" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="8.13.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SPTarkov.Server.Core\SPTarkov.Server.Core.csproj" />
+  </ItemGroup>
+</Project>

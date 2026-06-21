@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>跳蚤黑名单 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">跳蚤黑名单</h1>
+            <p class="brand-sub">FLEA&nbsp;BLACKLIST</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+        </div>
+    </section>
+
+    <section id="flea-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">跳蚤黑名单接管</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <a class="tab" href="items.html">物品管控 →</a>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <p class="hint">本页接管原版跳蚤黑名单。开关「不接管」时保持服务器原值；拉黑加入 Custom 列表，白名单强制放开 BSG 默认禁售物品。改动保存后即时生效（已生成的旧报价将在下次刷新后体现）。</p>
+
+            <div class="panel">
+                <div class="panel-head"><h2>原生过滤开关</h2></div>
+                <div class="form-body toggles">
+                    <label>BSG 官方黑名单</label><select id="t-bsg" data-k="enableBsgList"></select>
+                    <label>任务物品禁售</label><select id="t-quest" data-k="enableQuestList"></select>
+                    <label>商人物品禁售</label><select id="t-trader" data-k="traderItems"></select>
+                    <label>损坏弹药包禁售</label><select id="t-damaged" data-k="damagedAmmoPacks"></select>
+                    <label>启用分类黑名单</label><select id="t-cat" data-k="enableCustomItemCategoryList"></select>
+                </div>
+            </div>
+
+            <div class="flea-cols">
+                <div class="panel">
+                    <div class="panel-head"><h2>黑名单（按物品）</h2></div>
+                    <div class="form-body">
+                        <div class="search-row"><input id="bl-q" placeholder="搜索名称/tpl 加入黑名单" /><button id="bl-search" class="btn ghost small">搜索</button></div>
+                        <div id="bl-search-rows" class="search-rows small"></div>
+                        <div class="chips" id="bl-chips"></div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-head"><h2>白名单（强制放开）</h2></div>
+                    <div class="form-body">
+                        <div class="search-row"><input id="wl-q" placeholder="搜索名称/tpl 加入白名单" /><button id="wl-search" class="btn ghost small">搜索</button></div>
+                        <div id="wl-search-rows" class="search-rows small"></div>
+                        <div class="chips" id="wl-chips"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-head"><h2>分类黑名单（按父类 ID）</h2></div>
+                <div class="form-body">
+                    <div class="search-row"><input id="cat-input" placeholder="父类/分类 ID（24位 hex）" /><button id="cat-add" class="btn ghost small">加入</button></div>
+                    <div class="chips" id="cat-chips"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-head"><h2>有效全量黑名单</h2><button id="eff-reload" class="btn ghost small">刷新</button></div>
+                <div class="form-body">
+                    <p class="hint" id="eff-summary">展示当前实际被跳蚤禁售的全部物品（自定义 + BSG 官方 + 原版自定义）。放开：自定义项=移出黑名单；BSG/原版项=加入白名单强制放开。立即生效。</p>
+                    <input id="eff-filter" placeholder="筛选名称 / tpl…" />
+                    <div id="eff-rows" class="eff-rows"></div>
+                </div>
+            </div>
+
+            <button id="save-flea" class="btn primary">保存并应用</button>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="flea.js"></script>
+</body>
+</html>

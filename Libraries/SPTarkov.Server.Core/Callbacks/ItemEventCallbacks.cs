@@ -1,0 +1,56 @@
+using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Eft.ItemEvent;
+using SPTarkov.Server.Core.Models.Enums;
+using SPTarkov.Server.Core.Routers;
+using SPTarkov.Server.Core.Utils;
+
+namespace SPTarkov.Server.Core.Callbacks;
+
+[Injectable]
+public class ItemEventCallbacks(HttpResponseUtil httpResponseUtil, ItemEventRouter itemEventRouter)
+{
+    public async ValueTask<string> HandleEvents(string url, ItemEventRouterRequest info, MongoId sessionID)
+    {
+        var eventResponse = await itemEventRouter.HandleEvents(info, sessionID);
+        var result = IsCriticalError(eventResponse.Warnings)
+            ? httpResponseUtil.GetBody(eventResponse, GetErrorCode(eventResponse.Warnings), eventResponse.Warnings[0].ErrorMessage)
+            : httpResponseUtil.GetBody(eventResponse);
+
+        return result;
+    }
+
+    /// <summary>
+    ///     Return true if the passed in list of warnings contains critical issues
+    /// </summary>
+    /// <param name="warnings">The list of warnings to check for critical errors</param>
+    /// <returns></returns>
+    public static bool IsCriticalError(List<Warning>? warnings)
+    {
+        if (warnings is null)
+        {
+            return false;
+        }
+
+        // List of non-critical error codes, we return true if any error NOT included is passed in
+        var nonCriticalErrorCodes = new HashSet<BackendErrorCodes> { BackendErrorCodes.NotEnoughSpace };
+
+        foreach (var warning in warnings)
+        {
+            if (!nonCriticalErrorCodes.Contains(warning.Code ?? BackendErrorCodes.None))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static BackendErrorCodes GetErrorCode(List<Warning> warnings)
+    {
+        // Cast int to string to get the error code of 220 for Unknown Error.
+        return warnings.FirstOrDefault()?.Code is null
+            ? BackendErrorCodes.UnknownError
+            : warnings.FirstOrDefault()?.Code ?? BackendErrorCodes.UnknownError;
+    }
+}

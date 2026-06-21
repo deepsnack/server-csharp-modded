@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPT // 找回密码</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600;700&family=Share+Tech+Mono&family=Saira:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <div class="container">
+        <div class="register-box">
+            <span class="corner tl" aria-hidden="true"></span>
+            <span class="corner tr" aria-hidden="true"></span>
+            <span class="corner bl" aria-hidden="true"></span>
+            <span class="corner br" aria-hidden="true"></span>
+
+            <div class="topbar">
+                <span class="status-dot"></span>
+                <span class="topbar-text">SECURE&nbsp;LINK&nbsp;·&nbsp;连接已加密</span>
+                <a href="/register/index.html" class="admin-link">[ 返回注册 ]</a>
+            </div>
+
+            <header class="masthead">
+                <div class="brand">
+                    <span class="brand-mark">SPT</span>
+                    <span class="brand-tag">// 找回密码</span>
+                </div>
+                <p class="brand-sub">PASSPHRASE RECOVERY &nbsp;—&nbsp; 验证邮箱后重设密码</p>
+            </header>
+
+            <form id="resetForm" novalidate>
+                <div class="form-group" style="--i:1">
+                    <label for="email">注册邮箱 <span class="ftag">E-MAIL</span></label>
+                    <input type="email" id="email" name="email" placeholder="operator@domain.com" required>
+                </div>
+
+                <div class="form-group" style="--i:2">
+                    <label for="verificationCode">验证码 <span class="ftag">AUTH-CODE</span></label>
+                    <div class="verification-group">
+                        <input type="text" id="verificationCode" name="verificationCode" placeholder="• • • • • •" required>
+                        <button type="button" id="sendCodeBtn" class="send-code-btn">发送验证码</button>
+                    </div>
+                </div>
+
+                <div class="form-group" style="--i:3">
+                    <label for="newPassword">新密码 <span class="ftag">NEW · 6+</span></label>
+                    <input type="password" id="newPassword" name="newPassword" placeholder="••••••••" required>
+                </div>
+
+                <div class="form-group" style="--i:4">
+                    <label for="confirmPassword">确认新密码 <span class="ftag">CONFIRM</span></label>
+                    <input type="password" id="confirmPassword" name="confirmPassword" placeholder="••••••••" required>
+                </div>
+
+                <div class="form-group" style="--i:5">
+                    <button type="submit" id="resetBtn" class="register-btn">
+                        <span class="btn-label">重&nbsp;置</span>
+                        <span class="btn-sub">RESET</span>
+                    </button>
+                </div>
+            </form>
+
+            <div id="message" class="message"></div>
+
+            <div class="aux-links">
+                <a href="/register/index.html" class="aux-link">没有账户？去注册<span>ENLIST →</span></a>
+            </div>
+
+            <footer class="formfoot">
+                <span>SPT&nbsp;PASSPHRASE&nbsp;RECOVERY</span>
+                <span class="blink">█</span>
+            </footer>
+        </div>
+    </div>
+
+    <script src="reset.js"></script>
+</body>
+</html>

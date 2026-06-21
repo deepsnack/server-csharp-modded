@@ -1,0 +1,42 @@
+﻿using System.Text.Json.Nodes;
+using SPTarkov.Server.Core.Models.Eft.Profile;
+
+namespace SPTarkov.Server.Core.Migration;
+
+public abstract class AbstractProfileMigration : IProfileMigration
+{
+    public virtual string MigrationName { get; }
+    public virtual IEnumerable<Type> PrerequisiteMigrations { get; } = [];
+
+    [Obsolete("Will be removed in the next version of SPT due to this property not being used.")]
+    public abstract string FromVersion { get; }
+
+    [Obsolete("Will be removed in the next version of SPT due to this property not being used.")]
+    public abstract string ToVersion { get; }
+
+    public abstract bool CanMigrate(JsonObject profile, IEnumerable<IProfileMigration> previouslyRanMigrations);
+
+    public virtual JsonObject? Migrate(JsonObject profile)
+    {
+        return profile;
+    }
+
+    public virtual bool PostMigrate(SptProfile profile)
+    {
+        return true;
+    }
+
+    protected SemanticVersioning.Version? GetProfileVersion(JsonObject profile)
+    {
+        var versionString = profile["spt"]?["version"]?.GetValue<string>();
+
+        if (versionString is null)
+        {
+            return null;
+        }
+
+        var versionNumber = versionString.Split(' ')[0];
+
+        return SemanticVersioning.Version.TryParse(versionNumber, out var version) ? version : null;
+    }
+}

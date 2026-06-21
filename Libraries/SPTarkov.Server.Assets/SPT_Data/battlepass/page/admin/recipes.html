@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>自定义配方 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">自定义配方</h1>
+            <p class="brand-sub">RECIPE&nbsp;CONSOLE</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="recipes-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">自定义藏身处配方</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <button class="tab active">配方管理</button>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <div class="tab-pane">
+                <p class="hint">创建的配方注入藏身处制造表。<b>锁定</b>配方默认对所有玩家不可用，需在奖励轨配置 recipe 奖励引用其 id、玩家领取后解锁；
+                    <b>全员可用</b>配方创建后所有玩家直接可制作。工具类原料：制作需要但不消耗，完成后返还。
+                    若原料/产物为 mod 物品且 mod 被移除，该配方自动暂停注入（配置保留，mod 装回即恢复）。</p>
+                <div class="offers-admin">
+                    <div class="panel">
+                        <div class="panel-head"><h2 id="recipe-form-title">新建 / 编辑配方</h2></div>
+                        <div class="form-body">
+                            <label>建筑</label>
+                            <select id="r-area"></select>
+                            <label>建筑等级要求</label><input id="r-arealevel" type="number" value="1" min="1" max="4" />
+                            <label>产物（搜索物品名称 / tpl，支持 mod 物品）</label>
+                            <div class="tpl-row">
+                                <input id="r-product" placeholder="搜索物品名称或 tpl…" autocomplete="off" /><img id="r-product-icon" class="icon-preview" alt="" />
+                                <div id="r-product-results" class="rw-tpl-results" style="display:none"></div>
+                            </div>
+                            <label>产量</label><input id="r-count" type="number" value="1" min="1" />
+                            <label>制作时长</label>
+                            <div class="tpl-row">
+                                <input id="r-hours" type="number" value="1" min="0" style="width:80px" /> <span>小时</span>
+                                <input id="r-minutes" type="number" value="0" min="0" max="59" style="width:80px" /> <span>分钟</span>
+                            </div>
+                            <label>原料（勾选「工具」= 不消耗，制作后返还）</label>
+                            <div id="r-ingredients"></div>
+                            <button id="r-add-ing" class="btn ghost small">＋ 添加原料</button>
+                            <label class="with-cb" style="margin-top:8px"><input id="r-locked" type="checkbox" checked /> 锁定（通行证专属，需领取奖励解锁；不勾 = 全员可用）</label>
+                            <label>备注（仅后台可见）</label><input id="r-note" />
+                            <button id="save-recipe" class="btn primary small">保存配方</button>
+                            <button id="clear-recipe" class="btn ghost small">清空</button>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="panel-head"><h2>已有自定义配方</h2><button id="refresh-recipes" class="btn ghost small">刷新</button></div>
+                        <div id="recipe-rows"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="recipes.js"></script>
+</body>
+</html>
