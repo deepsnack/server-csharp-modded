@@ -46,7 +46,9 @@
             </div>
             <div class="user-block">
                 <span id="bp-username"></span>
+                <a class="btn small lottery-entry-btn" href="lottery.html">抽奖</a>
                 <a class="btn ghost small" href="titles.html">我的称号</a>
+                <button id="redeem-entry" class="btn ghost small">兑换激活码</button>
                 <button id="logout-btn" class="btn ghost small">登出</button>
             </div>
         </header>
@@ -105,17 +107,31 @@
                 <div id="task-list" class="task-list"></div>
             </section>
 
-            <!-- 兑换 -->
-            <section class="panel redeem-section">
-                <div class="panel-head"><h2>兑换激活码</h2></div>
-                <div class="redeem">
-                    <input id="redeem-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" />
-                    <button id="redeem-btn" class="btn primary small">兑换</button>
+            <!-- 通行证商店 -->
+            <section class="panel shop-section">
+                <div class="panel-head">
+                    <h2>通行证商店</h2>
+                    <input id="shop-search" class="shop-search" type="search" placeholder="搜索商品" autocomplete="off" />
+                    <span id="shop-next-refresh" class="muted"></span>
+                    <button id="shop-refresh" class="t-reroll" type="button">刷新</button>
                 </div>
-                <p id="redeem-msg" class="msg"></p>
+                <div id="shop-list" class="shop-list"></div>
+                <div class="shop-more-wrap"><button id="shop-more" class="btn ghost small" type="button" style="display:none">展开更多</button></div>
             </section>
         </main>
     </section>
+
+    <!-- 兑换激活码弹窗（与前端风格一致，非浏览器原生弹窗） -->
+    <div id="redeem-overlay" class="rw-overlay hidden">
+        <div class="rw-overlay-box redeem-box">
+            <div class="rw-overlay-head"><span>兑换激活码</span><button id="redeem-close" type="button">×</button></div>
+            <div class="redeem-modal">
+                <input id="redeem-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" />
+                <button id="redeem-btn" class="btn primary small">兑换</button>
+                <p id="redeem-msg" class="msg"></p>
+            </div>
+        </div>
+    </div>
 
     <div id="toast" class="toast"></div>
     <script src="script.js"></script>

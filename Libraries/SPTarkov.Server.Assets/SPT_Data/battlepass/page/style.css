@@ -24,6 +24,12 @@
     --green:       #93b65c;
     --red:         #c8503a;
 
+    /* 抽奖稀有度配色（仅驱动开箱光柱/描边，不碰玩法） */
+    --r-common:    #b8c0c8;
+    --r-rare:      #3da9fc;
+    --r-epic:      #a259ff;
+    --r-legendary: #ffb23e;
+
     --f-display: 'Saira Condensed', 'Oswald', sans-serif;
     --f-ui:      'Chakra Petch', 'Oswald', sans-serif;
     --f-mono:    'Share Tech Mono', ui-monospace, monospace;
@@ -613,3 +619,458 @@ input:focus { border-color: var(--brass); box-shadow: 0 0 0 1px rgba(216,162,74,
     white-space: nowrap;
 }
 .rw-ov-badge.featured { background: rgba(226,96,42,.18); color: #e2602a; border-color: rgba(226,96,42,.4); }
+
+/* ---- 通行证商店 ---- */
+.muted { color: var(--text-faint, #7a7a6a); font-size: 12px; }
+#shop-next-refresh { margin-left: auto; margin-right: 12px; font-family: var(--f-mono); }
+.shop-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.shop-card { display: grid; grid-template-columns: 48px 1fr; grid-template-rows: auto auto; gap: 4px 10px;
+    align-items: center; padding: 12px; border-radius: 8px;
+    background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); }
+.shop-icon { grid-row: 1 / span 2; width: 48px; height: 48px; object-fit: contain; }
+.shop-body { min-width: 0; }
+.shop-name { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.shop-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.shop-costs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.shop-cost { font-size: 11px; padding: 2px 7px; border-radius: 3px;
+    background: rgba(201,162,39,.15); color: var(--accent, #c9a227); border: 1px solid rgba(201,162,39,.35); white-space: nowrap; }
+.shop-cost small { opacity: .7; }
+.shop-cost.lack { background: rgba(226,96,42,.15); color: #e2602a; border-color: rgba(226,96,42,.4); }
+.shop-limit { font-size: 10px; opacity: .7; padding: 1px 6px; border-radius: 3px;
+    background: rgba(255,255,255,.05); border: 1px solid var(--line, rgba(255,255,255,.12)); white-space: nowrap; }
+/* 购买按钮独占第 2 行整宽；覆盖 .btn.primary 的 width:100%/margin-top 在卡片栅格里造成的挤压 */
+.shop-card .shop-buy { grid-column: 1 / -1; width: 100%; margin-top: 8px; }
+.shop-buy:disabled { opacity: .45; cursor: not-allowed; }
+.shop-search { flex: 0 1 240px; min-width: 120px; margin-left: 14px; padding: 7px 12px; font-size: 13px;
+    background: rgba(0,0,0,.25); border: 1px solid var(--line, #34302a); border-radius: 4px; color: var(--text, #e8e2d2); }
+.shop-search:focus { outline: none; border-color: var(--brass, #d8a24a); box-shadow: 0 0 0 1px rgba(216,162,74,.25); }
+.shop-more-wrap { display: flex; justify-content: center; margin-top: 12px; }
+.shop-more-wrap .btn { min-width: 200px; margin-top: 0; }
+.redeem-box { width: min(460px, 92vw); }
+.redeem-modal { padding: 16px; }
+.redeem-modal input { width: 100%; text-align: center; letter-spacing: 1px; }
+.redeem-modal .btn.primary { width: 100%; }
+.redeem-modal .msg { margin-top: 10px; text-align: center; }
+
+/* ---- 通行证抽奖 ---- */
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.lottery-entry-btn {
+    color: #161208; border-color: var(--brass-hi);
+    background: linear-gradient(180deg, var(--brass-hi), var(--brass));
+    box-shadow: 0 0 18px rgba(216,162,74,.38);
+}
+.lottery-entry-btn:hover { color: #0b0c0a; border-color: #fff; }
+
+.lottery-wallet {
+    display: flex; align-items: center; gap: 10px; flex: 1; min-width: 260px; flex-wrap: wrap;
+    font-family: var(--f-mono); font-size: 11px; color: var(--text-dim);
+}
+.lottery-wallet span {
+    border: 1px solid var(--line); background: rgba(8,9,5,.65); padding: 5px 8px;
+}
+.lottery-wallet b { color: var(--brass-hi); font-size: 14px; margin-left: 4px; }
+.lottery-content { gap: 16px; }
+.lottery-alert { max-width: 720px; margin: 40px auto; padding: 18px; }
+
+.lottery-hero {
+    min-height: 170px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 38%);
+    gap: 20px; align-items: end; padding: 24px;
+    border: 1px solid var(--line-bright);
+    background:
+        linear-gradient(120deg, rgba(216,162,74,.18), rgba(22,23,15,.85) 42%, rgba(10,11,7,.92)),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.03) 0 1px, transparent 1px 34px);
+    box-shadow: inset 0 0 60px rgba(0,0,0,.35);
+}
+.lottery-kicker {
+    font-family: var(--f-mono); color: var(--olive); font-size: 11px; letter-spacing: 2px;
+}
+.lottery-hero h1 {
+    margin-top: 6px; font-family: var(--f-display); font-size: clamp(34px, 5vw, 68px);
+    color: var(--brass-hi); line-height: .95; letter-spacing: 0;
+}
+.lottery-hero p { max-width: 720px; margin-top: 10px; color: var(--text-dim); line-height: 1.55; }
+.lottery-broadcast {
+    overflow: hidden; min-height: 48px; align-self: stretch; display: flex; align-items: center;
+    border: 1px solid rgba(216,162,74,.28); background: rgba(8,9,5,.5);
+    /* 两端羽化遮罩 */
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
+            mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
+}
+.broadcast-track {
+    display: flex; width: max-content; gap: 12px; white-space: nowrap;
+    animation: broadcastMove 32s linear infinite; padding: 0 12px;
+}
+.lottery-broadcast:hover .broadcast-track { animation-play-state: paused; }
+
+/* 条目药丸卡片化，按稀有度描边 + 微辉光 */
+.broadcast-pill {
+    --pc: var(--r-common);
+    display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+    padding: 6px 12px; border: 1px solid var(--pc); border-radius: 999px;
+    background: linear-gradient(180deg, rgba(255,255,255,.03), transparent), rgba(10,11,6,.7);
+    box-shadow: 0 0 10px -4px var(--pc); font-family: var(--f-mono); font-size: 12px;
+}
+.broadcast-pill.r-rare      { --pc: var(--r-rare); }
+.broadcast-pill.r-epic      { --pc: var(--r-epic); }
+.broadcast-pill.r-legendary { --pc: var(--r-legendary); }
+.broadcast-pill b { color: var(--pc); font-weight: 700; }
+.broadcast-pill i { color: var(--text); font-style: normal; }
+.broadcast-pill small { color: var(--text-dim); }
+.broadcast-pill::before {
+    content: ''; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--pc); box-shadow: 0 0 8px var(--pc); flex: 0 0 7px;
+}
+/* 自抽高亮注入条 */
+.broadcast-pill.broadcast-self {
+    background: linear-gradient(180deg, rgba(255,255,255,.06), transparent), rgba(30,16,6,.85);
+    box-shadow: 0 0 16px -2px var(--pc); animation: selfPulse 1.2s ease-in-out infinite;
+}
+@keyframes selfPulse { 0%, 100% { box-shadow: 0 0 12px -4px var(--pc); } 50% { box-shadow: 0 0 20px 0 var(--pc); } }
+@keyframes broadcastMove { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+.lottery-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
+.lottery-pools { position: sticky; top: 12px; }
+.lottery-pool-list { display: flex; flex-direction: column; gap: 8px; padding: 12px; max-height: 680px; overflow: auto; }
+.lottery-pool-card {
+    width: 100%; text-align: left; cursor: pointer; border: 1px solid var(--line); background: #111208;
+    color: var(--text); padding: 12px; display: flex; flex-direction: column; gap: 6px;
+    font-family: var(--f-ui); transition: border-color .16s, background .16s, transform .08s;
+}
+.lottery-pool-card:hover, .lottery-pool-card.active {
+    border-color: var(--brass); background: linear-gradient(90deg, rgba(216,162,74,.14), #111208);
+}
+.lottery-pool-card:active { transform: translateY(1px); }
+.lottery-pool-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.lottery-pool-icon {
+    width: 34px; height: 34px; flex: 0 0 34px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); background: #0b0c07;
+}
+.lottery-pool-icon img { max-width: 32px; max-height: 32px; object-fit: contain; }
+.lottery-pool-icon.empty::after {
+    content: ''; width: 14px; height: 14px; border: 1px solid rgba(216,162,74,.32);
+    transform: rotate(45deg);
+}
+.lottery-pool-name { min-width: 0; font-family: var(--f-display); font-size: 20px; color: var(--brass-hi); letter-spacing: 1px; overflow-wrap: anywhere; }
+.lottery-pool-meta, .lottery-pool-foot { font-family: var(--f-mono); font-size: 11px; color: var(--text-dim); }
+.lottery-board { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+.lottery-detail-grid { display: grid; grid-template-columns: minmax(220px, 34%) minmax(0, 1fr); gap: 16px; padding: 14px; }
+.lottery-cover {
+    min-height: 230px; border: 1px solid var(--line); background-size: cover; background-position: center;
+    background-color: #0b0c07; position: relative;
+}
+.lottery-cover.empty::after {
+    content: 'LOTTERY'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: rgba(216,162,74,.18); font-family: var(--f-display); font-size: 48px; letter-spacing: 4px;
+    background: repeating-linear-gradient(45deg, rgba(216,162,74,.04) 0 10px, transparent 10px 20px);
+}
+.lottery-actions { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.lottery-cost { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.lottery-cost span, .lottery-progress {
+    border: 1px solid var(--line); background: rgba(8,9,5,.65); padding: 10px;
+    font-family: var(--f-mono); font-size: 12px; color: var(--text);
+    overflow-wrap: anywhere;
+}
+.lottery-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+.lottery-buttons .btn { width: auto; min-width: 130px; margin-top: 0; }
+.lottery-buttons .btn:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
+.lottery-empty { color: var(--text-dim); font-size: 13px; padding: 10px 2px; }
+
+/* ===== 开箱动画 ===== */
+.openbox {
+    --beam: var(--r-common);
+    position: relative; min-height: 230px; overflow: hidden;
+    border-bottom: 1px solid var(--line);
+    background: radial-gradient(120% 90% at 50% 115%, rgba(226,96,42,.06), transparent 60%), #0a0b06;
+    display: flex; align-items: flex-end; justify-content: center; cursor: pointer;
+}
+.openbox.hidden { display: none; }
+.openbox[data-rarity="rare"]      { --beam: var(--r-rare); }
+.openbox[data-rarity="epic"]      { --beam: var(--r-epic); }
+.openbox[data-rarity="legendary"] { --beam: var(--r-legendary); }
+
+.openbox-stage { position: relative; width: 220px; height: 200px; display: flex; align-items: flex-end; justify-content: center; }
+
+/* 光柱：默认收起，playing 时升起，颜色随 --beam */
+.openbox-beam {
+    position: absolute; bottom: 36px; left: 50%; width: 56px; height: 0; transform: translateX(-50%);
+    background: linear-gradient(180deg, transparent, var(--beam) 60%, #fff);
+    filter: blur(2px); opacity: 0; border-radius: 50% 50% 0 0; pointer-events: none;
+    box-shadow: 0 0 40px var(--beam);
+}
+.openbox[data-rarity="common"] .openbox-beam { width: 30px; box-shadow: 0 0 14px var(--beam); }
+.openbox[data-rarity="legendary"] .openbox-beam { width: 78px; }
+
+.openbox-crate { position: relative; width: 150px; height: 120px; }
+.openbox-crate svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.openbox-crate .crate-body rect { fill: #232516; stroke: var(--molten); stroke-width: 1.4; }
+.openbox-crate .crate-lid  rect { fill: #2c2e1c; stroke: var(--molten); stroke-width: 1.4; }
+.openbox-crate .crate-band { fill: rgba(226,96,42,.35); stroke: none; }
+.openbox-crate .crate-latch { fill: var(--molten); stroke: none; }
+.openbox-crate .crate-lid { transform-box: fill-box; transform-origin: center bottom; }
+
+.openbox-particles { position: absolute; inset: 0; pointer-events: none; }
+.openbox-particles span {
+    position: absolute; left: 50%; top: 52%; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--beam); box-shadow: 0 0 8px var(--beam); opacity: 0;
+    animation: particleFly .9s ease-out forwards;
+}
+
+.openbox-skip {
+    position: absolute; right: 10px; top: 10px; z-index: 2;
+    border: 1px solid var(--line-bright); background: rgba(8,9,5,.7); color: var(--text-dim);
+    font-family: var(--f-mono); font-size: 11px; letter-spacing: 1px; padding: 5px 10px; cursor: pointer;
+}
+.openbox-skip:hover { color: var(--brass-hi); border-color: var(--brass); }
+
+/* 分镜：抖动蓄力 → 箱盖爆开 → 光柱升起。fill-mode forwards 让定格保持开箱状态。 */
+.openbox.arming .openbox-crate { animation: crateShake .5s ease-in-out infinite; }
+.openbox.playing .openbox-crate { animation: crateShake .32s ease-in-out 2; }
+.openbox.playing .crate-lid { animation: crateBurst .5s cubic-bezier(.3,1.4,.5,1) .62s forwards; }
+.openbox.playing .openbox-beam { animation: beamRise 1s ease-out .62s forwards; }
+
+/* 跳过：冻结所有动画，直接呈现开箱定格态 */
+.openbox.skip .openbox-crate,
+.openbox.skip .crate-lid,
+.openbox.skip .openbox-beam,
+.openbox.skip .openbox-particles span { animation: none !important; }
+.openbox.skip .crate-lid { transform: translateY(-46px) rotate(-12deg); }
+.openbox.skip .openbox-beam { height: 150px; opacity: .55; }
+
+@keyframes crateShake {
+    0%, 100% { transform: translateX(0) rotate(0); }
+    25% { transform: translateX(-3px) rotate(-1.5deg); }
+    75% { transform: translateX(3px) rotate(1.5deg); }
+}
+@keyframes crateBurst {
+    0% { transform: translateY(0) rotate(0); }
+    100% { transform: translateY(-46px) rotate(-12deg); }
+}
+@keyframes beamRise {
+    0% { height: 0; opacity: 0; }
+    40% { opacity: .85; }
+    100% { height: 150px; opacity: .55; }
+}
+@keyframes particleFly {
+    0% { transform: translate(0, 0) scale(1); opacity: 1; }
+    100% { transform: translate(var(--dx), var(--dy)) scale(.2); opacity: 0; }
+}
+
+/* 全屏屏闪（传说档） */
+.lottery-flash {
+    position: fixed; inset: 0; z-index: 60; pointer-events: none; opacity: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(255,178,62,.55), transparent 60%);
+}
+.lottery-flash.show { animation: screenFlash .65s ease-out; }
+@keyframes screenFlash { 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 无障碍：关闭抽奖动效——开箱直接定格、广播停止滚动（JS 也会跳过分镜直接出结果） */
+@media (prefers-reduced-motion: reduce) {
+    .openbox-crate, .crate-lid, .openbox-beam, .openbox-particles span,
+    .broadcast-pill.broadcast-self { animation: none !important; }
+    .openbox.playing .crate-lid { transform: translateY(-46px) rotate(-12deg); }
+    .openbox.playing .openbox-beam { height: 120px; opacity: .5; }
+    .broadcast-track { animation: none !important; }
+    .lottery-flash.show { animation: none; opacity: 0; }
+}
+.lottery-result {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; padding: 14px;
+}
+.lottery-result-card {
+    border: 1px solid var(--line); background: rgba(17,18,8,.85); padding: 12px; min-height: 150px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+    text-align: center; animation: resultIn .32s ease both;
+}
+/* 结果卡按稀有度描边 + 底光（common 不加，避免噪声） */
+.lottery-result-card.r-rare      { --rc: var(--r-rare); }
+.lottery-result-card.r-epic      { --rc: var(--r-epic); }
+.lottery-result-card.r-legendary { --rc: var(--r-legendary); }
+.lottery-result-card.r-rare,
+.lottery-result-card.r-epic,
+.lottery-result-card.r-legendary {
+    border-color: var(--rc);
+    box-shadow: 0 0 0 1px var(--rc) inset, 0 8px 22px -10px var(--rc);
+}
+.lottery-result-card.grand {
+    border-color: var(--molten-hi); box-shadow: 0 0 24px rgba(226,96,42,.34), inset 0 0 18px rgba(226,96,42,.08);
+}
+.lottery-result-card.converted { border-style: dashed; }
+.lottery-result-icon { width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; }
+.lottery-result-icon img { max-width: 56px; max-height: 56px; object-fit: contain; }
+.lottery-result-card strong { color: var(--text); font-size: 14px; overflow-wrap: anywhere; }
+.lottery-result-card span, .lottery-result-card small { color: var(--text-dim); font-size: 11px; }
+@keyframes resultIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+
+.lottery-prizes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; padding: 14px; }
+.lottery-prize {
+    display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    border: 1px solid var(--line); background: rgba(255,255,255,.025); padding: 9px;
+}
+.lottery-prize.grand { border-color: rgba(226,96,42,.6); background: rgba(226,96,42,.08); }
+.lottery-prize.drawn { opacity: .45; }
+.lottery-prize-icon { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; background: #0b0c07; border: 1px solid var(--line); }
+.lottery-prize-icon img { max-width: 40px; max-height: 40px; object-fit: contain; }
+.lottery-prize-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.lottery-prize-body strong { overflow-wrap: anywhere; font-size: 13px; color: var(--text); }
+.lottery-prize-body span { font-family: var(--f-mono); font-size: 10px; color: var(--text-dim); }
+.lottery-prob { font-family: var(--f-mono); color: var(--brass-hi); font-size: 13px; white-space: nowrap; }
+
+.lottery-bottom-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 38%); gap: 16px; margin-top: 16px; }
+.lottery-shop, .lottery-records { padding: 14px; display: flex; flex-direction: column; gap: 8px; max-height: 620px; overflow: auto; }
+.lottery-shop-item {
+    display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    border: 1px solid var(--line); background: rgba(255,255,255,.025); padding: 10px;
+}
+.lottery-shop-icon { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; background: #0b0c07; border: 1px solid var(--line); }
+.lottery-shop-icon img { max-width: 46px; max-height: 46px; object-fit: contain; }
+.lottery-shop-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.lottery-shop-info strong { color: var(--text); overflow-wrap: anywhere; }
+.lottery-shop-info span, .lottery-shop-info small { color: var(--text-dim); font-size: 11px; }
+.lottery-buy { min-width: 86px; margin-top: 0; }
+.lottery-buy:disabled { opacity: .45; cursor: not-allowed; }
+.lottery-record {
+    display: flex; flex-direction: column; gap: 3px; border-left: 3px solid var(--line-bright);
+    background: rgba(255,255,255,.025); padding: 9px 10px;
+}
+.lottery-record.grand { border-left-color: var(--molten-hi); background: rgba(226,96,42,.08); }
+.lottery-record span { color: var(--text); font-size: 13px; }
+.lottery-record small { color: var(--text-dim); font-family: var(--f-mono); font-size: 10px; }
+
+@media (max-width: 1040px) {
+    .lottery-hero, .lottery-layout, .lottery-detail-grid, .lottery-bottom-grid { grid-template-columns: 1fr; }
+    .lottery-pools { position: static; }
+}
+@media (max-width: 640px) {
+    .lottery-hero { padding: 16px; }
+    .lottery-cost { grid-template-columns: 1fr; }
+    .lottery-shop-item { grid-template-columns: 42px minmax(0, 1fr); }
+    .lottery-buy { grid-column: 1 / -1; width: 100%; }
+}
+
+/* ---- 抽奖页移动端：手机宽度下保证可读、可点、可抽 ---- */
+@media (max-width: 720px) {
+    .lottery-page .topbar {
+        display: grid; grid-template-columns: 1fr; gap: 10px;
+        padding: 12px; align-items: stretch;
+    }
+    .lottery-page .topbar::after { bottom: -2px; }
+    .lottery-page .season-info { min-width: 0; }
+    .lottery-page .season-name {
+        font-size: 22px; white-space: normal; overflow-wrap: anywhere;
+    }
+    .lottery-page .season-timer { font-size: 10px; }
+    .lottery-wallet {
+        width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px; order: 2;
+    }
+    .lottery-wallet span {
+        min-width: 0; padding: 7px 6px; text-align: center; font-size: 10px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .lottery-wallet b { display: block; margin: 2px 0 0; font-size: 15px; }
+    .lottery-page .user-block {
+        width: 100%; display: grid; grid-template-columns: 1fr 1fr .75fr; gap: 6px; order: 3;
+    }
+    .lottery-page .user-block .btn {
+        width: 100%; min-width: 0; min-height: 42px; padding: 8px 6px;
+        font-size: 11px; letter-spacing: .4px; white-space: normal; line-height: 1.15;
+    }
+    .lottery-page .content { padding: 14px 10px 24px; gap: 12px; }
+    .lottery-page #lottery-main,
+    .lottery-page .panel,
+    .lottery-hero,
+    .lottery-layout,
+    .lottery-pools,
+    .lottery-board,
+    .lottery-detail,
+    .lottery-result-panel,
+    .lottery-prizes-panel,
+    .lottery-bottom-grid,
+    .lottery-shop-panel,
+    .lottery-record-panel {
+        min-width: 0; max-width: 100%;
+    }
+    .lottery-alert { margin: 18px auto; }
+
+    .lottery-hero {
+        min-height: auto; gap: 12px; padding: 14px; overflow: hidden;
+        background:
+            linear-gradient(180deg, rgba(216,162,74,.16), rgba(22,23,15,.9) 46%, rgba(10,11,7,.94)),
+            repeating-linear-gradient(90deg, rgba(255,255,255,.03) 0 1px, transparent 1px 30px);
+    }
+    .lottery-kicker { font-size: 10px; letter-spacing: 1.2px; }
+    .lottery-hero h1 { font-size: clamp(28px, 12vw, 42px); line-height: 1; }
+    .lottery-hero p { font-size: 12px; line-height: 1.45; }
+    .lottery-broadcast { min-height: 34px; }
+    .broadcast-track { gap: 22px; padding: 0 12px; font-size: 11px; animation-duration: 22s; }
+
+    .lottery-layout, .lottery-bottom-grid { gap: 12px; margin-top: 12px; }
+    .lottery-pool-list {
+        width: 100%; min-width: 0; max-width: 100%;
+        display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 82vw);
+        overflow-x: auto; overflow-y: hidden; max-height: none;
+        scroll-snap-type: x mandatory; padding: 10px; -webkit-overflow-scrolling: touch;
+        overscroll-behavior-inline: contain; touch-action: pan-x pan-y;
+    }
+    .lottery-pool-card { scroll-snap-align: start; min-height: 116px; min-width: 0; }
+    .lottery-pool-name { font-size: 18px; overflow-wrap: anywhere; }
+
+    .lottery-detail-grid { padding: 10px; gap: 10px; }
+    .lottery-cover { min-height: 150px; aspect-ratio: 16 / 9; }
+    .lottery-cover.empty::after { font-size: 34px; letter-spacing: 2px; }
+    .lottery-cost span, .lottery-progress {
+        padding: 9px; font-size: 11px; line-height: 1.45;
+    }
+    .lottery-buttons {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+        position: sticky; bottom: 0; z-index: 20; padding: 8px 0;
+        background: linear-gradient(180deg, rgba(11,12,10,0), var(--bg) 28%);
+    }
+    .lottery-buttons .btn {
+        min-width: 0; width: 100%; min-height: 46px; padding: 10px 8px;
+        font-size: 13px; letter-spacing: .8px;
+    }
+    .lottery-empty { font-size: 12px; }
+
+    .openbox { min-height: 180px; }
+    .openbox-stage { width: 180px; height: 160px; }
+    .openbox-crate { width: 120px; height: 96px; }
+    .lottery-result { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
+    .lottery-result-card { min-height: 128px; padding: 9px; }
+    .lottery-result-icon { width: 48px; height: 48px; }
+    .lottery-result-icon img { max-width: 48px; max-height: 48px; }
+    .lottery-result-card strong { font-size: 12px; }
+
+    .lottery-prizes { grid-template-columns: 1fr; padding: 10px; gap: 7px; }
+    .lottery-prize {
+        grid-template-columns: 38px minmax(0, 1fr) minmax(54px, auto); gap: 8px; padding: 8px;
+    }
+    .lottery-prize-icon { width: 38px; height: 38px; }
+    .lottery-prize-icon img { max-width: 36px; max-height: 36px; }
+    .lottery-prize-body strong { font-size: 12px; }
+    .lottery-prob { font-size: 12px; }
+
+    .lottery-shop, .lottery-records {
+        max-height: none; overflow: visible; padding: 10px; gap: 7px;
+    }
+    .lottery-shop-item {
+        grid-template-columns: 42px minmax(0, 1fr); gap: 8px; padding: 9px;
+    }
+    .lottery-shop-icon { width: 42px; height: 42px; }
+    .lottery-shop-icon img { max-width: 40px; max-height: 40px; }
+    .lottery-buy {
+        grid-column: 1 / -1; width: 100%; min-height: 42px; margin-top: 2px;
+    }
+    .lottery-record { padding: 8px; }
+    .panel-head {
+        flex-wrap: wrap; gap: 8px; align-items: center;
+    }
+    .panel-head h2 { font-size: 17px; }
+}
+
+@media (max-width: 380px) {
+    .lottery-wallet { grid-template-columns: 1fr; }
+    .lottery-page .user-block { grid-template-columns: 1fr; }
+    .lottery-buttons { grid-template-columns: 1fr; }
+    .lottery-result { grid-template-columns: 1fr; }
+}

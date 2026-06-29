@@ -49,6 +49,7 @@ function showMain() {
     el('main-view').classList.remove('hidden');
     loadState();
     loadTasks();
+    loadShop();
 }
 
 // ---- 状态 / 奖励轨 ----
@@ -117,6 +118,10 @@ function rewardTypeLabel(r) {
         case 'purchaseright': return '商人购买权';
         case 'recipe': return '藏身处配方';
         case 'title': return '称号';
+        case 'clothing': return '服装';
+        case 'lotteryglobaltickets': return '通用抽奖券';
+        case 'lotterypooltickets': return '限定抽奖券';
+        case 'lotteryexchangecoins': return '抽奖兑换币';
         default: return '奖励';
     }
 }
@@ -288,10 +293,10 @@ function rewardCell(rewards, type, level, reached, claimed, premiumUnlocked) {
 
     // 奖励类型角标：区分「商人购买权」「藏身处配方」与普通直发物品
     const rtype = (main.type || 'item').toLowerCase();
-    if (rtype === 'purchaseright' || rtype === 'recipe') {
+    if (rtype !== 'item') {
         const badge = document.createElement('div');
         badge.className = 'rw-badge ' + rtype;
-        badge.textContent = rtype === 'purchaseright' ? '商人购买权' : '藏身处配方';
+        badge.textContent = rewardTypeLabel(main);
         cell.appendChild(badge);
     }
 
@@ -474,19 +479,113 @@ async function redeem() {
     if (r.success) { el('redeem-code').value = ''; loadState(); }
 }
 
+// ---- 通行证商店 ----
+const SHOP_ICON = '/battlepass/api/icons/';
+const SHOP_COLLAPSED = 8; // 默认只渲染前 N 件，其余点「展开更多」再渲染，避免一次性加载过多
+
+let shopItems = [];      // 当前商店全量商品（用于搜索/折叠）
+let shopExpanded = false; // 是否已展开全部
+let shopQuery = '';       // 搜索关键字
+
+async function loadShop() {
+    const box = el('shop-list');
+    if (!box) return;
+    const r = await api('/shop');
+    if (!r.success) { box.innerHTML = `<div class="muted">${esc(r.message || '加载失败')}</div>`; el('shop-more').style.display = 'none'; return; }
+    const nextEl = el('shop-next-refresh');
+    if (nextEl) {
+        const next = (r.catalog && r.catalog.nextRefreshUtc) || 0;
+        const left = next - Math.floor(Date.now() / 1000);
+        if (next > 0 && left > 0) {
+            const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60);
+            nextEl.textContent = `下次刷新 ${h > 0 ? h + ' 小时 ' : ''}${m} 分后`;
+        } else { nextEl.textContent = ''; }
+    }
+    shopItems = (r.catalog && r.catalog.items) || [];
+    shopExpanded = false; // 刷新后回到折叠态
+    renderShopList();
+}
+
+function renderShopList() {
+    const box = el('shop-list');
+    const more = el('shop-more');
+    if (!box) return;
+    if (!shopItems.length) { box.innerHTML = '<div class="muted">商店暂无商品</div>'; more.style.display = 'none'; return; }
+
+    const q = shopQuery.trim().toLowerCase();
+    const matched = q ? shopItems.filter(it => String(it.name || '').toLowerCase().includes(q)) : shopItems;
+    if (!matched.length) { box.innerHTML = '<div class="muted">没有匹配的商品</div>'; more.style.display = 'none'; return; }
+
+    // 搜索时展示全部命中；否则折叠到前 N 件，多出的靠「展开更多」加载
+    const collapsed = !q && !shopExpanded && matched.length > SHOP_COLLAPSED;
+    const shown = collapsed ? matched.slice(0, SHOP_COLLAPSED) : matched;
+    box.innerHTML = shown.map(shopCardHtml).join('');
+    box.querySelectorAll('.shop-buy').forEach(btn => { btn.onclick = () => buyShopItem(btn.dataset.id); });
+
+    if (collapsed) { more.style.display = ''; more.textContent = `展开更多（还有 ${matched.length - SHOP_COLLAPSED} 件）`; }
+    else { more.style.display = 'none'; }
+}
+
+function shopCardHtml(it) {
+    const costs = (it.costs || []).map(c => {
+        const enough = c.have >= c.count;
+        return `<span class="shop-cost ${enough ? '' : 'lack'}">${esc(c.name)} ${c.count}<small>（持有 ${c.have}）</small></span>`;
+    }).join('');
+    const qty = it.sellCount > 1 ? ` ×${it.sellCount}` : '';
+    const limit = it.buyLimit > 0 ? `<span class="shop-limit">限购 ${it.bought}/${it.buyLimit}</span>` : '';
+    const stock = it.stock > 0 ? `<span class="shop-limit">库存 ${it.stock}</span>` : '';
+    const badges = (limit || stock) ? `<div class="shop-badges">${limit}${stock}</div>` : '';
+    const disabled = !!it.error || it.soldOut || !it.affordable;
+    const label = it.error || (it.soldOut ? '已售罄' : (it.affordable ? '购买' : '货币不足'));
+    return `<div class="shop-card">
+        <img class="shop-icon" src="${SHOP_ICON}${esc(it.tpl)}" alt="" onerror="this.style.display='none'" />
+        <div class="shop-body">
+            <div class="shop-name">${esc(it.name)}${qty}</div>
+            ${badges}
+            <div class="shop-costs">${costs || '<span class="shop-cost">免费</span>'}</div>
+        </div>
+        <button class="btn primary small shop-buy" data-id="${esc(it.id)}"${disabled ? ' disabled' : ''}>${label}</button>
+    </div>`;
+}
+
+async function buyShopItem(id) {
+    const r = await api('/shop/buy', 'POST', { offerId: id });
+    toast(r.message || (r.success ? '购买成功' : '购买失败'), r.success);
+    if (r.success) loadShop();
+}
+
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // ---- 绑定 ----
 el('login-btn').onclick = doLogin;
 el('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 el('logout-btn').onclick = logout;
+
+// ---- 兑换激活码弹窗 ----
+function openRedeem() { el('redeem-msg').textContent = ''; el('redeem-msg').className = 'msg'; el('redeem-overlay').classList.remove('hidden'); el('redeem-code').focus(); }
+function closeRedeem() { el('redeem-overlay').classList.add('hidden'); }
+el('redeem-entry').onclick = openRedeem;
+el('redeem-close').onclick = closeRedeem;
+el('redeem-overlay').addEventListener('click', e => { if (e.target === el('redeem-overlay')) closeRedeem(); });
 el('redeem-btn').onclick = redeem;
+el('redeem-code').addEventListener('keydown', e => { if (e.key === 'Enter') redeem(); });
+
+// ---- 商店搜索 / 展开更多 ----
+if (el('shop-search')) {
+    let shopTimer = 0;
+    el('shop-search').addEventListener('input', e => {
+        clearTimeout(shopTimer);
+        shopTimer = setTimeout(() => { shopQuery = e.target.value; renderShopList(); }, 180);
+    });
+}
+if (el('shop-more')) el('shop-more').onclick = () => { shopExpanded = true; renderShopList(); };
 el('refresh-daily').onclick = () => refreshScope('daily');
 el('refresh-weekly').onclick = () => refreshScope('weekly');
 el('refresh-season').onclick = () => refreshScope('season');
 el('cycle-free-all').onclick = () => claimAllCycle('free');
 el('cycle-premium-all').onclick = () => claimAllCycle('premium');
 el('compensation-btn').onclick = claimCompensation;
+if (el('shop-refresh')) el('shop-refresh').onclick = loadShop;
 window.addEventListener('resize', applyTaskDisplayLimit);
 
 if (TOKEN) { showMain(); }
