@@ -8,19 +8,19 @@ namespace SPTarkov.Server.Core.BattlePass;
 //  落盘目录：SPT_Data/battlepass/*.json（详见 BattlePassStore）。
 // ============================================================================
 
-/// <summary>单个奖励项：物品模板 + 数量。发奖时转换为 core 的 Item 列表经邮件发放。</summary>
+/// <summary>单个奖励项：物品模板 / 权益 / 抽奖资源。发奖时按 <see cref="Type"/> 分流。</summary>
 public record BpReward
 {
     /// <summary>
     ///     物品模板 id（tpl，例如卢布 5449016a4bdc2d6f028b456f）。
-    ///     仅 type=item 必填；purchaseRight/recipe/title 等非实物奖励为空。
+    ///     仅 type=item 必填；purchaseRight/recipe/title/clothing 等非实物奖励为空。
     ///     必须可空——否则在 Nullable 开启下 [ApiController] 会把非空 string 视为隐式 [Required]，
     ///     非物品奖励提交 tpl=null 时整批 tracks 保存被判 400（前端只见红色「保存失败」）。
     /// </summary>
     [JsonPropertyName("tpl")]
     public string? Tpl { get; set; } = "";
 
-    /// <summary>数量（可堆叠物品为堆叠数）。</summary>
+    /// <summary>数量（可堆叠物品为堆叠数；抽奖券/兑换币为发放数量）。</summary>
     [JsonPropertyName("count")]
     public int Count { get; set; } = 1;
 
@@ -43,6 +43,10 @@ public record BpReward
     ///       <item><c>purchaseRight</c>：解锁「可在通行证商人处购买某商品」，领取后把 <see cref="OfferId"/> 对应货架项放出给该玩家。</item>
     ///       <item><c>recipe</c>：直接解锁藏身处制造配方（不经商人），<see cref="RecipeId"/> = production id。</item>
     ///       <item><c>title</c>：领取后解锁一个称号（见 <see cref="TitleId"/>），不动游戏档案。</item>
+    ///       <item><c>clothing</c>：直接解锁一件服装（见 <see cref="SuitId"/>），写入玩家 CustomisationUnlocks。</item>
+    ///       <item><c>lotteryGlobalTickets</c>：发放通用抽奖券，数量取 <see cref="Count"/>。</item>
+    ///       <item><c>lotteryPoolTickets</c>：发放奖池限定抽奖券，奖池取 <see cref="PoolId"/>，数量取 <see cref="Count"/>。</item>
+    ///       <item><c>lotteryExchangeCoins</c>：发放抽奖兑换币，数量取 <see cref="Count"/>。</item>
     ///     </list>
     /// </summary>
     [JsonPropertyName("type")]
@@ -59,6 +63,14 @@ public record BpReward
     /// <summary>type=title 时要授予的称号 id（见 <see cref="BpTitle.Id"/>）。</summary>
     [JsonPropertyName("titleId")]
     public string? TitleId { get; set; }
+
+    /// <summary>type=clothing 时要授予的服装 suite id / customization id。</summary>
+    [JsonPropertyName("suitId")]
+    public string? SuitId { get; set; }
+
+    /// <summary>type=lotteryPoolTickets 时绑定的奖池 id。</summary>
+    [JsonPropertyName("poolId")]
+    public string? PoolId { get; set; }
 }
 
 /// <summary>某一等级的双轨奖励。</summary>
@@ -161,6 +173,28 @@ public record BpSeason
     /// <summary>玩家每个刷新周期内可主动刷新「赛季」任务的免费次数（&lt;=0 = 不允许主动刷新）。</summary>
     [JsonPropertyName("seasonRefreshLimit")]
     public int SeasonRefreshLimit { get; set; }
+
+    // ===== 难度预算随机投放（WeekendDrops 式）：开启后该 scope 不再单纯按数量抽，而是抽一组难度之和=预算的任务 =====
+
+    /// <summary>每日任务是否启用「难度预算」投放（关闭=按 <see cref="DailyTaskCount"/> 数量抽）。</summary>
+    [JsonPropertyName("dailyBudgetEnabled")]
+    public bool DailyBudgetEnabled { get; set; }
+
+    /// <summary>每日难度预算（抽出的任务难度之和目标；配合 <see cref="DailyTaskCount"/> 张数）。</summary>
+    [JsonPropertyName("dailyDifficultyBudget")]
+    public int DailyDifficultyBudget { get; set; } = 4;
+
+    [JsonPropertyName("weeklyBudgetEnabled")]
+    public bool WeeklyBudgetEnabled { get; set; }
+
+    [JsonPropertyName("weeklyDifficultyBudget")]
+    public int WeeklyDifficultyBudget { get; set; } = 6;
+
+    [JsonPropertyName("seasonBudgetEnabled")]
+    public bool SeasonBudgetEnabled { get; set; }
+
+    [JsonPropertyName("seasonDifficultyBudget")]
+    public int SeasonDifficultyBudget { get; set; } = 12;
 
     /// <summary>返回升到 <paramref name="level"/>（从 level-1 升上来）所需经验。level 从 2 起。</summary>
     public int XpToReach(int level)
@@ -321,6 +355,114 @@ public record BpTaskTemplate
     /// </summary>
     [JsonPropertyName("singleRaid")]
     public bool SingleRaid { get; set; }
+
+    /// <summary>
+    ///     难度（1=易 / 2=中 / 3=难）。用于「难度预算」随机投放：每周期从池中抽一组任务，其难度之和=该 scope 的预算
+    ///     （见 <see cref="BpSeason.DailyDifficultyBudget"/> 等）。手写任务与生成任务都带此值；预算模式关闭时仅作展示。
+    /// </summary>
+    [JsonPropertyName("difficulty")]
+    public int Difficulty { get; set; } = 1;
+
+    /// <summary>
+    ///     奖励兑现方式：<c>xp</c>（默认，完成记 BP 经验）| <c>items</c>（只发 <see cref="Rewards"/> 列表）| <c>both</c>（两者都给）。
+    ///     空值按 xp 处理，兼容旧任务数据。
+    /// </summary>
+    [JsonPropertyName("rewardMode")]
+    public string RewardMode { get; set; } = "xp";
+
+    /// <summary>
+    ///     任务自带奖励（<see cref="RewardMode"/>=items/both 时发放）。复用等级奖励同款 <see cref="BpReward"/>，
+    ///     支持 item（含 GP 币等任意 tpl）/ purchaseRight / recipe / title / clothing / 抽奖资源全类型。
+    /// </summary>
+    [JsonPropertyName("rewards")]
+    public List<BpReward>? Rewards { get; set; }
+}
+
+/// <summary>
+///     单个 scope 的任务自动/手动生成规格。生成的任务以 <c>gen_</c> 前缀写入共享任务池，
+///     重新生成时只替换本前缀任务、不动管理员手写任务。仅生成无需策划物品的类型（Kills / Exploration），
+///     物品/区域类任务仍由管理员手写。
+/// </summary>
+public record BpGenScopeSpec
+{
+    /// <summary>是否参与生成（手动一键生成与自动生成都受此开关控制）。</summary>
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    /// <summary>该 scope 生成的任务条数（写入共享池的模板数；玩家各自从中随机抽取活跃子集）。</summary>
+    [JsonPropertyName("count")]
+    public int Count { get; set; } = 3;
+
+    /// <summary>自动重新生成周期（小时）。&lt;=0 = 仅手动生成，不自动刷新池内容。</summary>
+    [JsonPropertyName("autoPeriodHours")]
+    public double AutoPeriodHours { get; set; }
+
+    /// <summary>允许生成的条件类型（当前支持 Kills / Exploration）。</summary>
+    [JsonPropertyName("conditionTypes")]
+    public List<string> ConditionTypes { get; set; } = new() { "Kills", "Exploration" };
+
+    /// <summary>Kills 任务可选的目标阵营池（Any / Savage / AnyPmc / Bear / Usec / Boss）。</summary>
+    [JsonPropertyName("killTargets")]
+    public List<string> KillTargets { get; set; } = new() { "Any", "Savage", "AnyPmc" };
+
+    /// <summary>可选地图池（EFT 内部地图 id；空 = 不限地图）。</summary>
+    [JsonPropertyName("locations")]
+    public List<string> Locations { get; set; } = new();
+
+    /// <summary>目标次数下限（难度 1 基准）。</summary>
+    [JsonPropertyName("minCount")]
+    public int MinCount { get; set; } = 2;
+
+    /// <summary>目标次数上限（难度 3 缩放到此）。</summary>
+    [JsonPropertyName("maxCount")]
+    public int MaxCount { get; set; } = 8;
+
+    /// <summary>难度 1/2/3 对应的 BP 经验。</summary>
+    [JsonPropertyName("xpEasy")]
+    public int XpEasy { get; set; } = 300;
+
+    [JsonPropertyName("xpMed")]
+    public int XpMed { get; set; } = 600;
+
+    [JsonPropertyName("xpHard")]
+    public int XpHard { get; set; } = 1000;
+
+    /// <summary>上次生成的 Unix 秒（自动生成按此与 <see cref="AutoPeriodHours"/> 判周期）。</summary>
+    [JsonPropertyName("lastGenUtc")]
+    public long LastGenUtc { get; set; }
+}
+
+/// <summary>任务生成总规格（三 scope 各一份）。存于 task-gen.json。</summary>
+public record BpGenSpec
+{
+    [JsonPropertyName("daily")]
+    public BpGenScopeSpec Daily { get; set; } = new();
+
+    [JsonPropertyName("weekly")]
+    public BpGenScopeSpec Weekly { get; set; } = new();
+
+    [JsonPropertyName("season")]
+    public BpGenScopeSpec Season { get; set; } = new();
+}
+
+/// <summary>网页商店全局销量账本 + 刷新周期。库存配置保留在 offer，销量独立持久化，避免把 stock=0（无限）误作售罄。</summary>
+public record BpShopState
+{
+    /// <summary>来源化 offer key（custom:id / trader:id）→ 已售次数。</summary>
+    [JsonPropertyName("sales")]
+    public Dictionary<string, int> Sales { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>商品刷新周期（秒，&lt;=0 = 不刷新，库存与限购按终身累计）。管理后台可设置。</summary>
+    [JsonPropertyName("refreshSeconds")]
+    public int RefreshSeconds { get; set; }
+
+    /// <summary>本刷新周期的起始时间（Unix 秒）。now &gt;= periodStartUtc + refreshSeconds 时滚动到下一周期。</summary>
+    [JsonPropertyName("periodStartUtc")]
+    public long PeriodStartUtc { get; set; }
+
+    /// <summary>刷新代次：每滚动一个周期 +1。玩家进度 <see cref="BpProgress.ShopEpoch"/> 落后时清零其限购计数。</summary>
+    [JsonPropertyName("epoch")]
+    public int Epoch { get; set; }
 }
 
 /// <summary>激活码。type=premium 解锁付费轨；type=levels 直升 value 级。</summary>
@@ -340,6 +482,30 @@ public record BpActivationCode
     /// <summary>批次标签（便于管理员分发归类）。</summary>
     [JsonPropertyName("batchTag")]
     public string? BatchTag { get; set; }
+
+    /// <summary>type=lotteryPoolTickets 时绑定的奖池 id。</summary>
+    [JsonPropertyName("poolId")]
+    public string? PoolId { get; set; }
+
+    /// <summary>过期 Unix 秒；0 = 不过期。</summary>
+    [JsonPropertyName("expiresUtc")]
+    public long ExpiresUtc { get; set; }
+
+    /// <summary>总兑换次数上限；&lt;=0 按旧版单次码处理。</summary>
+    [JsonPropertyName("maxRedemptions")]
+    public int MaxRedemptions { get; set; } = 1;
+
+    /// <summary>是否每个玩家最多兑换一次。</summary>
+    [JsonPropertyName("perPlayerOnce")]
+    public bool PerPlayerOnce { get; set; } = true;
+
+    /// <summary>已兑换次数。</summary>
+    [JsonPropertyName("redeemCount")]
+    public int RedeemCount { get; set; }
+
+    /// <summary>多次/通用码的兑换玩家列表。</summary>
+    [JsonPropertyName("redeemedProfileIds")]
+    public HashSet<string> RedeemedProfileIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     [JsonPropertyName("createdUtc")]
     public long CreatedUtc { get; set; }
@@ -470,6 +636,14 @@ public record BpProgress
     /// </summary>
     [JsonPropertyName("currentRaidApplied")]
     public Dictionary<string, int> CurrentRaidApplied { get; set; } = new();
+
+    /// <summary>网页商店各 offer 的累计购买次数（offerId → 已购次数），用于按 <see cref="BpTraderOffer.BuyLimit"/> 限购。跨赛季随进度重置。</summary>
+    [JsonPropertyName("shopPurchases")]
+    public Dictionary<string, int> ShopPurchases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>本玩家限购计数所属的商店刷新代次。落后于 <see cref="BpShopState.Epoch"/> 时清空 <see cref="ShopPurchases"/>。</summary>
+    [JsonPropertyName("shopEpoch")]
+    public int ShopEpoch { get; set; }
 }
 
 // ============================================================================
@@ -585,6 +759,10 @@ public record BpTraderOffer
     /// <summary>以物易物价格（同一组内多项需同时支付；为空 = 免费 0 价）。</summary>
     [JsonPropertyName("cost")]
     public List<BpBarterCost> Cost { get; set; } = new();
+
+    /// <summary>网页商店单次购买发放的数量（堆叠物品如 GP 币/卢布 &gt;1 才有意义）。&lt;=0 视为 1。游戏内商人货架不读此字段。</summary>
+    [JsonPropertyName("sellCount")]
+    public int SellCount { get; set; } = 1;
 }
 
 /// <summary>商人自身可配置元信息（名称/昵称/介绍/货币/头像等）。</summary>

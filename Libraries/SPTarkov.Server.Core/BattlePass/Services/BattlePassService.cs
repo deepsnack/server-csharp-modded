@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
+using SPTarkov.Server.Core.Models.Eft.Ws;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
@@ -17,8 +18,11 @@ namespace SPTarkov.Server.Core.BattlePass;
 public class BattlePassService(
     SaveServer saveServer,
     BattlePassRewardService rewardService,
+    LotteryWalletService lotteryWalletService,
+    DatabaseService databaseService,
     ProfileHelper profileHelper,
     PasswordStoreService passwordStoreService,
+    NotificationSendHelper notificationSendHelper,
     ISptLogger<BattlePassService> logger
 )
 {
@@ -91,8 +95,13 @@ public class BattlePassService(
         }
 
         var sessionId = new MongoId(profileId);
-        return saveServer.GetProfiles().TryGetValue(sessionId, out var profile)
-            ? profile.CharacterData?.PmcData?.Info?.Nickname
+        if (saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
+        {
+            return profile.CharacterData?.PmcData?.Info?.Nickname;
+        }
+
+        return saveServer.LazyEnabled && saveServer.GetLazyHeaders().TryGetValue(sessionId, out var header)
+            ? header.Nickname
             : null;
     }
 
@@ -114,6 +123,38 @@ public class BattlePassService(
         }
 
         return ids.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>后台发放/搜索玩家：返回有 PMC 昵称的真实档案（排除空存档与 headless 无头主机），可按账号名/游戏昵称模糊过滤。</summary>
+    public List<object> SearchRealPlayers(string? query)
+    {
+        var q = query?.Trim();
+        var list = new List<object>();
+        foreach (var pid in ListProfileIds())
+        {
+            var username = GetUsername(pid);
+            if (IsHeadlessUsername(username))
+            {
+                continue;
+            }
+
+            var nickname = GetNickname(pid);
+            if (string.IsNullOrWhiteSpace(nickname))
+            {
+                continue; // 空存档：账号已建但未创建 PMC
+            }
+
+            if (!string.IsNullOrEmpty(q)
+                && !(username?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                && !nickname.Contains(q, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            list.Add(new { profileId = pid, username, nickname });
+        }
+
+        return list;
     }
 
     /// <summary>
@@ -549,15 +590,82 @@ public class BattlePassService(
     }
 
     /// <summary>
-    ///     发放一组奖励（按类型分流：item 邮寄；purchaseRight 解锁商人货架；recipe 解锁配方；title 解锁称号），
+    ///     统一结算一条任务的完成奖励：按 <see cref="BpTaskTemplate.RewardMode"/> 记 BP 经验 / 发任务自带奖励
+    ///     （item/purchaseRight/recipe/title/clothing/抽奖资源，复用 <see cref="GrantRewardList"/>）/ 两者。
+    ///     <b>不</b>置位 <c>active.CreditedXp</c>（由各调用方按自身幂等流程负责），返回本次入账的 BP 经验。
+    /// </summary>
+    public int CreditTaskCompletion(string profileId, BpProgress progress, BpSeason season, BpTaskTemplate template)
+    {
+        var mode = (template.RewardMode ?? "xp").Trim().ToLowerInvariant();
+        if (mode is not ("xp" or "items" or "both"))
+        {
+            mode = "xp";
+        }
+
+        var grantsXp = mode.Length == 0 || mode is "xp" or "both";
+        var grantsItems = mode is "items" or "both";
+
+        var gainedXp = 0;
+        if (grantsXp)
+        {
+            gainedXp = template.Xp;
+            if (progress.PremiumUnlocked && season.PremiumXpMultiplier > 1.0)
+            {
+                gainedXp = (int)Math.Round(gainedXp * season.PremiumXpMultiplier);
+            }
+
+            AddXp(progress, season, gainedXp); // 仅记 BP 经验，不动角色经验
+        }
+
+        if (grantsItems && template.Rewards is { Count: > 0 })
+        {
+            GrantRewardList(profileId, progress, template.Rewards, $"通行证任务奖励：{template.Title}");
+        }
+
+        return gainedXp;
+    }
+
+    /// <summary>
+    ///     发放一组奖励（按类型分流：item 邮寄；purchaseRight 解锁商人货架；recipe 解锁配方；title 解锁称号；clothing 解锁服装；抽奖资源入钱包），
     ///     必要时持久化游戏档案。返回展示消息。等级奖励与循环奖励共用。
     /// </summary>
+    public string GrantRewards(string profileId, BpProgress progress, List<BpReward> rewards, string mailMessage)
+    {
+        return GrantRewardList(profileId, progress, rewards, mailMessage);
+    }
+
+    /// <summary>判定玩家是否已拥有某个唯一性奖励；item 永远视为未拥有。</summary>
+    public bool HasReward(string profileId, BpProgress progress, BpReward reward)
+    {
+        switch ((reward.Type ?? "item").Trim().ToLowerInvariant())
+        {
+            case "purchaseright":
+                return !string.IsNullOrWhiteSpace(reward.OfferId)
+                    && BattlePassPurchaseRights.Has(progress, reward.OfferId.Trim());
+            case "recipe":
+                return !string.IsNullOrWhiteSpace(reward.RecipeId)
+                    && HasRecipe(profileId, reward.RecipeId.Trim());
+            case "title":
+                return !string.IsNullOrWhiteSpace(reward.TitleId)
+                    && BattlePassStore.GetPlayerTitles(profileId).Owned.Contains(reward.TitleId.Trim());
+            case "clothing":
+                return !string.IsNullOrWhiteSpace(reward.SuitId)
+                    && HasClothing(profileId, reward.SuitId.Trim());
+            default:
+                return false;
+        }
+    }
+
     private string GrantRewardList(string profileId, BpProgress progress, List<BpReward> rewards, string mailMessage)
     {
         var itemRewards = new List<BpReward>();
         var unlockedOffers = 0;
         var unlockedRecipes = 0;
         var unlockedTitles = 0;
+        var unlockedClothing = 0;
+        var grantedGlobalTickets = 0;
+        var grantedPoolTickets = 0;
+        var grantedExchangeCoins = 0;
         var skippedOwnedEntitlements = 0;
         var profileTouched = false;
 
@@ -609,6 +717,43 @@ public class BattlePassService(
                         }
                     }
                     break;
+                case "clothing":
+                    if (!string.IsNullOrWhiteSpace(r.SuitId))
+                    {
+                        var suitId = r.SuitId.Trim();
+                        if (HasClothing(profileId, suitId))
+                        {
+                            skippedOwnedEntitlements++;
+                        }
+                        else if (UnlockClothing(profileId, suitId))
+                        {
+                            unlockedClothing++;
+                            profileTouched = true;
+                        }
+                    }
+                    break;
+                case "lotteryglobaltickets":
+                    {
+                        var amount = Math.Max(1, r.Count);
+                        lotteryWalletService.Grant(profileId, globalTickets: amount);
+                        grantedGlobalTickets += amount;
+                        break;
+                    }
+                case "lotterypooltickets":
+                    if (!string.IsNullOrWhiteSpace(r.PoolId))
+                    {
+                        var amount = Math.Max(1, r.Count);
+                        lotteryWalletService.Grant(profileId, poolId: r.PoolId.Trim(), poolTickets: amount);
+                        grantedPoolTickets += amount;
+                    }
+                    break;
+                case "lotteryexchangecoins":
+                    {
+                        var amount = Math.Max(1, r.Count);
+                        lotteryWalletService.Grant(profileId, exchangeCoins: amount);
+                        grantedExchangeCoins += amount;
+                        break;
+                    }
                 default:
                     itemRewards.Add(r);
                     break;
@@ -641,6 +786,22 @@ public class BattlePassService(
         if (unlockedTitles > 0)
         {
             parts.Add($"已解锁 {unlockedTitles} 个称号");
+        }
+        if (unlockedClothing > 0)
+        {
+            parts.Add($"已解锁 {unlockedClothing} 件服装");
+        }
+        if (grantedGlobalTickets > 0)
+        {
+            parts.Add($"已发放 {grantedGlobalTickets} 张通用抽奖券");
+        }
+        if (grantedPoolTickets > 0)
+        {
+            parts.Add($"已发放 {grantedPoolTickets} 张限定抽奖券");
+        }
+        if (grantedExchangeCoins > 0)
+        {
+            parts.Add($"已发放 {grantedExchangeCoins} 枚抽奖兑换币");
         }
         if (skippedOwnedEntitlements > 0)
         {
@@ -685,7 +846,62 @@ public class BattlePassService(
         return pmc?.UnlockedInfo?.UnlockedProductionRecipe?.Contains(new MongoId(recipeId)) == true;
     }
 
-    /// <summary>持久化游戏档案（配方修改了 PMC 档案，需落盘以跨重启保留）。</summary>
+    /// <summary>直接解锁一件服装（写入 CustomisationUnlocks，等价于已购买该 suite）。</summary>
+    private bool UnlockClothing(string profileId, string suitId)
+    {
+        if (!MongoId.IsValidMongoId(profileId) || !MongoId.IsValidMongoId(suitId))
+        {
+            return false;
+        }
+
+        var sessionId = new MongoId(profileId);
+        var sid = new MongoId(suitId);
+        var profile = saveServer.GetProfile(sessionId);
+        if (profile is null || !databaseService.GetCustomization().ContainsKey(sid))
+        {
+            return false;
+        }
+
+        profile.CustomisationUnlocks ??= [];
+        if (profile.CustomisationUnlocks.Any(customisation => customisation.Id == sid))
+        {
+            return false;
+        }
+
+        profile.CustomisationUnlocks.Add(
+            new CustomisationStorage
+            {
+                Id = sid,
+                Source = CustomisationSource.UNLOCKED_IN_GAME,
+                Type = CustomisationType.SUITE,
+            }
+        );
+
+        notificationSendHelper.SendMessage(
+            sessionId,
+            new WsNotificationEvent
+            {
+                EventIdentifier = new MongoId(),
+                EventType = NotificationEventType.CustomizationUpdateRequired,
+            }
+        );
+
+        return true;
+    }
+
+    private bool HasClothing(string profileId, string suitId)
+    {
+        if (!MongoId.IsValidMongoId(profileId) || !MongoId.IsValidMongoId(suitId))
+        {
+            return false;
+        }
+
+        var profile = saveServer.GetProfile(new MongoId(profileId));
+        var sid = new MongoId(suitId);
+        return profile?.CustomisationUnlocks?.Any(customisation => customisation.Id == sid) == true;
+    }
+
+    /// <summary>持久化游戏档案（配方/服装修改了玩家档案，需落盘以跨重启保留）。</summary>
     private void PersistProfile(string profileId)
     {
         try

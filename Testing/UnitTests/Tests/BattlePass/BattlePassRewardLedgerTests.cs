@@ -72,6 +72,53 @@ public class BattlePassRewardLedgerTests
         Assert.That(BattlePassRewardLedger.GetPending(progress, tracks), Is.Empty);
     }
 
+    [Test]
+    public void GetPending_TracksLotteryResourceRewardsByResourceIdentity()
+    {
+        var progress = new BpProgress { ClaimedFree = [1] };
+        var tracks = new Dictionary<int, BpLevelRewards>
+        {
+            [1] = new()
+            {
+                Free =
+                [
+                    new BpReward { Type = "lotteryGlobalTickets", Count = 1 },
+                    new BpReward { Type = "lotteryPoolTickets", PoolId = "pool_alpha", Count = 1 },
+                    new BpReward { Type = "lotteryExchangeCoins", Count = 10 },
+                ],
+            },
+        };
+        BattlePassRewardLedger.InitializeBaseline(progress, tracks);
+
+        tracks[1].Free.Add(new BpReward { Type = "lotteryGlobalTickets", Count = 99 });
+        tracks[1].Free.Add(new BpReward { Type = "lotteryPoolTickets", PoolId = "pool_alpha", Count = 5 });
+        tracks[1].Free.Add(new BpReward { Type = "lotteryPoolTickets", PoolId = "pool_beta", Count = 5 });
+
+        var pending = BattlePassRewardLedger.GetPending(progress, tracks);
+
+        Assert.That(pending, Has.Count.EqualTo(1));
+        Assert.That(pending.Single().Reward.PoolId, Is.EqualTo("pool_beta"));
+    }
+
+    [Test]
+    public void GetPending_TracksClothingRewardsBySuitId()
+    {
+        var progress = new BpProgress { ClaimedFree = [1] };
+        var tracks = new Dictionary<int, BpLevelRewards>
+        {
+            [1] = new() { Free = [new BpReward { Type = "clothing", SuitId = "aaaaaaaaaaaaaaaaaaaaaaaa" }] },
+        };
+        BattlePassRewardLedger.InitializeBaseline(progress, tracks);
+
+        tracks[1].Free.Add(new BpReward { Type = "clothing", SuitId = "aaaaaaaaaaaaaaaaaaaaaaaa", Name = "重命名服装" });
+        tracks[1].Free.Add(new BpReward { Type = "clothing", SuitId = "bbbbbbbbbbbbbbbbbbbbbbbb" });
+
+        var pending = BattlePassRewardLedger.GetPending(progress, tracks);
+
+        Assert.That(pending, Has.Count.EqualTo(1));
+        Assert.That(pending.Single().Reward.SuitId, Is.EqualTo("bbbbbbbbbbbbbbbbbbbbbbbb"));
+    }
+
     private static BpReward Item(string tpl, int count = 1) => new()
     {
         Type = "item",

@@ -23,10 +23,18 @@ namespace SPTarkov.Server.Core.BattlePass.ItemControl;
 public class ItemControlSync(
     DatabaseService databaseService,
     ItemAcquisitionMaskService maskService,
+    BattlePassItemBuilder itemBuilder,
     ISptLogger<ItemControlSync> logger
 ) : IOnLoad
 {
     private bool _lootHooked;
+
+    // 已注入项追踪：单例存活，进程内记录每条 add override 注入了哪些 DB 条目，
+    // 以便撤销（override 被删）时即时从内存 DB 移除——无需重启。重启后字段为空、DB 也是干净的，重放自然对齐。
+    private readonly Dictionary<MongoId, HashSet<MongoId>> _injTrader = new(); // traderId -> 注入的货架 rootId
+    private readonly Dictionary<MongoId, HashSet<MongoId>> _injQuest = new(); // questId -> 注入的 rewardId
+    private readonly HashSet<MongoId> _injRecipe = new(); // 注入的 output 配方 id
+    private readonly Dictionary<MongoId, HashSet<MongoId>> _injIngredient = new(); // recipeId -> 注入的原料 tpl
 
     public Task OnLoad()
     {
@@ -34,7 +42,11 @@ public class ItemControlSync(
         return Task.CompletedTask;
     }
 
-    /// <summary>应用全部 override（幂等）。结构类即时改 DB；战利品类靠已注册的 transformer 实时生效。</summary>
+    /// <summary>
+    ///     全量对账式应用 add override（持久且可即时撤销）：以当前 override 为唯一真源，
+    ///     注入缺失项、移除已撤销（override 已删）的注入项——撤销立即从内存 DB 消失，无需重启。
+    ///     remove 类走服务期屏蔽（<see cref="ItemAcquisitionMaskService"/>）；战利品类靠 transformer 实时生效。
+    /// </summary>
     public void Sync()
     {
         try
@@ -42,34 +54,15 @@ public class ItemControlSync(
             var overrides = BattlePassStore.GetItemOverrides();
             HookLootTransformers(); // 仅首次真正注册
 
-            // 最小破坏原则：仅 add 类直接注入内存 DB（无中生有，无法服务期实现）；
-            // remove 类一律改走服务期屏蔽（见 ItemAcquisitionMaskService），不再破坏式删 DB。
-            foreach (var ov in overrides)
-            {
-                if (ov.Op != "add" || !MongoIdEx.TryParse(ov.Tpl, out var tpl))
-                {
-                    continue;
-                }
-
-                switch (ov.Source)
-                {
-                    case AcqSource.Trader:
-                        ApplyTrader(ov, tpl);
-                        break;
-                    case AcqSource.Quest:
-                        ApplyQuest(ov, tpl);
-                        break;
-                    case AcqSource.Hideout:
-                        ApplyHideout(ov, tpl);
-                        break;
-                    // startInv 仅支持 remove（服务期屏蔽）；loot 由 transformer 处理
-                }
-            }
+            var adds = overrides.Where(o => o.Op == "add").ToList();
+            ReconcileTraders(adds);
+            ReconcileQuests(adds);
+            ReconcileHideout(adds);
 
             // remove 索引重建：商人/任务/藏身处/初始库存的移除在各 serve 链路即时生效（克隆后过滤，不动 DB）
             maskService.Rebuild();
 
-            logger.Success($"[SPT-BattlePass] 物品获取 override 已应用（共 {overrides.Count} 条；remove 走服务期屏蔽）。");
+            logger.Success($"[SPT-BattlePass] 物品获取 override 已对账应用（共 {overrides.Count} 条；add 注入/撤销即时，remove 走服务期屏蔽）。");
         }
         catch (Exception ex)
         {
@@ -77,106 +70,186 @@ public class ItemControlSync(
         }
     }
 
-    // ---- 商人 ----
-    private void ApplyTrader(BpItemOverride ov, MongoId tpl)
+    // ---- 商人：对账 ----
+    private void ReconcileTraders(List<BpItemOverride> adds)
     {
-        if (string.IsNullOrWhiteSpace(ov.TraderId) || !MongoIdEx.TryParse(ov.TraderId, out var traderId))
+        // 期望态：traderId -> { rootId -> override }
+        var desired = new Dictionary<MongoId, Dictionary<MongoId, BpItemOverride>>();
+        foreach (var ov in adds.Where(o => o.Source == AcqSource.Trader))
         {
-            return;
-        }
-
-        if (!databaseService.GetTables().Traders.TryGetValue(traderId, out var trader) || trader.Assort is null)
-        {
-            return;
-        }
-
-        var assort = trader.Assort;
-        assort.Items ??= new List<Item>();
-
-        // 仅处理 add（remove 改走服务期屏蔽，见 ItemAcquisitionMaskService）
-        {
-            var rootId = DeterministicId($"{ov.TraderId}:{ov.Tpl}", "bp-itemctrl-trader");
-            if (assort.Items.Any(i => i.Id == rootId))
+            if (!MongoIdEx.TryParse(ov.Tpl, out _) || !MongoIdEx.TryParse(ov.TraderId, out var traderId))
             {
-                return; // 幂等
+                continue;
             }
 
-            assort.Items.Add(new Item
-            {
-                Id = rootId,
-                Template = tpl,
-                ParentId = "hideout",
-                SlotId = "hideout",
-                Upd = new Upd { StackObjectsCount = 999_999, UnlimitedCount = true },
-            });
+            var rootId = DeterministicId($"{ov.TraderId}:{ov.Tpl}", "bp-itemctrl-trader");
+            (desired.TryGetValue(traderId, out var map) ? map : desired[traderId] = new())[rootId] = ov;
+        }
 
-            var scheme = new List<BarterScheme>();
-            foreach (var c in ov.Cost ?? new List<BpItemCost>())
+        foreach (var traderId in _injTrader.Keys.Concat(desired.Keys).Distinct().ToList())
+        {
+            if (!databaseService.GetTables().Traders.TryGetValue(traderId, out var trader) || trader.Assort is null)
             {
-                if (MongoIdEx.TryParse(c.Tpl, out var ctpl) && c.Count > 0)
+                continue;
+            }
+
+            var assort = trader.Assort;
+            assort.Items ??= new List<Item>();
+            var want = desired.TryGetValue(traderId, out var m) ? m : new Dictionary<MongoId, BpItemOverride>();
+            var have = _injTrader.TryGetValue(traderId, out var h) ? h : new HashSet<MongoId>();
+
+            // 撤销：移除已不在期望态的注入货架（含子件/价格/忠诚）
+            foreach (var stale in have.Where(id => !want.ContainsKey(id)).ToList())
+            {
+                RemoveTraderRoot(assort, stale);
+            }
+
+            // 注入缺失
+            foreach (var (rootId, ov) in want)
+            {
+                if (MongoIdEx.TryParse(ov.Tpl, out var tpl) && assort.Items.All(i => i.Id != rootId))
                 {
-                    scheme.Add(new BarterScheme { Template = ctpl, Count = c.Count });
+                    InjectTraderItem(assort, ov, tpl, rootId);
                 }
             }
 
-            assort.BarterScheme ??= new Dictionary<MongoId, List<List<BarterScheme>>>();
-            assort.BarterScheme[rootId] = new List<List<BarterScheme>> { scheme };
-            assort.LoyalLevelItems ??= new Dictionary<MongoId, int>();
-            assort.LoyalLevelItems[rootId] = Math.Max(1, ov.Loyalty);
+            _injTrader[traderId] = new HashSet<MongoId>(want.Keys);
         }
     }
 
-    // ---- 任务奖励 ----
-    private void ApplyQuest(BpItemOverride ov, MongoId tpl)
+    private void InjectTraderItem(TraderAssort assort, BpItemOverride ov, MongoId tpl, MongoId rootId)
     {
-        if (string.IsNullOrWhiteSpace(ov.QuestId) || !MongoIdEx.TryParse(ov.QuestId, out var questId))
+        // 枪/甲/盔按默认完整形态上架（枪=默认改装预设，甲盔=带插板内衬），其余物品为单件。
+        var built = itemBuilder.Build(tpl, 1, rootId);
+        var root = built[0];
+        root.ParentId = "hideout";
+        root.SlotId = "hideout";
+        root.Upd = new Upd { StackObjectsCount = 999_999, UnlimitedCount = true };
+        assort.Items!.AddRange(built);
+
+        var scheme = new List<BarterScheme>();
+        foreach (var c in ov.Cost ?? new List<BpItemCost>())
         {
-            return;
+            if (MongoIdEx.TryParse(c.Tpl, out var ctpl) && c.Count > 0)
+            {
+                scheme.Add(new BarterScheme { Template = ctpl, Count = c.Count });
+            }
         }
 
-        if (!databaseService.GetQuests().TryGetValue(questId, out var quest) || quest.Rewards is null)
+        assort.BarterScheme ??= new Dictionary<MongoId, List<List<BarterScheme>>>();
+        assort.BarterScheme[rootId] = new List<List<BarterScheme>> { scheme };
+        assort.LoyalLevelItems ??= new Dictionary<MongoId, int>();
+        assort.LoyalLevelItems[rootId] = Math.Max(1, ov.Loyalty);
+    }
+
+    /// <summary>移除一条注入货架：连带其全部子件（预设/插板等），并清理价格与忠诚条目。</summary>
+    private static void RemoveTraderRoot(TraderAssort assort, MongoId rootId)
+    {
+        if (assort.Items is not null)
         {
-            return;
+            var removeIds = new HashSet<string> { rootId.ToString() };
+            bool grew;
+            do
+            {
+                grew = false;
+                foreach (var it in assort.Items)
+                {
+                    if (it.ParentId is not null && removeIds.Contains(it.ParentId) && removeIds.Add(it.Id.ToString()))
+                    {
+                        grew = true;
+                    }
+                }
+            } while (grew);
+
+            assort.Items.RemoveAll(i => removeIds.Contains(i.Id.ToString()));
         }
 
-        if (!quest.Rewards.TryGetValue(ov.RewardGroup, out var rewards))
+        assort.BarterScheme?.Remove(rootId);
+        assort.LoyalLevelItems?.Remove(rootId);
+    }
+
+    // ---- 任务奖励：对账 ----
+    private void ReconcileQuests(List<BpItemOverride> adds)
+    {
+        // 期望态：questId -> { rewardId -> (override, tpl) }
+        var desired = new Dictionary<MongoId, Dictionary<MongoId, (BpItemOverride ov, MongoId tpl)>>();
+        foreach (var ov in adds.Where(o => o.Source == AcqSource.Quest))
+        {
+            if (!MongoIdEx.TryParse(ov.Tpl, out var tpl) || !MongoIdEx.TryParse(ov.QuestId, out var questId))
+            {
+                continue;
+            }
+
+            var rewardId = DeterministicId($"{ov.QuestId}:{ov.RewardGroup}:{ov.Tpl}", "bp-itemctrl-quest");
+            (desired.TryGetValue(questId, out var map) ? map : desired[questId] = new())[rewardId] = (ov, tpl);
+        }
+
+        foreach (var questId in _injQuest.Keys.Concat(desired.Keys).Distinct().ToList())
+        {
+            if (!databaseService.GetQuests().TryGetValue(questId, out var quest) || quest.Rewards is null)
+            {
+                continue;
+            }
+
+            var want = desired.TryGetValue(questId, out var m) ? m : new Dictionary<MongoId, (BpItemOverride ov, MongoId tpl)>();
+            var have = _injQuest.TryGetValue(questId, out var h) ? h : new HashSet<MongoId>();
+
+            // 撤销：移除已不在期望态的注入奖励（跨所有奖励组扫描）
+            var stale = have.Where(id => !want.ContainsKey(id)).ToHashSet();
+            if (stale.Count > 0)
+            {
+                foreach (var group in quest.Rewards.Values)
+                {
+                    group?.RemoveAll(r => stale.Contains(r.Id));
+                }
+            }
+
+            // 注入缺失
+            foreach (var (rewardId, entry) in want)
+            {
+                InjectQuestReward(quest, entry.ov, entry.tpl, rewardId);
+            }
+
+            _injQuest[questId] = new HashSet<MongoId>(want.Keys);
+        }
+    }
+
+    private void InjectQuestReward(Quest quest, BpItemOverride ov, MongoId tpl, MongoId rewardId)
+    {
+        if (!quest.Rewards!.TryGetValue(ov.RewardGroup, out var rewards))
         {
             rewards = new List<Reward>();
             quest.Rewards[ov.RewardGroup] = rewards;
         }
 
-        // 仅处理 add（remove 改走服务期屏蔽，见 ItemAcquisitionMaskService）
+        if (rewards.Any(r => r.Id == rewardId))
         {
-            var rewardId = DeterministicId($"{ov.QuestId}:{ov.RewardGroup}:{ov.Tpl}", "bp-itemctrl-quest");
-            if (rewards.Any(r => r.Id == rewardId))
-            {
-                return; // 幂等
-            }
-
-            var itemId = DeterministicId($"{rewardId}:item", "bp-itemctrl-qitem");
-            rewards.Add(new Reward
-            {
-                Id = rewardId,
-                Type = RewardType.Item,
-                Index = rewards.Count,
-                Value = ov.Count,
-                FindInRaid = false,
-                Items = new List<Item>
-                {
-                    new()
-                    {
-                        Id = itemId,
-                        Template = tpl,
-                        ParentId = null,
-                        Upd = new Upd { StackObjectsCount = Math.Max(1, ov.Count) },
-                    },
-                },
-            });
+            return; // 幂等
         }
+
+        var itemId = DeterministicId($"{rewardId}:item", "bp-itemctrl-qitem");
+        rewards.Add(new Reward
+        {
+            Id = rewardId,
+            Type = RewardType.Item,
+            Index = rewards.Count,
+            Value = ov.Count,
+            FindInRaid = false,
+            Items = new List<Item>
+            {
+                new()
+                {
+                    Id = itemId,
+                    Template = tpl,
+                    ParentId = null,
+                    Upd = new Upd { StackObjectsCount = Math.Max(1, ov.Count) },
+                },
+            },
+        });
     }
 
-    // ---- 藏身处制造 ----
-    private void ApplyHideout(BpItemOverride ov, MongoId tpl)
+    // ---- 藏身处制造：对账 ----
+    private void ReconcileHideout(List<BpItemOverride> adds)
     {
         var recipes = databaseService.GetHideout().Production.Recipes;
         if (recipes is null)
@@ -184,53 +257,91 @@ public class ItemControlSync(
             return;
         }
 
-        // 仅处理 add（remove 改走服务期屏蔽，见 ItemAcquisitionMaskService）
+        // 期望态：output 新建配方 id 集；ingredient 加料集 recipeId -> { tpl -> override }
+        var desiredRecipes = new Dictionary<MongoId, BpItemOverride>();
+        var desiredIngredients = new Dictionary<MongoId, Dictionary<MongoId, BpItemOverride>>();
+        foreach (var ov in adds.Where(o => o.Source == AcqSource.Hideout))
         {
-            if (ov.Role == "ingredient" && ov.RecipeId is not null)
+            if (!MongoIdEx.TryParse(ov.Tpl, out var tpl))
             {
-                var recipe = recipes.FirstOrDefault(r => r.Id.ToString() == ov.RecipeId);
-                if (recipe is not null)
-                {
-                    recipe.Requirements ??= new List<Requirement>();
-                    if (recipe.Requirements.All(rq => rq.TemplateId != tpl))
-                    {
-                        recipe.Requirements.Add(new Requirement
-                        {
-                            TemplateId = tpl,
-                            Count = Math.Max(1, ov.Count),
-                            Type = "Item",
-                        });
-                    }
-                }
+                continue;
             }
-            else // output：新建一个简易配方
-            {
-                var recipeId = DeterministicId($"{ov.Tpl}", "bp-itemctrl-recipe");
-                if (recipes.All(r => r.Id != recipeId))
-                {
-                    var reqs = new List<Requirement>();
-                    foreach (var c in ov.Cost ?? new List<BpItemCost>())
-                    {
-                        if (MongoIdEx.TryParse(c.Tpl, out var ctpl) && c.Count > 0)
-                        {
-                            reqs.Add(new Requirement { TemplateId = ctpl, Count = c.Count, Type = "Item" });
-                        }
-                    }
 
-                    recipes.Add(new HideoutProduction
+            if (ov.Role == "ingredient" && MongoIdEx.TryParse(ov.RecipeId, out var rid))
+            {
+                (desiredIngredients.TryGetValue(rid, out var map) ? map : desiredIngredients[rid] = new())[tpl] = ov;
+            }
+            else if (ov.Role != "ingredient")
+            {
+                desiredRecipes[DeterministicId($"{ov.Tpl}", "bp-itemctrl-recipe")] = ov;
+            }
+        }
+
+        // output 配方：撤销移除 + 注入缺失
+        foreach (var stale in _injRecipe.Where(id => !desiredRecipes.ContainsKey(id)).ToList())
+        {
+            recipes.RemoveAll(r => r.Id == stale);
+            _injRecipe.Remove(stale);
+        }
+
+        foreach (var (recipeId, ov) in desiredRecipes)
+        {
+            if (MongoIdEx.TryParse(ov.Tpl, out var tpl) && recipes.All(r => r.Id != recipeId))
+            {
+                var reqs = new List<Requirement>();
+                foreach (var c in ov.Cost ?? new List<BpItemCost>())
+                {
+                    if (MongoIdEx.TryParse(c.Tpl, out var ctpl) && c.Count > 0)
                     {
-                        Id = recipeId,
-                        AreaType = HideoutAreas.Workbench,
-                        EndProduct = tpl,
-                        Count = Math.Max(1, ov.Count),
-                        ProductionTime = 3600,
-                        Requirements = reqs,
-                        Locked = false,
-                        Continuous = false,
-                        NeedFuelForAllProductionTime = false,
-                    });
+                        reqs.Add(new Requirement { TemplateId = ctpl, Count = c.Count, Type = "Item" });
+                    }
+                }
+
+                recipes.Add(new HideoutProduction
+                {
+                    Id = recipeId,
+                    AreaType = HideoutAreas.Workbench,
+                    EndProduct = tpl,
+                    Count = Math.Max(1, ov.Count),
+                    ProductionTime = 3600,
+                    Requirements = reqs,
+                    Locked = false,
+                    Continuous = false,
+                    NeedFuelForAllProductionTime = false,
+                });
+            }
+
+            _injRecipe.Add(recipeId);
+        }
+
+        // ingredient 加料：撤销移除 + 注入缺失（按 recipeId 定位现有配方）
+        foreach (var recipeId in _injIngredient.Keys.Concat(desiredIngredients.Keys).Distinct().ToList())
+        {
+            var recipe = recipes.FirstOrDefault(r => r.Id == recipeId);
+            if (recipe is null)
+            {
+                _injIngredient.Remove(recipeId);
+                continue;
+            }
+
+            recipe.Requirements ??= new List<Requirement>();
+            var want = desiredIngredients.TryGetValue(recipeId, out var m) ? m : new Dictionary<MongoId, BpItemOverride>();
+            var have = _injIngredient.TryGetValue(recipeId, out var h) ? h : new HashSet<MongoId>();
+
+            foreach (var staleTpl in have.Where(t => !want.ContainsKey(t)).ToList())
+            {
+                recipe.Requirements.RemoveAll(rq => rq.TemplateId == staleTpl);
+            }
+
+            foreach (var (tpl, ov) in want)
+            {
+                if (recipe.Requirements.All(rq => rq.TemplateId != tpl))
+                {
+                    recipe.Requirements.Add(new Requirement { TemplateId = tpl, Count = Math.Max(1, ov.Count), Type = "Item" });
                 }
             }
+
+            _injIngredient[recipeId] = new HashSet<MongoId>(want.Keys);
         }
     }
 

@@ -93,7 +93,7 @@ public class BattlePassItemAdminController(
         return new { success = true, overrides = BattlePassStore.GetItemOverrides() };
     }
 
-    /// <summary>删除一条 override（撤销）。结构类「移除」撤销在下次重启恢复；loot 撤销即时生效。</summary>
+    /// <summary>删除一条 override（撤销）。删除后即时重放对账：注入项立即从内存 DB 移除、屏蔽即时解除，无需重启。</summary>
     [HttpDelete("overrides")]
     public object DeleteOverride([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {

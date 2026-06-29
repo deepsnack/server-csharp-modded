@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证抽奖 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">抽奖后台</h1>
+            <p class="brand-sub">LOTTERY&nbsp;CONSOLE</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="lottery-admin-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">通行证抽奖配置</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <button class="tab active" data-section="pools">奖池</button>
+                <button class="tab" data-section="shop">兑换商店</button>
+                <button class="tab" data-section="records">记录</button>
+                <button class="tab" data-section="ops">运维</button>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content lottery-admin-content">
+            <section class="lottery-admin-section" data-section-panel="pools">
+                <div class="panel">
+                    <div class="panel-head"><h2>全局设置</h2><button id="save-settings" class="btn primary small">保存设置</button></div>
+                    <div class="form-body lottery-settings-grid">
+                        <label class="with-cb"><input id="set-enabled" type="checkbox" checked /> 启用抽奖模块</label>
+                        <label class="with-cb"><input id="set-entry" type="checkbox" checked /> 玩家入口开放</label>
+                        <label class="with-cb"><input id="set-shop" type="checkbox" checked /> 开放兑换商店</label>
+                        <label class="with-cb"><input id="set-broadcast" type="checkbox" checked /> 显示全服中奖轮播</label>
+                        <label>玩家记录展示上限<input id="set-record-limit" type="number" min="1" value="50" /></label>
+                        <label>轮播昵称显示<select id="set-name-mode"><option value="full">完整昵称</option><option value="masked">脱敏昵称</option></select></label>
+                        <label>刷新时区<input id="set-timezone" placeholder="留空=服务器本地时区" /></label>
+                    </div>
+                </div>
+
+                <div class="lottery-admin-grid">
+                    <aside class="panel lottery-admin-list">
+                        <div class="panel-head"><h2>奖池列表</h2><button id="new-pool" class="btn ghost small">新增草稿</button></div>
+                        <div id="pool-list" class="lottery-admin-rows"></div>
+                    </aside>
+
+                    <section class="panel lottery-editor">
+                        <div class="panel-head">
+                            <h2 id="pool-editor-title">奖池编辑</h2>
+                            <span id="pool-validation" class="muted"></span>
+                        </div>
+                        <div class="form-body">
+                            <div class="form-row three-col">
+                                <div class="form-col"><label>奖池 ID</label><input id="p-id" placeholder="留空自动生成" /></div>
+                                <div class="form-col grow"><label>名称</label><input id="p-name" /></div>
+                                <div class="form-col"><label>排序</label><input id="p-sort" type="number" value="0" /></div>
+                            </div>
+                            <label>描述</label><textarea id="p-desc" rows="2"></textarea>
+                            <div class="form-row two-col pool-media-row">
+                                <div class="form-col asset-field">
+                                    <label>图标 URL <span class="field-hint">推荐 1:1，建议 256×256</span></label>
+                                    <div class="asset-input-row">
+                                        <input id="p-icon" placeholder="/battlepass/uploads/lottery/..." />
+                                        <label class="mini asset-upload-btn" for="p-icon-file">上传</label>
+                                        <input id="p-icon-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+                                    </div>
+                                    <div class="asset-preview square"><img id="p-icon-preview" alt="" /></div>
+                                </div>
+                                <div class="form-col asset-field">
+                                    <label>展示图 URL <span class="field-hint">推荐 16:9，建议 1280×720</span></label>
+                                    <div class="asset-input-row">
+                                        <input id="p-cover" placeholder="/battlepass/uploads/lottery/..." />
+                                        <label class="mini asset-upload-btn" for="p-cover-file">上传</label>
+                                        <input id="p-cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+                                    </div>
+                                    <div class="asset-preview cover"><img id="p-cover-preview" alt="" /></div>
+                                </div>
+                            </div>
+                            <div class="form-row four-col">
+                                <div class="form-col"><label>状态</label><select id="p-status"><option value="draft">草稿</option><option value="scheduled">定时</option><option value="active">已发布</option><option value="paused">暂停</option><option value="ended">结束</option><option value="archived">归档</option></select></div>
+                                <div class="form-col"><label>奖池类型</label><select id="p-type"><option value="repeatable">可重复</option><option value="nonRepeatable">不可重复</option></select></div>
+                                <div class="form-col"><label>概率模式</label><select id="p-prob"><option value="equal">等概率</option><option value="weight">按权重</option></select></div>
+                                <div class="form-col"><label>代价类型</label><select id="p-cost-type"><option value="lotteryTickets">抽奖券</option><option value="stashItems">仓库物品</option></select></div>
+                            </div>
+                            <div class="form-row three-col">
+                                <label class="with-cb"><input id="p-enabled" type="checkbox" checked /> 启用</label>
+                                <label class="with-cb"><input id="p-visible" type="checkbox" checked /> 玩家可见</label>
+                                <label class="with-cb"><input id="p-pause-visible" type="checkbox" checked /> 暂停时仍可见</label>
+                            </div>
+                            <div class="form-row three-col">
+                                <label class="with-cb"><input id="p-follow-season" type="checkbox" /> 跟随赛季时间</label>
+                                <div class="form-col"><label>开始时间</label><input id="p-start" type="datetime-local" /></div>
+                                <div class="form-col"><label>结束时间</label><input id="p-end" type="datetime-local" /></div>
+                            </div>
+
+                            <div class="lottery-cost-editor">
+                                <div class="lottery-cost-head">
+                                    <div>
+                                        <h3>抽取代价</h3>
+                                        <p id="cost-mode-help" class="cost-mode-help"></p>
+                                    </div>
+                                </div>
+                                <div id="ticket-cost-fields" class="form-row three-col">
+                                    <div class="form-col"><label>基础单抽券数</label><input id="p-ticket-single" type="number" min="1" value="1" /></div>
+                                    <div id="ticket-ten-col" class="form-col"><label>十连折扣券数（仅可重复池）</label><input id="p-ticket-ten" type="number" min="0" value="0" /></div>
+                                    <div class="form-col"><label>不可重复池价格表</label><button id="add-step-cost" type="button" class="btn ghost small">添加一抽价格</button></div>
+                                </div>
+                                <div id="stash-cost-fields" class="hidden">
+                                    <label>单抽仓库物品代价</label>
+                                    <div id="p-stash-cost"></div>
+                                </div>
+                                <div id="step-pricing-panel" class="step-pricing-panel">
+                                    <div class="step-pricing-head">
+                                        <div>
+                                            <h4>不可重复池每抽价格表 <span class="badge">仅不可重复池生效</span></h4>
+                                            <p>玩家第 N 次抽该奖池时扣第 N 抽价格；发布前必须连续配置第 1 抽到第 N 抽，N 等于奖项数量。</p>
+                                        </div>
+                                        <div class="step-pricing-actions">
+                                            <button id="fill-step-from-single" type="button" class="btn ghost small">用基础单抽价填满</button>
+                                            <button id="sync-step-count" type="button" class="btn ghost small">补齐到奖项数</button>
+                                            <button id="clear-step-costs" type="button" class="btn ghost small">清空价格表</button>
+                                        </div>
+                                    </div>
+                                    <div id="step-ticket-tools" class="step-ticket-tools">
+                                        <label>第 1 抽券数<input id="step-ticket-start" type="number" min="1" value="1" /></label>
+                                        <label>每抽递增<input id="step-ticket-increment" type="number" min="0" value="0" /></label>
+                                        <button id="generate-step-ticket-costs" type="button" class="btn ghost small">按奖项数生成券价</button>
+                                    </div>
+                                    <div id="step-cost-summary" class="step-cost-summary"></div>
+                                    <div class="step-cost-table-head">
+                                        <span>抽次</span>
+                                        <span>本抽价格</span>
+                                        <span>操作</span>
+                                    </div>
+                                    <div id="step-costs" class="step-costs"></div>
+                                </div>
+                            </div>
+
+                            <div class="form-row three-col">
+                                <label class="with-cb"><input id="p-pity-enabled" type="checkbox" /> 可重复池启用保底</label>
+                                <div class="form-col"><label>保底次数</label><input id="p-pity-count" type="number" min="0" value="0" /></div>
+                                <div class="form-col"><label>奖项数量</label><input id="p-prize-count" readonly /></div>
+                            </div>
+
+                            <div class="lottery-prize-editor">
+                                <div class="panel-head inline"><h2>奖项</h2><button id="add-prize" type="button" class="btn ghost small">添加奖项</button></div>
+                                <div id="prize-list" class="prize-list"></div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button id="save-pool" class="btn primary small">保存</button>
+                                <button id="save-pool-draft" class="btn ghost small">暂存为草稿</button>
+                                <button id="publish-pool" class="btn ghost small">发布</button>
+                                <button id="pause-pool" class="btn ghost small">暂停</button>
+                                <button id="end-pool" class="btn ghost small">结束</button>
+                                <button id="archive-pool" class="btn ghost small">归档</button>
+                                <button id="delete-pool" class="btn del small">删除</button>
+                            </div>
+                            <div class="form-actions">
+                                <button id="copy-pool" class="btn ghost small">复制为草稿</button>
+                                <input id="reset-profile-id" placeholder="单玩家 profileId" />
+                                <button id="reset-one-pool" class="btn ghost small">重置该玩家奖池</button>
+                                <button id="reset-all-pool" class="btn del small">一键重置所有玩家该奖池</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="lottery-admin-section hidden" data-section-panel="shop">
+                <div class="lottery-admin-grid">
+                    <section class="panel">
+                        <div class="panel-head"><h2>兑换商品</h2><button id="new-shop-item" class="btn ghost small">新增商品</button></div>
+                        <div id="shop-list" class="lottery-admin-rows"></div>
+                    </section>
+                    <section class="panel">
+                        <div class="panel-head"><h2 id="shop-editor-title">兑换商品编辑</h2></div>
+                        <div class="form-body">
+                            <div class="form-row three-col">
+                                <div class="form-col"><label>商品 ID</label><input id="s-id" /></div>
+                                <div class="form-col grow"><label>名称</label><input id="s-name" /></div>
+                                <div class="form-col"><label>排序</label><input id="s-sort" type="number" value="0" /></div>
+                            </div>
+                            <label>描述</label><textarea id="s-desc" rows="2"></textarea>
+                            <div class="form-row four-col">
+                                <div class="form-col"><label>状态</label><select id="s-status"><option value="draft">草稿</option><option value="active">已发布</option><option value="paused">暂停</option><option value="ended">结束</option><option value="archived">归档</option></select></div>
+                                <label class="with-cb"><input id="s-enabled" type="checkbox" checked /> 启用</label>
+                                <label class="with-cb"><input id="s-visible" type="checkbox" checked /> 玩家可见</label>
+                                <div class="form-col"><label>价格（兑换币）</label><input id="s-price" type="number" min="1" value="1" /></div>
+                            </div>
+                            <div class="form-row three-col">
+                                <div class="form-col"><label>限购类型</label><select id="s-limit-type"><option value="none">不限购</option><option value="lifetime">永久</option><option value="daily">每日</option><option value="weekly">每周</option><option value="season">赛季</option></select></div>
+                                <div class="form-col"><label>限购数量</label><input id="s-limit-count" type="number" min="0" value="0" /></div>
+                                <div class="form-col"><label>图标 URL</label><input id="s-icon" /></div>
+                            </div>
+                            <div class="form-row two-col">
+                                <div class="form-col"><label>开始时间</label><input id="s-start" type="datetime-local" /></div>
+                                <div class="form-col"><label>结束时间</label><input id="s-end" type="datetime-local" /></div>
+                            </div>
+                            <div id="shop-reward-editor" class="reward-mini-editor"></div>
+                            <div class="form-actions">
+                                <button id="save-shop-item" class="btn primary small">保存商品</button>
+                                <button id="save-shop-draft" class="btn ghost small">暂存草稿</button>
+                                <button id="publish-shop-item" class="btn ghost small">发布商品</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="lottery-admin-section hidden" data-section-panel="records">
+                <div class="panel">
+                    <div class="panel-head"><h2>抽奖记录</h2><div><button id="export-records" class="btn ghost small">导出 CSV</button><button id="refresh-records" class="btn ghost small">刷新</button></div></div>
+                    <div id="record-rows" class="lottery-admin-rows"></div>
+                </div>
+            </section>
+
+            <section class="lottery-admin-section hidden" data-section-panel="ops">
+                <div class="lottery-admin-grid">
+                    <section class="panel">
+                        <div class="panel-head"><h2>直接发放抽奖资源</h2></div>
+                        <div class="form-body">
+                            <label class="with-cb"><input id="g-all" type="checkbox" /> 发给全部已有通行证玩家</label>
+                            <div id="g-search-wrap">
+                                <label>搜索玩家（账号名或游戏昵称）</label>
+                                <div class="asset-input-row">
+                                    <input id="g-search" placeholder="输入账号名或游戏昵称，回车搜索" />
+                                    <button id="g-search-btn" class="mini" type="button">搜索</button>
+                                </div>
+                                <div id="g-search-results" class="lottery-admin-rows g-search-results"></div>
+                                <label>已选玩家 <span id="g-selected-count" class="muted">0</span></label>
+                                <div id="g-selected" class="g-selected-chips"></div>
+                            </div>
+                            <div class="form-row four-col">
+                                <div class="form-col"><label>通用券</label><input id="g-global" type="number" min="0" value="0" /></div>
+                                <div class="form-col"><label>限定奖池</label><select id="g-pool-id"><option value="">请选择奖池</option></select></div>
+                                <div class="form-col"><label>限定券</label><input id="g-pool" type="number" min="0" value="0" /></div>
+                                <div class="form-col"><label>兑换币</label><input id="g-coins" type="number" min="0" value="0" /></div>
+                            </div>
+                            <button id="grant-currency" class="btn primary small">发放</button>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head"><h2>审计日志</h2><div><select id="log-category"><option value="">全部</option><option value="settings">设置</option><option value="pool">奖池</option><option value="progress">进度</option><option value="grant">发放</option><option value="shop">商店</option><option value="transaction">事务</option></select><button id="refresh-logs" class="btn ghost small">刷新</button></div></div>
+                        <div id="audit-rows" class="lottery-admin-rows"></div>
+                    </section>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head"><h2>事务</h2><button id="refresh-transactions" class="btn ghost small">刷新</button></div>
+                    <div id="transaction-rows" class="lottery-admin-rows"></div>
+                </div>
+            </section>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="price.js"></script>
+    <script src="lottery.js"></script>
+</body>
+</html>

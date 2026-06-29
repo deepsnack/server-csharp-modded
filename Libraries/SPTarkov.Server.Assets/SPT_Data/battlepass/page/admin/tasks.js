@@ -1,10 +1,12 @@
 'use strict';
 
 const ADMIN_API = '/battlepass/api/admin';
+const LOTTERY_ADMIN_API = '/battlepass/api/admin/lottery';
 const ITEMS_SEARCH = '/battlepass/api/admin/items/search';
 const ICON_API = '/battlepass/api/icons/';
 const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
 let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
+let lotteryPoolsForRewards = [];
 
 (function () {
     const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
@@ -80,7 +82,15 @@ async function adminLogin() {
     enterConsole();
 }
 function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('tasks-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
-function enterConsole() { el('login-view').classList.add('hidden'); el('tasks-view').classList.remove('hidden'); loadTasks(); loadTaskSettings(); }
+function enterConsole() {
+    el('login-view').classList.add('hidden');
+    el('tasks-view').classList.remove('hidden');
+    loadLotteryPoolsForRewards();
+    loadTasks();
+    loadTaskSettings();
+    loadGenSpec();
+    loadGenPool();
+}
 
 // ---- 任务系统全局设置（写入当前赛季）----
 let taskSettingsSeason = null;
@@ -100,6 +110,12 @@ async function loadTaskSettings() {
     tsSet('ts-daily-refresh', s.dailyRefreshLimit, 1);
     tsSet('ts-weekly-refresh', s.weeklyRefreshLimit, 1);
     tsSet('ts-season-refresh', s.seasonRefreshLimit, 0);
+    el('ts-daily-budget-on').checked = !!s.dailyBudgetEnabled;
+    el('ts-weekly-budget-on').checked = !!s.weeklyBudgetEnabled;
+    el('ts-season-budget-on').checked = !!s.seasonBudgetEnabled;
+    tsSet('ts-daily-budget', s.dailyDifficultyBudget, 4);
+    tsSet('ts-weekly-budget', s.weeklyDifficultyBudget, 6);
+    tsSet('ts-season-budget', s.seasonDifficultyBudget, 12);
 }
 async function saveTaskSettings() {
     if (!taskSettingsSeason) { const r = await api('/season'); taskSettingsSeason = (r && r.season) || {}; }
@@ -115,6 +131,12 @@ async function saveTaskSettings() {
         dailyRefreshLimit: tsNum('ts-daily-refresh', 1),
         weeklyRefreshLimit: tsNum('ts-weekly-refresh', 1),
         seasonRefreshLimit: tsNum('ts-season-refresh', 0),
+        dailyBudgetEnabled: el('ts-daily-budget-on').checked,
+        weeklyBudgetEnabled: el('ts-weekly-budget-on').checked,
+        seasonBudgetEnabled: el('ts-season-budget-on').checked,
+        dailyDifficultyBudget: tsNum('ts-daily-budget', 4),
+        weeklyDifficultyBudget: tsNum('ts-weekly-budget', 6),
+        seasonDifficultyBudget: tsNum('ts-season-budget', 12),
     };
     const r = await api('/season', 'POST', payload);
     if (r && r.success) {
@@ -124,6 +146,104 @@ async function saveTaskSettings() {
     } else {
         toast((r && r.message) || '保存失败', false);
     }
+}
+
+// ---- 任务自动生成规格 ----
+const GEN_SCOPES = [['daily', '每日'], ['weekly', '每周'], ['season', '赛季']];
+const GEN_TYPES = [['Kills', '击杀'], ['Exploration', '撤离']];
+const GEN_TARGETS = [['Any', '任意'], ['Savage', 'Scav'], ['AnyPmc', 'PMC'], ['Bear', 'BEAR'], ['Usec', 'USEC'], ['Boss', '头目']];
+
+function genBlockHtml(scope, label, s) {
+    s = s || {};
+    const ckTypes = GEN_TYPES.map(([v, t]) =>
+        `<label class="with-cb"><input type="checkbox" data-gt="type" value="${v}" ${(s.conditionTypes || ['Kills', 'Exploration']).includes(v) ? 'checked' : ''} /> ${t}</label>`).join(' ');
+    const ckTargets = GEN_TARGETS.map(([v, t]) =>
+        `<label class="with-cb"><input type="checkbox" data-gt="target" value="${v}" ${(s.killTargets || ['Any', 'Savage', 'AnyPmc']).includes(v) ? 'checked' : ''} /> ${t}</label>`).join(' ');
+    return `<div class="gen-scope" data-scope="${scope}">
+        <div class="gen-scope-head">
+            <label class="with-cb"><input type="checkbox" data-gf="enabled" ${s.enabled ? 'checked' : ''} /> <strong>${label}</strong> 启用生成</label>
+        </div>
+        <div class="ts-grid">
+            <label>生成条数<input type="number" min="1" data-gf="count" value="${s.count ?? 3}" /></label>
+            <label>自动周期(时)<span class="ts-sub">0=仅手动</span><input type="number" min="0" step="0.5" data-gf="autoPeriodHours" value="${s.autoPeriodHours ?? 0}" /></label>
+            <label>目标次数下限<input type="number" min="1" data-gf="minCount" value="${s.minCount ?? 2}" /></label>
+            <label>目标次数上限<input type="number" min="1" data-gf="maxCount" value="${s.maxCount ?? 8}" /></label>
+            <label>经验·易<input type="number" min="0" data-gf="xpEasy" value="${s.xpEasy ?? 300}" /></label>
+            <label>经验·中<input type="number" min="0" data-gf="xpMed" value="${s.xpMed ?? 600}" /></label>
+            <label>经验·难<input type="number" min="0" data-gf="xpHard" value="${s.xpHard ?? 1000}" /></label>
+        </div>
+        <div class="gen-checks"><span class="ts-sub">类型：</span>${ckTypes}</div>
+        <div class="gen-checks"><span class="ts-sub">击杀目标：</span>${ckTargets}</div>
+        <label class="gen-locs">地图池（逗号分隔地图 id，空=不限）<input data-gf="locations" value="${esc((s.locations || []).join(', '))}" placeholder="bigmap, Woods, Sandbox" /></label>
+    </div>`;
+}
+
+async function loadGenSpec() {
+    const r = await api('/tasks/gen-spec');
+    const spec = (r && r.success && r.spec) || {};
+    el('gen-scopes').innerHTML = GEN_SCOPES.map(([scope, label]) => genBlockHtml(scope, label, spec[scope])).join('');
+}
+
+function collectGenSpec() {
+    const spec = {};
+    el('gen-scopes').querySelectorAll('.gen-scope').forEach(block => {
+        const scope = block.dataset.scope;
+        const gf = f => block.querySelector(`[data-gf="${f}"]`);
+        const checks = t => Array.from(block.querySelectorAll(`[data-gt="${t}"]:checked`)).map(c => c.value);
+        spec[scope] = {
+            enabled: gf('enabled').checked,
+            count: +gf('count').value || 3,
+            autoPeriodHours: +gf('autoPeriodHours').value || 0,
+            conditionTypes: checks('type'),
+            killTargets: checks('target'),
+            locations: gf('locations').value.split(',').map(s => s.trim()).filter(Boolean),
+            minCount: +gf('minCount').value || 2,
+            maxCount: +gf('maxCount').value || 8,
+            xpEasy: +gf('xpEasy').value || 0,
+            xpMed: +gf('xpMed').value || 0,
+            xpHard: +gf('xpHard').value || 0,
+        };
+    });
+    return spec;
+}
+
+async function saveGenSpec() {
+    const r = await api('/tasks/gen-spec', 'POST', collectGenSpec());
+    el('gen-msg').textContent = r.success ? '已保存 ' + new Date().toLocaleTimeString() : (r.message || '保存失败');
+    toast(r.success ? '生成规格已保存' : (r.message || '失败'), r.success);
+}
+
+async function generateNow() {
+    // 先保存当前规格，再生成，避免用未保存的设置
+    await api('/tasks/gen-spec', 'POST', collectGenSpec());
+    const r = await api('/tasks/generate', 'POST', {});
+    toast(r.success ? `已生成 ${r.generated || 0} 条任务` : (r.message || '生成失败'), r.success);
+    if (r.success) { loadTasks(); loadGenPool(); }
+}
+
+// ---- 生成池（独立于自定义任务池，可查看与一键清空）----
+async function loadGenPool() {
+    const r = await api('/tasks/generated');
+    const box = el('gen-pool-list');
+    if (!r || !r.success) { el('gen-pool-msg').textContent = (r && r.message) || '加载失败'; return; }
+    const tasks = r.tasks || [];
+    el('gen-pool-msg').textContent = `共 ${tasks.length} 条`;
+    if (tasks.length === 0) { box.innerHTML = '<div class="muted" style="font-size:11px">生成池为空</div>'; return; }
+    const byScope = {};
+    tasks.forEach(t => { (byScope[t.scope] || (byScope[t.scope] = [])).push(t); });
+    box.innerHTML = Object.entries(byScope).map(([scope, list]) => {
+        const label = (GEN_SCOPES.find(s => s[0] === scope) || [scope, scope])[1];
+        const rows = list.map(t => `<div class="gp-row" style="font-size:11px;padding:2px 0;border-bottom:1px solid var(--line)">
+            <code>${esc(t.id)}</code> · ${esc(t.title || t.description || t.conditionType || '')}</div>`).join('');
+        return `<div style="margin-bottom:8px"><div class="ts-sub">${label}（${list.length}）</div>${rows}</div>`;
+    }).join('');
+}
+
+async function clearGenPool() {
+    if (!confirm('确定清空生成池？将删除全部 gen_ 自动/手动生成任务（不影响左侧自定义任务）。')) return;
+    const r = await api('/tasks/generated', 'DELETE');
+    toast(r && r.success ? `已清空 ${r.cleared || 0} 条生成任务` : ((r && r.message) || '清空失败'), r && r.success);
+    if (r && r.success) { loadGenPool(); loadTasks(); }
 }
 
 // ---- 类型卡片 ----
@@ -353,7 +473,7 @@ async function loadTasks() {
         const zoneInfo = t.zoneId ? ` · 区域 ${t.zoneId}` : '';
         const locInfo = t.location ? ` · ${mapChinese(t.location)}` : '';
         div.innerHTML = `<div><div><strong>${esc(t.title)}</strong> ${scopeBadge}</div>
-            <div class="meta">${esc(t.id)} · ${ctLabel}${itemInfo}${zoneInfo}${locInfo} · +${t.xp}XP</div></div>`;
+            <div class="meta">${esc(t.id)} · ${ctLabel}${itemInfo}${zoneInfo}${locInfo} · 难度${t.difficulty || 1} · +${t.xp}XP</div></div>`;
         const acts = document.createElement('div'); acts.className = 'acts';
         const del = document.createElement('button'); del.className = 'mini del'; del.textContent = '×';
         del.onclick = e => { e.stopPropagation(); delTask(t.id); };
@@ -381,6 +501,10 @@ function fillForm(t) {
     el('f-id').value = t.id; el('f-title').value = t.title; el('f-desc').value = t.description;
     el('f-scope').value = t.scope; el('f-rotation').value = t.rotation; el('f-xp').value = t.xp;
     el('f-weight').value = t.weight;
+    el('f-difficulty').value = t.difficulty || 1;
+    el('f-rewardmode').value = t.rewardMode || 'xp';
+    setRewards(t.rewards || []);
+    updateRewardVisibility();
 
     setTimeout(() => {
         if (el('f-target')) el('f-target').value = t.target || 'Any';
@@ -423,6 +547,8 @@ function clearForm() {
     el('f-id').value = genTaskId();
     el('f-title').value = ''; el('f-desc').value = '';
     el('f-scope').value = 'daily'; el('f-rotation').value = 'random'; el('f-xp').value = 500; el('f-weight').value = 1;
+    el('f-difficulty').value = 1;
+    el('f-rewardmode').value = 'xp'; setRewards([]); updateRewardVisibility();
     el('delete-task').style.display = 'none';
     el('kills-fine').style.display = currentConditionType === 'Kills' ? '' : 'none';
     renderTargetSection();
@@ -443,6 +569,234 @@ function clearForm() {
 }
 el('clear-task').onclick = clearForm;
 
+// ---- 任务奖励编辑器（物品 / 权益 / 抽奖资源，与等级奖励轨一致）----
+function lotteryPoolOptions(selected) {
+    selected = selected || '';
+    const sorted = lotteryPoolsForRewards
+        .filter(p => p.costType === 'lotteryTickets')
+        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    const hasSelected = selected && sorted.some(p => p.id === selected);
+    const options = sorted
+        .map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)} (${esc(p.id)})</option>`)
+        .join('');
+    const legacy = selected && !hasSelected
+        ? `<option value="${esc(selected)}">${esc(selected)}（当前奖池列表未找到）</option>`
+        : '';
+    return `<option value="">请选择奖池</option>${legacy}${options}`;
+}
+
+function refreshRewardPoolSelect(select) {
+    if (!select) return;
+    const current = select.value || '';
+    select.innerHTML = lotteryPoolOptions(current);
+    if (current) select.value = current;
+}
+
+function refreshRewardPoolSelects() {
+    document.querySelectorAll('select.rw-poolid').forEach(refreshRewardPoolSelect);
+}
+
+async function loadLotteryPoolsForRewards() {
+    try {
+        const res = await fetch(LOTTERY_ADMIN_API + '/pools', { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
+        const r = await res.json();
+        if (!r.success) return;
+        lotteryPoolsForRewards = r.pools || [];
+        refreshRewardPoolSelects();
+    } catch (e) {
+        // 抽奖模块未加载不影响任务页其他功能。
+    }
+}
+
+function rewardRowHtml(r) {
+    r = r || {};
+    const type = r.type || 'item';
+    const iconUrl = isTpl(r.tpl) ? ICON_API + r.tpl : '';
+    const itemStyle = type === 'item' ? '' : 'display:none';
+    const extraStyle = type !== 'item' ? '' : 'display:none';
+    const offerStyle = type === 'purchaseRight' ? '' : 'display:none';
+    const recipeStyle = type === 'recipe' ? '' : 'display:none';
+    const titleStyle = type === 'title' ? '' : 'display:none';
+    const clothingStyle = type === 'clothing' ? '' : 'display:none';
+    const tokenStyle = ['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'].includes(type) ? '' : 'display:none';
+    const poolStyle = type === 'lotteryPoolTickets' ? '' : 'display:none';
+    return `<div class="rw-card">
+        <div class="rw-card-main">
+            <div class="rw-icon-wrap"><img src="${iconUrl}" class="rw-icon" style="${iconUrl ? '' : 'display:none'}" alt="" onerror="this.style.display='none'" /></div>
+            <div class="rw-fields">
+                <div class="rw-row">
+                    <select class="rw-type" style="width:90px">
+                        <option value="item" ${type === 'item' ? 'selected' : ''}>物品</option>
+                        <option value="purchaseRight" ${type === 'purchaseRight' ? 'selected' : ''}>购买权</option>
+                        <option value="recipe" ${type === 'recipe' ? 'selected' : ''}>配方</option>
+                        <option value="title" ${type === 'title' ? 'selected' : ''}>称号</option>
+                        <option value="clothing" ${type === 'clothing' ? 'selected' : ''}>服装</option>
+                        <option value="lotteryGlobalTickets" ${type === 'lotteryGlobalTickets' ? 'selected' : ''}>通用券</option>
+                        <option value="lotteryPoolTickets" ${type === 'lotteryPoolTickets' ? 'selected' : ''}>限定券</option>
+                        <option value="lotteryExchangeCoins" ${type === 'lotteryExchangeCoins' ? 'selected' : ''}>兑换币</option>
+                    </select>
+                    <input class="rw-name" value="${esc(r.name || '')}" placeholder="展示名（可空）" style="flex:1" />
+                    <label class="with-cb" style="white-space:nowrap"><input class="rw-featured" type="checkbox" ${r.featured ? 'checked' : ''} /> 大奖</label>
+                    <button type="button" class="mini del" title="删除" onclick="this.closest('.rw-card').remove()">×</button>
+                </div>
+                <div class="rw-row rw-item-row" style="${itemStyle}">
+                    <input class="rw-tpl" value="${esc(r.tpl || '')}" placeholder="搜索物品名称或 tpl（GP 币等）…" autocomplete="off" />
+                    <input class="rw-count" type="number" value="${r.count || 1}" min="1" style="width:58px" title="数量" />
+                    <label class="with-cb" style="white-space:nowrap" title="标记战局内找到（SpawnedInSession）"><input class="rw-fir" type="checkbox" ${r.foundInRaid ? 'checked' : ''} /> FIR</label>
+                    <div class="rw-tpl-results ip-results" style="display:none"></div>
+                </div>
+                <div class="rw-extra" style="${extraStyle}">
+                    <div class="rw-row rw-offerid-row" style="${offerStyle}">
+                        <label style="font-size:10px">购买权</label>
+                        <input class="rw-offerid" value="${esc(r.offerId || '')}" placeholder="聚焦列出 / 搜索货架项…" style="flex:1" autocomplete="off" />
+                        <div class="rw-offerid-results ip-results" style="display:none"></div>
+                    </div>
+                    <div class="rw-row rw-recipeid-row" style="${recipeStyle}">
+                        <label style="font-size:10px">配方</label>
+                        <input class="rw-recipeid" value="${esc(r.recipeId || '')}" placeholder="搜索配方产物名称或 id…" style="flex:1" autocomplete="off" />
+                        <div class="rw-recipeid-results ip-results" style="display:none"></div>
+                    </div>
+                    <div class="rw-row rw-titleid-row" style="${titleStyle}">
+                        <label style="font-size:10px">称号</label>
+                        <input class="rw-titleid" value="${esc(r.titleId || '')}" placeholder="聚焦列出 / 搜索称号…" style="flex:1" autocomplete="off" />
+                        <div class="rw-titleid-results ip-results" style="display:none"></div>
+                    </div>
+                    <div class="rw-row rw-suitid-row" style="${clothingStyle}">
+                        <label style="font-size:10px">服装</label>
+                        <input class="rw-suitid" value="${esc(r.suitId || '')}" placeholder="聚焦列出 / 搜索服装、suiteId、offerId…" style="flex:1" autocomplete="off" />
+                        <div class="rw-suitid-results ip-results" style="display:none"></div>
+                    </div>
+                    <div class="rw-row rw-token-row" style="${tokenStyle}">
+                        <label style="font-size:10px">数量</label>
+                        <input class="rw-token-count" type="number" min="1" value="${r.count || 1}" style="width:96px" />
+                        <span class="muted" style="font-size:10px">发放到抽奖钱包，不进入玩家仓库</span>
+                    </div>
+                    <div class="rw-row rw-poolid-row" style="${poolStyle}">
+                        <label style="font-size:10px">奖池</label>
+                        <select class="rw-poolid" style="flex:1">${lotteryPoolOptions(r.poolId || '')}</select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>`;
+}
+
+function onRwTypeChange(card, type) {
+    card.querySelector('.rw-item-row').style.display = type === 'item' ? '' : 'none';
+    card.querySelector('.rw-extra').style.display = type === 'item' ? 'none' : '';
+    ['.rw-offerid-row', '.rw-recipeid-row', '.rw-titleid-row', '.rw-suitid-row', '.rw-token-row', '.rw-poolid-row'].forEach(s => { card.querySelector(s).style.display = 'none'; });
+    const map = { purchaseRight: '.rw-offerid-row', recipe: '.rw-recipeid-row', title: '.rw-titleid-row', clothing: '.rw-suitid-row' };
+    if (map[type]) card.querySelector(map[type]).style.display = '';
+    if (['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'].includes(type)) {
+        card.querySelector('.rw-token-row').style.display = '';
+    }
+    if (type === 'lotteryPoolTickets') {
+        card.querySelector('.rw-poolid-row').style.display = '';
+        refreshRewardPoolSelect(card.querySelector('.rw-poolid'));
+    }
+}
+
+function setupRwRef(card, inputSel, resultsSel, kind, icon) {
+    const input = card.querySelector(inputSel);
+    const results = card.querySelector(resultsSel);
+    if (!input || !results) return;
+    const attach = { offer: BpPicker.attachOffer, recipe: BpPicker.attachRecipe, title: BpPicker.attachTitle, clothing: BpPicker.attachClothing }[kind];
+    if (!attach) return;
+    attach(input, results, ds => {
+        input.value = ds.suitId || ds.id;
+        const nameInput = card.querySelector('.rw-name');
+        if (ds.name && nameInput && !nameInput.value.trim()) nameInput.value = ds.name;
+        if (ds.tpl && BpPicker.isTpl(ds.tpl)) {
+            icon.src = BpPicker.ICON_API + ds.tpl; icon.style.display = '';
+            icon.onerror = () => { icon.style.display = 'none'; };
+        }
+    }, { limit: 8, minChars: kind === 'recipe' ? 2 : 0 });
+}
+
+function wireRewardRow(card) {
+    const tplInput = card.querySelector('.rw-tpl');
+    const icon = card.querySelector('.rw-icon');
+    BpPicker.attachItem(tplInput, card.querySelector('.rw-tpl-results'), ds => {
+        tplInput.value = ds.tpl;
+        icon.src = BpPicker.ICON_API + ds.tpl; icon.style.display = '';
+        icon.onerror = () => { icon.style.display = 'none'; };
+    }, { limit: 8 });
+    tplInput.addEventListener('input', () => {
+        const q = tplInput.value.trim();
+        if (BpPicker.isTpl(q)) { icon.src = BpPicker.ICON_API + q; icon.style.display = ''; }
+    });
+    setupRwRef(card, '.rw-offerid', '.rw-offerid-results', 'offer', icon);
+    setupRwRef(card, '.rw-recipeid', '.rw-recipeid-results', 'recipe', icon);
+    setupRwRef(card, '.rw-titleid', '.rw-titleid-results', 'title', icon);
+    setupRwRef(card, '.rw-suitid', '.rw-suitid-results', 'clothing', icon);
+    card.querySelector('.rw-type').addEventListener('change', e => onRwTypeChange(card, e.target.value));
+}
+
+function addRewardRow(r) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = rewardRowHtml(r);
+    const card = wrap.firstElementChild;
+    el('reward-items').appendChild(card);
+    wireRewardRow(card);
+}
+
+function setRewards(list) {
+    el('reward-items').innerHTML = '';
+    (list || []).forEach(addRewardRow);
+}
+
+function collectRewards() {
+    const out = [];
+    el('reward-items').querySelectorAll('.rw-card').forEach(card => {
+        const type = card.querySelector('.rw-type')?.value || 'item';
+        const tpl = card.querySelector('.rw-tpl')?.value?.trim() || '';
+        const name = card.querySelector('.rw-name')?.value?.trim() || null;
+        const offerId = card.querySelector('.rw-offerid')?.value?.trim() || null;
+        const recipeId = card.querySelector('.rw-recipeid')?.value?.trim() || null;
+        const titleId = card.querySelector('.rw-titleid')?.value?.trim() || null;
+        const suitId = card.querySelector('.rw-suitid')?.value?.trim() || null;
+        const poolId = card.querySelector('.rw-poolid')?.value?.trim() || null;
+        const isTokenReward = ['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'].includes(type);
+        const rewardCount = Math.max(1, +(isTokenReward
+            ? (card.querySelector('.rw-token-count')?.value || 1)
+            : (card.querySelector('.rw-count')?.value || 1)));
+        const key = {
+            item: tpl,
+            purchaseRight: offerId,
+            recipe: recipeId,
+            title: titleId,
+            clothing: suitId,
+            lotteryGlobalTickets: true,
+            lotteryPoolTickets: poolId,
+            lotteryExchangeCoins: true,
+        }[type];
+        if (!key) return; // 关键字段未填，跳过空卡
+        out.push({
+            type,
+            tpl: type === 'item' ? tpl : (tpl || null),
+            count: (type === 'item' || isTokenReward) ? rewardCount : 1,
+            name,
+            featured: card.querySelector('.rw-featured')?.checked || false,
+            foundInRaid: type === 'item' ? (card.querySelector('.rw-fir')?.checked || false) : false,
+            offerId: type === 'purchaseRight' ? offerId : null,
+            recipeId: type === 'recipe' ? recipeId : null,
+            titleId: type === 'title' ? titleId : null,
+            suitId: type === 'clothing' ? suitId : null,
+            poolId: type === 'lotteryPoolTickets' ? poolId : null,
+        });
+    });
+    return out;
+}
+
+function updateRewardVisibility() {
+    const itemsMode = el('f-rewardmode').value !== 'xp';
+    el('reward-items').style.display = itemsMode ? '' : 'none';
+    el('add-reward-btn').style.display = itemsMode ? '' : 'none';
+}
+
+el('add-reward-btn').onclick = () => addRewardRow();
+el('f-rewardmode').addEventListener('change', updateRewardVisibility);
+
 // ---- 保存 ----
 el('save-task').onclick = async () => {
     const ct = currentConditionType;
@@ -455,6 +809,7 @@ el('save-task').onclick = async () => {
         rotation: el('f-rotation').value,
         xp: +el('f-xp').value,
         weight: +el('f-weight').value,
+        difficulty: +el('f-difficulty').value || 1,
     };
     if (!task.id) return toast('请填写或自动生成任务 ID', false);
 
@@ -497,6 +852,10 @@ el('save-task').onclick = async () => {
         task.target = 'Any';
     }
 
+    task.rewardMode = el('f-rewardmode').value;
+    const rewards = collectRewards();
+    if (rewards.length) task.rewards = rewards;
+
     const r = await api('/tasks', 'POST', task);
     toast(r.success ? '已保存' : (r.message || '失败'), r.success);
     if (r.success) { loadTasks(); el('delete-task').style.display = ''; }
@@ -535,6 +894,10 @@ el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') admin
 el('admin-logout').onclick = logout;
 el('refresh-active-tasks').onclick = refreshActiveTasks;
 el('save-task-settings').onclick = saveTaskSettings;
+el('save-gen-spec').onclick = saveGenSpec;
+el('gen-now').onclick = generateNow;
+el('gen-pool-refresh').onclick = loadGenPool;
+el('gen-pool-clear').onclick = clearGenPool;
 Object.entries(MULTI_ITEM_FIELDS).forEach(([id, category]) => setupMultiItemPicker(id, category));
 TAG_FIELDS.forEach(setupTagPicker);
 setupHourSelects();

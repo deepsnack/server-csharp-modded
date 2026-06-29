@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.DI.Annotations;
 
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
@@ -18,7 +19,7 @@ namespace SPTarkov.Server.Core.BattlePass.Controllers;
 [Injectable]
 [ApiController]
 [Route("battlepass/api/admin/query")]
-public class BattlePassQueryController(ItemSearchService itemSearch, Services.DatabaseService databaseService)
+public class BattlePassQueryController(ItemSearchService itemSearch, Services.DatabaseService databaseService, Services.LocaleService localeService)
 {
     private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
 
@@ -58,7 +59,7 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
         var query = (q ?? "").Trim();
         var queryLower = query.ToLowerInvariant();
 
-        IEnumerable<BpTaskTemplate> source = BattlePassStore.GetTasks();
+        IEnumerable<BpTaskTemplate> source = BattlePassStore.GetAllTasks();
         if (query.Length > 0)
         {
             source = source.Where(t =>
@@ -172,6 +173,88 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
         return new { success = true, recipes = hits };
     }
 
+    /// <summary>
+    ///     检索服装（按服装名 / suite id / 商人服装 offer id / trader id）。
+    ///     优先聚合所有 customization_seller 商人的 suits，因此可搜索 mod 服装。
+    /// </summary>
+    [HttpGet("clothing")]
+    public object Clothing(
+        [FromQuery] string? q,
+        [FromQuery] int? limit,
+        [FromHeader(Name = "X-Admin-Token")] string? token = null
+    )
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var capped = limit is > 0 and <= 100 ? limit.Value : 30;
+        var query = (q ?? "").Trim();
+        var customization = databaseService.GetCustomization();
+        var traderSuitOffers = databaseService
+            .GetTraders()
+            .Where(trader => trader.Value.Base.CustomizationSeller.GetValueOrDefault(false))
+            .SelectMany(trader => (trader.Value.Suits ?? [])
+                .Select(suit => new
+                {
+                    SuitId = suit.SuiteId.ToString(),
+                    OfferId = suit.Id.ToString(),
+                    TraderId = trader.Key.ToString(),
+                    IsActive = suit.IsActive ?? true,
+                }))
+            .ToList();
+
+        var offerBySuit = traderSuitOffers
+            .GroupBy(offer => offer.SuitId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.FirstOrDefault(offer => offer.IsActive) ?? group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var hits = new List<object>();
+        foreach (var (suitId, item) in customization)
+        {
+            var suitIdText = suitId.ToString();
+            var isTraderSuit = offerBySuit.TryGetValue(suitIdText, out var offer);
+            if (!isTraderSuit && item.Parent != CustomisationTypeId.SUITS)
+            {
+                continue;
+            }
+
+            var name = ResolveCustomizationName(suitId, item);
+            var shortName = ResolveCustomizationShortName(suitId, item);
+            if (query.Length > 0
+                && !suitIdText.Contains(query, StringComparison.OrdinalIgnoreCase)
+                && !(name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                && !(shortName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                && !(offer?.OfferId.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                && !(offer?.TraderId.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+            {
+                continue;
+            }
+
+            hits.Add(new
+            {
+                id = suitIdText,
+                suitId = suitIdText,
+                name = string.IsNullOrWhiteSpace(name) ? suitIdText : name,
+                shortName,
+                parent = item.Parent,
+                bodyPart = item.Properties?.BodyPart,
+                side = item.Properties?.Side ?? [],
+                offerId = offer?.OfferId,
+                traderId = offer?.TraderId,
+                isTraderSuit,
+                isActive = offer?.IsActive ?? false,
+            });
+
+            if (hits.Count >= capped)
+            {
+                break;
+            }
+        }
+
+        return new { success = true, clothing = hits };
+    }
+
     /// <summary>检索称号（按 id / 名称 / 文本）。供奖励轨 title 图形化选择。</summary>
     [HttpGet("titles")]
     public object Titles(
@@ -204,5 +287,45 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
             .ToList();
 
         return new { success = true, titles };
+    }
+
+    private string ResolveCustomizationName(MongoId id, CustomizationItem item)
+    {
+        var name = ResolveCustomizationLocaleValue(id, item, "Name", item.Properties?.Name);
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            return name;
+        }
+
+        return ResolveCustomizationShortName(id, item);
+    }
+
+    private string ResolveCustomizationShortName(MongoId id, CustomizationItem item)
+    {
+        return ResolveCustomizationLocaleValue(id, item, "ShortName", item.Properties?.ShortName);
+    }
+
+    private string ResolveCustomizationLocaleValue(MongoId id, CustomizationItem item, string suffix, string? fallback)
+    {
+        var localeDb = localeService.GetLocaleDb();
+        var chDb = localeService.GetLocaleDb("ch");
+        var enDb = localeService.GetLocaleDb("en");
+        foreach (var key in new[] { $"{id} {suffix}", fallback, item.Name })
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            foreach (var db in (Dictionary<string, string>[])[localeDb, chDb, enDb])
+            {
+                if (db.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        return fallback ?? item.Name ?? id.ToString();
     }
 }

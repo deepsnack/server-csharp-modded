@@ -362,7 +362,11 @@ public class TraderHelper(
     /// <returns>Future timestamp.</returns>
     public long GetNextUpdateTimestamp(MongoId traderId)
     {
-        var updateSeconds = GetTraderUpdateSeconds(traderId) ?? 0;
+        // 商人未在 trader.json 的 updateTime 中配置时 GetTraderUpdateSeconds 返回 null：
+        // 原先兜底为 0 → NextResupply = now → 该商人每个 5s tick 都被判定"已过期"→ 反复 ResetExpiredTrader
+        // 并触发 InvalidateTrader（清空整个 trader 响应缓存），既让补货计时永远停在 0、又持续抖动缓存。
+        // 改为兜底到 UpdateTimeDefault（与 GetTraderUpdateSeconds 后续自愈值一致），主要影响 modded 商人。
+        var updateSeconds = GetTraderUpdateSeconds(traderId) ?? TraderConfig.UpdateTimeDefault;
         return timeUtil.GetTimeStamp() + updateSeconds;
     }
 

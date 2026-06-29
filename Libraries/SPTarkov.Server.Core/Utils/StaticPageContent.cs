@@ -41,6 +41,7 @@ public static class StaticPageContent
             ".json" => "application/json; charset=utf-8",
             ".png" => "image/png",
             ".jpg" or ".jpeg" => "image/jpeg",
+            ".webp" => "image/webp",
             ".gif" => "image/gif",
             ".svg" => "image/svg+xml",
             ".ico" => "image/x-icon",

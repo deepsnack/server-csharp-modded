@@ -39,6 +39,8 @@
                 <button class="tab" data-tab="codes">激活码</button>
                 <button class="tab" data-tab="players">玩家</button>
                 <a class="tab" href="trader.html">商人 →</a>
+                <a class="tab" href="shop.html">商店 →</a>
+                <a class="tab" href="lottery.html">抽奖 →</a>
                 <a class="tab" href="recipes.html">配方 →</a>
                 <a class="tab" href="titles.html">称号 →</a>
                 <a class="tab" href="items.html">物品 →</a>
@@ -87,7 +89,10 @@
                 <p class="hint">
                     滚动浏览全部等级，逐级编辑免费 / 付费轨奖励。奖励 <code>type</code>：<code>item</code>（邮寄）/
                     <code>purchaseRight</code>（商人购买，填 offerId）/ <code>recipe</code>（配方，填 recipeId）/
-                    <code>title</code>（称号，填 titleId）。满级后进入「♾️ 循环奖励」轮次（列表最底部，逐轮可领）。
+                    <code>title</code>（称号，填 titleId）/ <code>clothing</code>（服装，填 suitId）/
+                    <code>lotteryGlobalTickets</code>（通用抽奖券）/
+                    <code>lotteryPoolTickets</code>（奖池限定抽奖券，填 poolId）/
+                    <code>lotteryExchangeCoins</code>（抽奖兑换币）。满级后进入「♾️ 循环奖励」轮次（列表最底部，逐轮可领）。
                 </p>
                 <div class="tracks-toolbar">
                     <label>等级上限 <input id="track-maxlevel" type="number" min="1" max="500" value="50" style="width:72px" /></label>
@@ -114,16 +119,21 @@
                 <h2>激活码</h2>
                 <div class="code-gen panel">
                     <div class="form-body row">
-                        <div><label>类型</label><select id="c-type"><option value="premium">解锁付费轨</option><option value="levels">直升等级</option></select></div>
-                        <div><label>等级数（levels 时）</label><input id="c-value" type="number" value="5" /></div>
+                        <div><label>类型</label><select id="c-type"><option value="premium">解锁付费轨</option><option value="levels">直升等级</option><option value="lotteryGlobalTickets">通用抽奖券</option><option value="lotteryPoolTickets">限定抽奖券</option><option value="lotteryExchangeCoins">抽奖兑换币</option></select></div>
+                        <div><label>数值（等级 / 券 / 币）</label><input id="c-value" type="number" value="5" min="1" /></div>
+                        <div><label>绑定奖池（限定券）</label><select id="c-pool"><option value="">请选择奖池</option></select></div>
                         <div><label>数量</label><input id="c-count" type="number" value="10" /></div>
                         <div><label>批次标签</label><input id="c-batch" placeholder="可选" /></div>
+                        <div><label>过期时间</label><input id="c-expire" type="datetime-local" /></div>
+                        <div><label>总兑换次数</label><input id="c-max-redemptions" type="number" value="1" min="1" /></div>
+                        <label class="with-cb"><input id="c-per-player-once" type="checkbox" checked /> 每玩家一次</label>
+                        <label class="with-cb"><input id="c-common" type="checkbox" /> 通用码</label>
                         <button id="gen-codes" class="btn primary small">生成</button>
                     </div>
                     <textarea id="gen-out" class="json-edit" spellcheck="false" readonly placeholder="生成的激活码将显示在此，便于复制分发"></textarea>
                 </div>
                 <div class="panel">
-                    <div class="panel-head"><h2>已发激活码</h2><button id="refresh-codes" class="btn ghost small">刷新</button></div>
+                    <div class="panel-head"><h2>已发激活码</h2><div><button id="export-codes" class="btn ghost small">导出选中/全部 CSV</button><button id="refresh-codes" class="btn ghost small">刷新</button></div></div>
                     <div id="code-rows"></div>
                 </div>
             </div>

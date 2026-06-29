@@ -39,6 +39,57 @@
         </header>
 
         <main class="admin-content task-layout">
+            <!-- 随机任务池（全宽板块，醒目，独立于左侧列表）-->
+            <section class="panel pool-board" style="grid-column:1/-1">
+                <div class="panel-head"><h2>🎲 随机任务池</h2></div>
+                <div class="pool-grid">
+                    <div class="pool-col">
+                        <h3>投放设置（每位玩家从共享池随机抽取，按周期自动过期刷新）</h3>
+                        <div class="ts-grid">
+                            <label>每日随机任务数<input id="ts-daily-count" type="number" min="0" /></label>
+                            <label>每周随机任务数<input id="ts-weekly-count" type="number" min="0" /></label>
+                            <label>赛季随机任务数<span class="ts-sub">0=全部</span><input id="ts-season-count" type="number" min="0" /></label>
+                            <label>主页同时显示<span class="ts-sub">其余滚动</span><input id="ts-display-count" type="number" min="1" /></label>
+                            <label>每日刷新周期(时)<input id="ts-daily-period" type="number" min="0" step="0.5" /></label>
+                            <label>每周刷新周期(时)<input id="ts-weekly-period" type="number" min="0" step="0.5" /></label>
+                            <label>赛季刷新周期(时)<span class="ts-sub">0=不自动</span><input id="ts-season-period" type="number" min="0" step="0.5" /></label>
+                            <label>每日免费刷新次数<input id="ts-daily-refresh" type="number" min="0" /></label>
+                            <label>每周免费刷新次数<input id="ts-weekly-refresh" type="number" min="0" /></label>
+                            <label>赛季免费刷新次数<span class="ts-sub">0=禁用</span><input id="ts-season-refresh" type="number" min="0" /></label>
+                        </div>
+                        <h3 style="margin-top:12px">难度预算（开启后该范围抽一组难度之和=预算的任务；任务难度在编辑器里设）</h3>
+                        <div class="ts-grid">
+                            <label class="with-cb"><input id="ts-daily-budget-on" type="checkbox" /> 每日启用难度预算</label>
+                            <label>每日难度预算<input id="ts-daily-budget" type="number" min="1" /></label>
+                            <label class="with-cb"><input id="ts-weekly-budget-on" type="checkbox" /> 每周启用难度预算</label>
+                            <label>每周难度预算<input id="ts-weekly-budget" type="number" min="1" /></label>
+                            <label class="with-cb"><input id="ts-season-budget-on" type="checkbox" /> 赛季启用难度预算</label>
+                            <label>赛季难度预算<input id="ts-season-budget" type="number" min="1" /></label>
+                        </div>
+                        <button id="save-task-settings" class="btn primary small" style="margin-top:10px">保存投放设置</button>
+                        <span id="ts-msg" class="muted" style="margin-left:8px;font-size:11px"></span>
+                    </div>
+                    <div class="pool-col">
+                        <h3>自动生成（程序化合成 Kills / 撤离 任务到<strong>独立生成池</strong> <code>tasks-gen.json</code>，标记 <code>gen_</code>，不污染左侧自定义任务池）</h3>
+                        <div id="gen-scopes"></div>
+                        <div style="margin-top:10px">
+                            <button id="save-gen-spec" class="btn primary small">保存生成规格</button>
+                            <button id="gen-now" class="btn ghost small">立即生成（已启用 scope）</button>
+                            <span id="gen-msg" class="muted" style="margin-left:8px;font-size:11px"></span>
+                        </div>
+                        <div style="margin-top:12px">
+                            <div style="display:flex;align-items:center;gap:8px">
+                                <strong style="font-size:12px">生成池</strong>
+                                <button id="gen-pool-refresh" class="btn ghost small">查看/刷新</button>
+                                <button id="gen-pool-clear" class="btn del small">清空生成池</button>
+                                <span id="gen-pool-msg" class="muted" style="font-size:11px"></span>
+                            </div>
+                            <div id="gen-pool-list" style="margin-top:8px;max-height:240px;overflow:auto"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- 左侧：任务列表 -->
             <aside class="task-list panel">
                 <div class="panel-head"><h2>任务模板</h2><button id="new-task-btn" class="btn primary small">＋ 新建任务</button></div>
@@ -56,25 +107,6 @@
                     <input id="refresh-profile" placeholder="Profile ID（留空批量）" />
                     <button id="refresh-active-tasks" class="btn ghost small">刷新任务</button>
                 </div>
-
-                <details class="task-settings-box" id="task-settings">
-                    <summary>任务系统设置（全局）</summary>
-                    <p class="hint" style="margin:8px 0">控制每位玩家抽取的随机任务数、自动刷新周期，以及主动刷新次数；固定任务始终额外加入。保存即写入当前赛季。</p>
-                    <div class="ts-grid">
-                        <label>每日随机任务数<input id="ts-daily-count" type="number" min="0" /></label>
-                        <label>每周随机任务数<input id="ts-weekly-count" type="number" min="0" /></label>
-                        <label>赛季随机任务数<span class="ts-sub">0=全部</span><input id="ts-season-count" type="number" min="0" /></label>
-                        <label>主页同时显示<span class="ts-sub">其余滚动</span><input id="ts-display-count" type="number" min="1" /></label>
-                        <label>每日刷新周期(时)<input id="ts-daily-period" type="number" min="0" step="0.5" /></label>
-                        <label>每周刷新周期(时)<input id="ts-weekly-period" type="number" min="0" step="0.5" /></label>
-                        <label>赛季刷新周期(时)<span class="ts-sub">0=不自动</span><input id="ts-season-period" type="number" min="0" step="0.5" /></label>
-                        <label>每日免费刷新次数<input id="ts-daily-refresh" type="number" min="0" /></label>
-                        <label>每周免费刷新次数<input id="ts-weekly-refresh" type="number" min="0" /></label>
-                        <label>赛季免费刷新次数<span class="ts-sub">0=禁用</span><input id="ts-season-refresh" type="number" min="0" /></label>
-                    </div>
-                    <button id="save-task-settings" class="btn primary small" style="margin-top:8px">保存设置</button>
-                    <span id="ts-msg" class="muted" style="margin-left:8px;font-size:11px"></span>
-                </details>
             </aside>
 
             <!-- 右侧：编辑器 -->
@@ -132,6 +164,10 @@
                         </div>
                         <div class="form-col">
                             <label>权重（随机池）</label><input id="f-weight" type="number" value="1" />
+                        </div>
+                        <div class="form-col">
+                            <label>难度<span class="ts-sub">难度预算用</span></label>
+                            <select id="f-difficulty"><option value="1">1 易</option><option value="2">2 中</option><option value="3">3 难</option></select>
                         </div>
                     </div>
 
@@ -200,6 +236,28 @@
                                 </div>
                             </div>
                         </div>
+                    </section>
+
+                    <!-- 任务奖励：经验 / 奖励项 / 两者 -->
+                    <section class="task-rewards" id="task-rewards">
+                        <div class="kill-conditions-head">
+                            <strong>完成奖励</strong><span>可发物品、购买权、称号、配方、服装、抽奖券和兑换币；限定抽奖券需选择绑定奖池。</span>
+                        </div>
+                        <div class="form-row two-col">
+                            <div class="form-col">
+                                <label>奖励方式</label>
+                                <select id="f-rewardmode">
+                                    <option value="xp">仅 BP 经验</option>
+                                    <option value="items">仅奖励项</option>
+                                    <option value="both">经验 + 奖励项</option>
+                                </select>
+                            </div>
+                            <div class="form-col" id="reward-xp-hint" style="align-self:end">
+                                <span class="hint">奖励项在下方逐项添加；FIR 仅对物品奖励生效。</span>
+                            </div>
+                        </div>
+                        <div id="reward-items" class="reward-cards"></div>
+                        <button id="add-reward-btn" type="button" class="btn ghost small">＋ 添加奖励项</button>
                     </section>
 
                     <div class="form-actions">

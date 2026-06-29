@@ -234,7 +234,7 @@ public class CreateProfileService(
         ResetAllTradersInProfile(sessionId);
 
         saveServer.GetProfile(sessionId).CharacterData.ScavData = playerScavGenerator.Generate(sessionId);
-        softResetService.MergePreservedStatsIfPending(saveServer.GetProfile(sessionId));
+        softResetService.ApplyPreservedStats(saveServer.GetProfile(sessionId));
 
         // Set old account in-game time data on wipe, if it exists to the scav
         if (oldScav?.Stats?.Eft is not null)
@@ -262,6 +262,8 @@ public class CreateProfileService(
 
         // Completed account creation
         saveServer.GetProfile(sessionId).ProfileInfo.IsWiped = false;
+        // 软重置：暂存值已写回新角色，清空避免下次普通建号误用
+        softResetService.ClearPreservedStats(saveServer.GetProfile(sessionId));
         await saveServer.SaveProfileAsync(sessionId);
 
         return pmcData.Id;

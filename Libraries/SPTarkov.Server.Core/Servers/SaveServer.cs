@@ -398,8 +398,8 @@ public class SaveServer(
     {
         profiles.TryAdd(profileDetails.ProfileInfo!.ProfileId!.Value, profileDetails);
 
-        // 软重置：角色重建时合并 sidecar 保留统计（原 AddProfileSoftResetPatch 内联；无 sidecar 时空操作）
-        softResetService.MergePreservedStatsIfPending(profileDetails);
+        // 软重置：角色重建时写回暂存的注册日期/在线时间（无暂存值时空操作）
+        softResetService.ApplyPreservedStats(profileDetails);
 
         // 懒加载：登记/刷新头索引
         RegisterLazyHeader(profileDetails);
@@ -618,7 +618,7 @@ public class SaveServer(
             return false;
         }
 
-        softResetService.CaptureSidecar(sessionID, profileToReset);
+        softResetService.CapturePreservedStats(profileToReset);
         softResetService.WipeProfileContent(profileToReset);
         profileToReset.ProfileInfo.IsWiped = true;
         SaveProfileAsync(sessionID).GetAwaiter().GetResult();

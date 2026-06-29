@@ -105,6 +105,19 @@ public record Info
     [JsonPropertyName("invalidOrUnloadableProfile")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? InvalidOrUnloadableProfile { get; internal set; }
+
+    // 软重置暂存：擦除前记下账号存在时间(注册日期)与在线时间，随存档持久化，角色重建时读回后清空。
+    [JsonPropertyName("sptPreservedRegistrationDate")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PreservedRegistrationDate { get; set; }
+
+    [JsonPropertyName("sptPreservedPmcInGameTime")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PreservedPmcInGameTime { get; set; }
+
+    [JsonPropertyName("sptPreservedScavInGameTime")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PreservedScavInGameTime { get; set; }
 }
 
 public record Characters

@@ -50,7 +50,7 @@ public static class TaskRotationService
         return picked;
     }
 
-    /// <summary>选出某 scope 当期应活跃的模板：fixed 全保留 + random 按数量抽取。</summary>
+    /// <summary>选出某 scope 当期应活跃的模板：fixed 全保留 + random 按数量抽取（或按难度预算抽取）。</summary>
     public static List<BpTaskTemplate> SelectForScope(
         List<BpTaskTemplate> allTasks,
         BpSeason season,
@@ -75,8 +75,129 @@ public static class TaskRotationService
             preferredPool = randomPool;
         }
 
+        // 难度预算模式（WeekendDrops 式）：抽一组难度之和=预算的任务；失败回退到按数量加权抽。
+        if (BudgetEnabledForScope(season, scope) && count > 0)
+        {
+            var budget = BudgetForScope(season, scope);
+            var byBudget = PickByDifficultyBudget(preferredPool, count, budget)
+                ?? PickByDifficultyBudget(randomPool, count, budget);
+            if (byBudget is not null)
+            {
+                result.AddRange(byBudget);
+                return result;
+            }
+        }
+
         result.AddRange(PickWeighted(preferredPool, count));
         return result;
+    }
+
+    internal static bool BudgetEnabledForScope(BpSeason season, string scope) => (scope ?? "").ToLowerInvariant() switch
+    {
+        "daily" => season.DailyBudgetEnabled,
+        "weekly" => season.WeeklyBudgetEnabled,
+        "season" => season.SeasonBudgetEnabled,
+        _ => false,
+    };
+
+    internal static int BudgetForScope(BpSeason season, string scope) => (scope ?? "").ToLowerInvariant() switch
+    {
+        "daily" => season.DailyDifficultyBudget,
+        "weekly" => season.WeeklyDifficultyBudget,
+        "season" => season.SeasonDifficultyBudget,
+        _ => 0,
+    };
+
+    /// <summary>任务"组"键：同组每期至多出一题，保证种类多样（如不会同时出两条 PMC 击杀）。</summary>
+    private static string GroupKey(BpTaskTemplate t)
+    {
+        var ct = (t.ConditionType ?? "").Trim().ToLowerInvariant();
+        return ct == "kills" ? $"kills|{(t.Target ?? "").Trim().ToLowerInvariant()}" : ct;
+    }
+
+    /// <summary>难度归一到 1..3。</summary>
+    private static int Diff(BpTaskTemplate t) => Math.Clamp(t.Difficulty <= 0 ? 1 : t.Difficulty, 1, 3);
+
+    /// <summary>
+    ///     从随机池抽 <paramref name="n"/> 个任务，使难度之和恰为 <paramref name="budget"/>，每组至多一题。
+    ///     找不到满足的组合时返回 null（调用方回退到按数量加权抽）。移植自 WeekendDrops 难度预算抽题。
+    /// </summary>
+    public static List<BpTaskTemplate>? PickByDifficultyBudget(List<BpTaskTemplate> pool, int n, int budget)
+    {
+        if (n <= 0 || budget <= 0 || pool.Count < n)
+        {
+            return null;
+        }
+
+        var byDifficulty = pool
+            .GroupBy(Diff)
+            .ToDictionary(g => g.Key, g => g.OrderBy(_ => Random.Shared.Next()).ToList());
+
+        foreach (var comp in DifficultyCompositions(n, budget).OrderBy(_ => Random.Shared.Next()))
+        {
+            if (!comp.All(kv => byDifficulty.TryGetValue(kv.Key, out var avail) && avail.Count >= kv.Value))
+            {
+                continue;
+            }
+
+            var picked = new List<BpTaskTemplate>();
+            var usedGroups = new HashSet<string>();
+            var ok = true;
+            foreach (var (diff, need) in comp)
+            {
+                var remaining = need;
+                foreach (var cand in byDifficulty[diff])
+                {
+                    if (remaining == 0)
+                    {
+                        break;
+                    }
+
+                    if (!usedGroups.Add(GroupKey(cand)))
+                    {
+                        continue; // 同组已取
+                    }
+
+                    picked.Add(cand);
+                    remaining--;
+                }
+
+                if (remaining > 0)
+                {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok && picked.Count == n)
+            {
+                return picked.OrderBy(_ => Random.Shared.Next()).ToList();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>枚举 n 个难度(1/2/3)的张数组合，使 1*易+2*中+3*难 = budget。</summary>
+    private static IEnumerable<Dictionary<int, int>> DifficultyCompositions(int n, int budget)
+    {
+        for (var hard = 0; hard <= n; hard++)
+        {
+            for (var med = 0; med <= n - hard; med++)
+            {
+                var easy = n - hard - med;
+                if (easy * 1 + med * 2 + hard * 3 != budget)
+                {
+                    continue;
+                }
+
+                var map = new Dictionary<int, int>();
+                if (easy > 0) map[1] = easy;
+                if (med > 0) map[2] = med;
+                if (hard > 0) map[3] = hard;
+                yield return map;
+            }
+        }
     }
 
     /// <summary>

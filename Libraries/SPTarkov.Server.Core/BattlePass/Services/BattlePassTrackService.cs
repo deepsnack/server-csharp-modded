@@ -16,6 +16,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 public class BattlePassTrackService(
     BattlePassService battlePassService,
     Services.DatabaseService databaseService,
+    TaskGeneratorService taskGenerator,
     ISptLogger<BattlePassTrackService> logger
 )
 {
@@ -33,8 +34,11 @@ public class BattlePassTrackService(
     /// <summary>按日/周/赛季周期滚动刷新活跃任务；首次进入则初始化所有 scope。会改动 prog（调用方保存）。</summary>
     public bool RefreshActiveTasks(string profileId, BpProgress prog)
     {
+        // 玩家交互时顺带触发到期的自动生成（无独立调度器）；会按需重建共享池的 gen_ 任务。
+        taskGenerator.MaybeAutoGenerate();
+
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var allTasks = BattlePassStore.GetTasks();
+        var allTasks = BattlePassStore.GetAllTasks();
         var season = BattlePassStore.GetSeason();
         var changed = false;
         foreach (var scope in new[] { "daily", "weekly", "season" })
@@ -71,7 +75,7 @@ public class BattlePassTrackService(
         }
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var allTasks = BattlePassStore.GetTasks();
+        var allTasks = BattlePassStore.GetAllTasks();
         var season = BattlePassStore.GetSeason();
 
         if (normalized == "all")
@@ -97,7 +101,7 @@ public class BattlePassTrackService(
             return false;
         }
 
-        var allTasks = BattlePassStore.GetTasks();
+        var allTasks = BattlePassStore.GetAllTasks();
         var targetTemplate = allTasks.FirstOrDefault(t => string.Equals(t.Id, target.TaskId, StringComparison.OrdinalIgnoreCase));
         if (targetTemplate is null || string.Equals(targetTemplate.Rotation, "fixed", StringComparison.OrdinalIgnoreCase))
         {
@@ -315,7 +319,7 @@ public class BattlePassTrackService(
             prog.CurrentRaidId = string.IsNullOrWhiteSpace(raidId) ? null : raidId;
         }
 
-        var templates = BattlePassStore.GetTasks().ToDictionary(t => t.Id);
+        var templates = BattlePassStore.GetAllTasks().ToDictionary(t => t.Id);
 
         foreach (var active in prog.ActiveTasks)
         {
@@ -363,13 +367,8 @@ public class BattlePassTrackService(
 
             if (active.Progress >= target)
             {
-                var xp = tpl.Xp;
-                if (prog.PremiumUnlocked && season.PremiumXpMultiplier > 1.0)
-                {
-                    xp = (int)Math.Round(xp * season.PremiumXpMultiplier);
-                }
-
-                battlePassService.AddXp(prog, season, xp); // 仅记 BP 经验，不动角色经验
+                // 统一结算：按任务 rewardMode 给 BP 经验 / 任务自带奖励 / 两者
+                var xp = battlePassService.CreditTaskCompletion(profileId, prog, season, tpl);
                 active.CreditedXp = true;
                 active.Progress = target;
                 result.Credited.Add(new RaidTrackCredit { TaskId = active.TaskId, GainedXp = xp, Done = true });

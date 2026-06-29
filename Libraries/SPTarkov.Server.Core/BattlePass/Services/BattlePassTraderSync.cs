@@ -28,6 +28,7 @@ public class BattlePassTraderSync(
     ImageRouter imageRouter,
     TraderAssortHelper traderAssortHelper,
     TraderHelper traderHelper,
+    BattlePassItemBuilder itemBuilder,
     ISptLogger<BattlePassTraderSync> logger
 )
 {
@@ -55,10 +56,11 @@ public class BattlePassTraderSync(
             var cfg = BattlePassStore.GetTraderConfig();
             var offers = BattlePassStore.GetOffers();
 
+            var assort = BuildAssort(offers);
             var trader = new Trader
             {
                 Base = BuildBase(cfg),
-                Assort = BuildAssort(offers),
+                Assort = assort,
                 Dialogue = new Dictionary<string, List<string>?>(),
                 QuestAssort = new Dictionary<string, Dictionary<MongoId, MongoId>>
                 {
@@ -74,7 +76,7 @@ public class BattlePassTraderSync(
             HookLocale(cfg);
 
             logger.Success(
-                $"[SPT-BattlePass] 通行证商人已注入 (id={TraderIdHex}, 货架 {offers.Count} 项)。"
+                $"[SPT-BattlePass] 通行证商人已注入 (id={TraderIdHex}, 配置 {offers.Count} 项，实际注入 {assort.Items.Count} 项)。"
             );
         }
         catch (Exception ex)
@@ -159,7 +161,7 @@ public class BattlePassTraderSync(
         };
     }
 
-    private TraderAssort BuildAssort(List<BpTraderOffer> offers)
+    internal TraderAssort BuildAssort(List<BpTraderOffer> offers)
     {
         var items = new List<Item>();
         var barter = new Dictionary<MongoId, List<List<BarterScheme>>>();
@@ -193,22 +195,19 @@ public class BattlePassTraderSync(
             var rootId = OfferRootItemId(offer.Id);
             var unlimited = offer.Stock <= 0;
 
-            items.Add(
-                new Item
-                {
-                    Id = rootId,
-                    Template = tpl,
-                    ParentId = "hideout",
-                    SlotId = "hideout",
-                    Upd = new Upd
-                    {
-                        StackObjectsCount = unlimited ? 999_999 : offer.Stock,
-                        UnlimitedCount = unlimited,
-                        BuyRestrictionMax = offer.BuyLimit > 0 ? offer.BuyLimit : null,
-                        BuyRestrictionCurrent = offer.BuyLimit > 0 ? 0 : null,
-                    },
-                }
-            );
+            // 枪/甲/盔按默认完整形态上架（枪=默认改装预设，甲盔=带插板内衬），其余物品为单件。
+            var built = itemBuilder.Build(tpl, unlimited ? 999_999 : offer.Stock, rootId);
+            var root = built[0];
+            root.ParentId = "hideout";
+            root.SlotId = "hideout";
+            root.Upd = new Upd
+            {
+                StackObjectsCount = unlimited ? 999_999 : offer.Stock,
+                UnlimitedCount = unlimited,
+                BuyRestrictionMax = offer.BuyLimit > 0 ? offer.BuyLimit : null,
+                BuyRestrictionCurrent = offer.BuyLimit > 0 ? 0 : null,
+            };
+            items.AddRange(built);
 
             // 以物易物价格：同一组内多项需同时支付（cost 为空 = 0 价免费取）
             var scheme = new List<BarterScheme>();

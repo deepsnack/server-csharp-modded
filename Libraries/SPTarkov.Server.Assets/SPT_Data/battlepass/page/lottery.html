@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证抽奖 · Battle Pass Lottery</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body class="lottery-page">
+    <div class="grain"></div>
+
+    <section id="lottery-view" class="view">
+        <header class="topbar">
+            <div class="season-info">
+                <span class="season-name">通行证抽奖</span>
+                <span class="season-timer" id="lottery-status">LOTTERY ACCESS</span>
+            </div>
+            <div class="lottery-wallet" id="lottery-wallet">
+                <span>通用券 <b id="wallet-global">0</b></span>
+                <span>兑换币 <b id="wallet-coins">0</b></span>
+                <span>限定券 <b id="wallet-pool">0</b></span>
+            </div>
+            <div class="user-block">
+                <a class="btn ghost small" href="index.html">返回通行证</a>
+                <a class="btn ghost small" href="titles.html">我的称号</a>
+                <button id="lottery-logout" class="btn ghost small">登出</button>
+            </div>
+        </header>
+
+        <main class="content lottery-content">
+            <section id="lottery-alert" class="panel lottery-alert hidden">
+                <div class="panel-head"><h2>无法接入抽奖模块</h2></div>
+                <p id="lottery-alert-text" class="lottery-empty">请先返回通行证页面登录。</p>
+                <a class="btn primary small" href="index.html">返回登录</a>
+            </section>
+
+            <section id="lottery-main">
+                <section class="lottery-hero">
+                    <div class="lottery-hero-copy">
+                        <span class="lottery-kicker">BATTLE PASS LOTTERY</span>
+                        <h1 id="lottery-pool-title">选择奖池</h1>
+                        <p id="lottery-pool-desc">查看概率、消耗与抽取记录。不可重复奖池只支持单抽。</p>
+                    </div>
+                    <div class="lottery-broadcast" id="lottery-broadcast"></div>
+                </section>
+
+                <section class="lottery-layout">
+                    <aside class="panel lottery-pools">
+                        <div class="panel-head"><h2>奖池</h2><button id="lottery-refresh" class="t-reroll" type="button">刷新</button></div>
+                        <div id="lottery-pool-list" class="lottery-pool-list"></div>
+                    </aside>
+
+                    <section class="lottery-board">
+                        <section class="panel lottery-detail">
+                            <div class="panel-head">
+                                <h2 id="pool-detail-title">奖池详情</h2>
+                                <span id="pool-detail-meta" class="muted"></span>
+                            </div>
+                            <div class="lottery-detail-grid">
+                                <div class="lottery-cover" id="pool-cover"></div>
+                                <div class="lottery-actions">
+                                    <div id="pool-cost" class="lottery-cost"></div>
+                                    <div id="pool-progress" class="lottery-progress"></div>
+                                    <div class="lottery-buttons">
+                                        <button id="draw-once" class="btn primary small" type="button">单抽</button>
+                                        <button id="draw-ten" class="btn ghost small" type="button">十连抽</button>
+                                    </div>
+                                    <p id="pool-message" class="lottery-empty"></p>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="panel lottery-result-panel">
+                            <div class="panel-head"><h2>抽取结果</h2><span id="result-sub" class="muted">等待指令</span></div>
+                            <div id="lottery-openbox" class="openbox hidden" data-rarity="common">
+                                <div class="openbox-stage">
+                                    <div class="openbox-beam"></div>
+                                    <div class="openbox-particles"></div>
+                                    <div class="openbox-crate">
+                                        <svg viewBox="0 0 120 96" aria-hidden="true">
+                                            <g class="crate-body">
+                                                <rect x="14" y="40" width="92" height="48" rx="4" />
+                                                <rect class="crate-band" x="14" y="56" width="92" height="8" />
+                                                <rect class="crate-latch" x="52" y="50" width="16" height="12" rx="2" />
+                                            </g>
+                                            <g class="crate-lid">
+                                                <rect x="10" y="22" width="100" height="20" rx="4" />
+                                                <rect class="crate-band" x="10" y="28" width="100" height="6" />
+                                            </g>
+                                        </svg>
+                                    </div>
+                                </div>
+                                <button class="openbox-skip" type="button">SKIP ▸</button>
+                            </div>
+                            <div id="lottery-flash" class="lottery-flash"></div>
+                            <div id="lottery-result" class="lottery-result"></div>
+                        </section>
+
+                        <section class="panel lottery-prizes-panel">
+                            <div class="panel-head"><h2>奖项与概率</h2><span id="probability-mode" class="muted"></span></div>
+                            <div id="lottery-prizes" class="lottery-prizes"></div>
+                        </section>
+                    </section>
+                </section>
+
+                <section class="lottery-bottom-grid">
+                    <section class="panel lottery-shop-panel">
+                        <div class="panel-head"><h2>兑换商店</h2><span class="muted">全局兑换币商店</span></div>
+                        <div id="lottery-shop" class="lottery-shop"></div>
+                    </section>
+
+                    <section class="panel lottery-record-panel">
+                        <div class="panel-head"><h2>抽取记录</h2><button id="record-refresh" class="t-reroll" type="button">刷新</button></div>
+                        <div id="lottery-records" class="lottery-records"></div>
+                    </section>
+                </section>
+            </section>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="lottery.js"></script>
+</body>
+</html>

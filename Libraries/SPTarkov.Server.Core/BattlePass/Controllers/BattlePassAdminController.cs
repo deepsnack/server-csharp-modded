@@ -18,8 +18,9 @@ public class BattlePassAdminController(
     ActivationCodeService activationCodeService,
     BattlePassTraderSync traderSync,
     BattlePassTrackService trackService,
-    BattlePassRecipeSync recipeSync
-)
+    BattlePassRecipeSync recipeSync,
+    TaskGeneratorService taskGenerator
+) : ControllerBase
 {
     private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
 
@@ -151,6 +152,219 @@ public class BattlePassAdminController(
         return new { success = removed > 0 };
     }
 
+    // ---- 任务生成 ----
+    [HttpGet("tasks/gen-spec")]
+    public object GetGenSpec([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, spec = BattlePassStore.GetGenSpec() };
+    }
+
+    [HttpPost("tasks/gen-spec")]
+    public object SaveGenSpec([FromBody] BpGenSpec spec, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        spec.Daily ??= new BpGenScopeSpec();
+        spec.Weekly ??= new BpGenScopeSpec();
+        spec.Season ??= new BpGenScopeSpec();
+        NormalizeGenScope(spec.Daily);
+        NormalizeGenScope(spec.Weekly);
+        NormalizeGenScope(spec.Season);
+        BattlePassStore.SaveGenSpec(spec);
+        return new { success = true };
+    }
+
+    /// <summary>手动一键生成任务：按规格向<b>独立生成池</b>写入 gen_ 任务（仅启用的 scope）。可指定 scopes，缺省全部。</summary>
+    [HttpPost("tasks/generate")]
+    public object GenerateTasks([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        List<string>? scopes = null;
+        if (request.ValueKind == JsonValueKind.Object && request.TryGetProperty("scopes", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            scopes = arr.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList();
+        }
+
+        var generated = taskGenerator.Generate(scopes);
+        return new { success = true, generated };
+    }
+
+    /// <summary>查看独立生成池（gen_ 自动/手动生成任务），与管理员自定义任务池分开，便于核对与清理。</summary>
+    [HttpGet("tasks/generated")]
+    public object GetGeneratedTasks([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, tasks = BattlePassStore.GetGenTasks() };
+    }
+
+    /// <summary>清空生成池：手动一键清除全部 gen_ 生成任务，避免长期累积。不影响自定义任务池。</summary>
+    [HttpDelete("tasks/generated")]
+    public object ClearGeneratedTasks([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var cleared = BattlePassStore.GetGenTasks().Count;
+        BattlePassStore.SaveGenTasks(new List<BpTaskTemplate>());
+        return new { success = true, cleared };
+    }
+
+    // ---- 网页商店自定义货架 ----
+    [HttpGet("shop")]
+    public object GetShopOffers([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new { success = true, offers = BattlePassStore.GetShopOffers(), refreshSeconds = BattlePassStore.GetShopState().RefreshSeconds };
+    }
+
+    /// <summary>设置网页商店刷新周期（秒，&lt;=0 = 不刷新）。修改后从当前时刻起算新周期。</summary>
+    [HttpPost("shop/refresh-period")]
+    public object SetShopRefreshPeriod([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var seconds = request.TryGetProperty("seconds", out var s) && s.TryGetInt32(out var v) ? v : 0;
+        seconds = Math.Max(0, seconds);
+
+        var state = BattlePassStore.GetShopState();
+        state.RefreshSeconds = seconds;
+        // 改周期即从现在起算；不立即清库存/限购，到点自然滚动
+        state.PeriodStartUtc = seconds > 0 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : 0;
+        BattlePassStore.SaveShopState(state);
+        return new { success = true, refreshSeconds = seconds };
+    }
+
+    /// <summary>新增或更新单个网页商店自定义货架项（按 id upsert）。</summary>
+    [HttpPost("shop")]
+    public object UpsertShopOffer([FromBody] BpTraderOffer offer, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        if (string.IsNullOrWhiteSpace(offer.Id))
+        {
+            return new { success = false, message = "货架项 id 不能为空" };
+        }
+
+        offer.Id = offer.Id.Trim();
+        offer.Tpl = offer.Tpl.Trim();
+        if (!Models.Common.MongoId.IsValidMongoId(offer.Tpl))
+        {
+            return new { success = false, message = "商品 tpl 无效" };
+        }
+
+        offer.Cost ??= new List<BpBarterCost>();
+        if (offer.Cost.Any(c => c is null || !Models.Common.MongoId.IsValidMongoId(c.Tpl?.Trim()) || c.Count <= 0))
+        {
+            return new { success = false, message = "支付物品 tpl 无效或数量不是正整数" };
+        }
+
+        foreach (var cost in offer.Cost)
+        {
+            cost.Tpl = cost.Tpl.Trim();
+        }
+
+        offer.SellCount = Math.Max(1, offer.SellCount);
+        offer.BuyLimit = Math.Max(0, offer.BuyLimit);
+        var offers = BattlePassStore.GetShopOffers();
+        var existing = offers.FirstOrDefault(o => string.Equals(o.Id, offer.Id, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null && existing.Stock != offer.Stock)
+        {
+            ResetShopSales($"custom:{offer.Id}");
+        }
+
+        offers.RemoveAll(o => string.Equals(o.Id, offer.Id, StringComparison.OrdinalIgnoreCase));
+        offers.Add(offer);
+        BattlePassStore.SaveShopOffers(offers);
+        return new { success = true };
+    }
+
+    [HttpDelete("shop")]
+    public object DeleteShopOffer([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        var id = request.TryGetProperty("id", out var i) ? i.GetString() : null;
+        if (string.IsNullOrEmpty(id))
+        {
+            return new { success = false, message = "缺少 id" };
+        }
+
+        var offers = BattlePassStore.GetShopOffers();
+        var removed = offers.RemoveAll(o => string.Equals(o.Id, id, StringComparison.OrdinalIgnoreCase));
+        BattlePassStore.SaveShopOffers(offers);
+        if (removed > 0)
+        {
+            ResetShopSales($"custom:{id}");
+        }
+
+        return new { success = removed > 0 };
+    }
+
+    private static void NormalizeGenScope(BpGenScopeSpec scope)
+    {
+        scope.Count = Math.Clamp(scope.Count, 1, 100);
+        scope.AutoPeriodHours = Math.Max(0, scope.AutoPeriodHours);
+        scope.ConditionTypes = (scope.ConditionTypes ?? [])
+            .Where(t => t is not null && (t.Equals("Kills", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("Exploration", StringComparison.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        scope.KillTargets = (scope.KillTargets ?? [])
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        scope.Locations = (scope.Locations ?? [])
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        scope.MinCount = Math.Max(1, scope.MinCount);
+        scope.MaxCount = Math.Max(scope.MinCount, scope.MaxCount);
+        scope.XpEasy = Math.Max(0, scope.XpEasy);
+        scope.XpMed = Math.Max(0, scope.XpMed);
+        scope.XpHard = Math.Max(0, scope.XpHard);
+    }
+
+    private static void ResetShopSales(string offerKey)
+    {
+        var state = BattlePassStore.GetShopState();
+        if (state.Sales.Remove(offerKey))
+        {
+            BattlePassStore.SaveShopState(state);
+        }
+    }
+
     [HttpPost("tasks/refresh")]
     public object RefreshActiveTasks([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
@@ -214,9 +428,29 @@ public class BattlePassAdminController(
         var value = request.TryGetProperty("value", out var v) ? v.GetInt32() : 0;
         var count = request.TryGetProperty("count", out var c) ? c.GetInt32() : 1;
         var batchTag = request.TryGetProperty("batchTag", out var b) ? b.GetString() : null;
+        var poolId = request.TryGetProperty("poolId", out var p) ? p.GetString() : null;
+        var expiresUtc = request.TryGetProperty("expiresUtc", out var e) ? e.GetInt64() : 0;
+        var maxRedemptions = request.TryGetProperty("maxRedemptions", out var m) ? m.GetInt32() : 1;
+        var perPlayerOnce = !request.TryGetProperty("perPlayerOnce", out var once) || once.GetBoolean();
+        var commonCode = request.TryGetProperty("commonCode", out var common) && common.GetBoolean();
 
-        var created = activationCodeService.Generate(type, value, count, batchTag);
-        return new { success = true, codes = created.Select(c2 => c2.Code).ToList() };
+        if (string.Equals(type, "lotteryPoolTickets", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(poolId))
+            {
+                return new { success = false, message = "限定抽奖券必须选择绑定奖池" };
+            }
+
+            var exists = BattlePassStore.GetLotteryPools()
+                .Any(pool => string.Equals(pool.Id, poolId, StringComparison.OrdinalIgnoreCase));
+            if (!exists)
+            {
+                return new { success = false, message = "绑定奖池不存在" };
+            }
+        }
+
+        var created = activationCodeService.Generate(type, value, count, batchTag, poolId, expiresUtc, maxRedemptions, perPlayerOnce, commonCode);
+        return new { success = true, codes = created.Select(c2 => c2.Code).ToList(), entries = created };
     }
 
     [HttpGet("codes")]
@@ -228,6 +462,76 @@ public class BattlePassAdminController(
         }
 
         return new { success = true, codes = BattlePassStore.GetCodes() };
+    }
+
+    [HttpGet("codes/export")]
+    public IActionResult ExportCodes([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new UnauthorizedResult();
+        }
+
+        return CodesCsv(BattlePassStore.GetCodes(), "battlepass-codes.csv");
+    }
+
+    [HttpPost("codes/export")]
+    public IActionResult ExportSelectedCodes([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!Auth(token))
+        {
+            return new UnauthorizedResult();
+        }
+
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (request.ValueKind == JsonValueKind.Object
+            && request.TryGetProperty("codes", out var codes)
+            && codes.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var code in codes.EnumerateArray())
+            {
+                var value = code.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    selected.Add(value.Trim());
+                }
+            }
+        }
+
+        var entries = BattlePassStore.GetCodes();
+        if (selected.Count > 0)
+        {
+            entries = entries
+                .Where(c => selected.Contains(c.Code))
+                .ToList();
+        }
+
+        return CodesCsv(entries, selected.Count > 0 ? "battlepass-selected-codes.csv" : "battlepass-codes.csv");
+    }
+
+    private IActionResult CodesCsv(IEnumerable<BpActivationCode> codes, string fileName)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("code,type,value,poolId,batchTag,createdUtc,expiresUtc,maxRedemptions,redeemCount,perPlayerOnce,redeemedBy,redeemedUtc");
+        foreach (var c in codes.OrderByDescending(c => c.CreatedUtc))
+        {
+            sb.AppendLine(string.Join(",", [
+                Csv(c.Code),
+                Csv(c.Type),
+                c.Value.ToString(),
+                Csv(c.PoolId),
+                Csv(c.BatchTag),
+                c.CreatedUtc.ToString(),
+                c.ExpiresUtc.ToString(),
+                c.MaxRedemptions.ToString(),
+                c.RedeemCount.ToString(),
+                c.PerPlayerOnce.ToString(),
+                Csv(c.RedeemedBy),
+                c.RedeemedUtc?.ToString() ?? "",
+            ]));
+        }
+
+        return File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv; charset=utf-8", fileName);
     }
 
     // ---- 通行证商人：元信息 ----
@@ -419,13 +723,13 @@ public class BattlePassAdminController(
             foreach (var stale in new[] { "trader-avatar.png", "trader-avatar.jpg" })
             {
                 var p = BattlePassStore.TraderAvatarPath(stale);
-                if (File.Exists(p) && !string.Equals(stale, fileName, StringComparison.OrdinalIgnoreCase))
+                if (System.IO.File.Exists(p) && !string.Equals(stale, fileName, StringComparison.OrdinalIgnoreCase))
                 {
-                    File.Delete(p);
+                    System.IO.File.Delete(p);
                 }
             }
 
-            File.WriteAllBytes(BattlePassStore.TraderAvatarPath(fileName), bytes);
+            System.IO.File.WriteAllBytes(BattlePassStore.TraderAvatarPath(fileName), bytes);
         }
         catch (Exception ex)
         {
@@ -489,7 +793,13 @@ public class BattlePassAdminController(
         }
 
         var offers = BattlePassStore.GetOffers();
-        offers.RemoveAll(o => o.Id == offer.Id);
+        var existing = offers.FirstOrDefault(o => string.Equals(o.Id, offer.Id, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null && existing.Stock != offer.Stock)
+        {
+            ResetShopSales($"trader:{offer.Id}");
+        }
+
+        offers.RemoveAll(o => string.Equals(o.Id, offer.Id, StringComparison.OrdinalIgnoreCase));
         offers.Add(offer);
         BattlePassStore.SaveOffers(offers);
         traderSync.Sync();
@@ -511,8 +821,13 @@ public class BattlePassAdminController(
         }
 
         var offers = BattlePassStore.GetOffers();
-        var removed = offers.RemoveAll(o => o.Id == id);
+        var removed = offers.RemoveAll(o => string.Equals(o.Id, id, StringComparison.OrdinalIgnoreCase));
         BattlePassStore.SaveOffers(offers);
+        if (removed > 0)
+        {
+            ResetShopSales($"trader:{id}");
+        }
+
         traderSync.Sync();
         return new { success = removed > 0 };
     }
@@ -577,9 +892,9 @@ public class BattlePassAdminController(
         try
         {
             var p = BattlePassStore.TitleImagePath(id);
-            if (File.Exists(p))
+            if (System.IO.File.Exists(p))
             {
-                File.Delete(p);
+                System.IO.File.Delete(p);
             }
         }
         catch
@@ -652,7 +967,7 @@ public class BattlePassAdminController(
         try
         {
             Directory.CreateDirectory(BattlePassStore.TitleImageDir);
-            File.WriteAllBytes(BattlePassStore.TitleImagePath(id), bytes);
+            System.IO.File.WriteAllBytes(BattlePassStore.TitleImagePath(id), bytes);
         }
         catch (Exception ex)
         {
@@ -849,5 +1164,11 @@ public class BattlePassAdminController(
             .ToList();
 
         return new { success = true, players };
+    }
+
+    private static string Csv(string? value)
+    {
+        value ??= "";
+        return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
 }

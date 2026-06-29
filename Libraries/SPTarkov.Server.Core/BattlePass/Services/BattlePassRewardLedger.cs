@@ -10,7 +10,7 @@ public static class BattlePassRewardLedger
     public static string? RewardKey(BpReward reward)
     {
         var type = (reward.Type ?? "item").Trim().ToLowerInvariant();
-        if (type is not ("purchaseright" or "recipe" or "title"))
+        if (type is not ("purchaseright" or "recipe" or "title" or "clothing" or "lotteryglobaltickets" or "lotterypooltickets" or "lotteryexchangecoins"))
         {
             type = "item";
         }
@@ -20,6 +20,10 @@ public static class BattlePassRewardLedger
             "purchaseright" => reward.OfferId,
             "recipe" => reward.RecipeId,
             "title" => reward.TitleId,
+            "clothing" => reward.SuitId,
+            "lotterypooltickets" => reward.PoolId,
+            "lotteryglobaltickets" => "global",
+            "lotteryexchangecoins" => "exchange",
             _ => reward.Tpl,
         };
 

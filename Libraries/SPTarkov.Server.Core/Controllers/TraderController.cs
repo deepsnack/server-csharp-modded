@@ -207,7 +207,22 @@ public class TraderController(
                 .ToHashSet();
             if (removedRootIds.Count > 0)
             {
-                assort.Items.RemoveAll(i => acquisitionMask.IsTraderItemRemoved(traderId, i.Template));
+                // 连带移除被删根件的全部子件（默认预设/插板/内衬等），避免遗留孤儿改件让客户端报错。
+                var removeIds = removedRootIds.Select(id => id.ToString()).ToHashSet();
+                bool grew;
+                do
+                {
+                    grew = false;
+                    foreach (var it in assort.Items)
+                    {
+                        if (it.ParentId is not null && removeIds.Contains(it.ParentId) && removeIds.Add(it.Id.ToString()))
+                        {
+                            grew = true;
+                        }
+                    }
+                } while (grew);
+
+                assort.Items.RemoveAll(i => removeIds.Contains(i.Id.ToString()));
                 foreach (var rootId in removedRootIds)
                 {
                     assort.BarterScheme?.Remove(rootId);

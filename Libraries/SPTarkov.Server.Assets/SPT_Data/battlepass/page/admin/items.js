@@ -140,7 +140,7 @@ async function toggleFleaBlacklist(tpl, add) {
 
 // ---- 移除现有途径 ----
 async function removeEntry(source, ref) {
-    if (!confirm('移除该获取途径？（结构类移除的撤销将在下次重启恢复）')) return;
+    if (!confirm('移除该获取途径？管控会持久保存（重启后依然生效），可随时在「已应用编辑」中撤销恢复（即时生效）。')) return;
     const ov = { op: 'remove', source, tpl: SELECTED };
     Object.assign(ov, ref || {});
     const r = await api('/edit', 'POST', ov);

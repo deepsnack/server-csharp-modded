@@ -20,8 +20,12 @@ public static class BattlePassStore
     private static string SeasonPath => Path.Combine(BaseDir, "season.json");
     private static string TracksPath => Path.Combine(BaseDir, "tracks.json");
     private static string TasksPath => Path.Combine(BaseDir, "tasks.json");
+    private static string GenTasksPath => Path.Combine(BaseDir, "tasks-gen.json");
     private static string CodesPath => Path.Combine(BaseDir, "codes.json");
     private static string OffersPath => Path.Combine(BaseDir, "trader.json");
+    private static string ShopPath => Path.Combine(BaseDir, "shop.json");
+    private static string ShopStatePath => Path.Combine(BaseDir, "shop-state.json");
+    private static string GenSpecPath => Path.Combine(BaseDir, "task-gen.json");
     private static string TraderConfigPath => Path.Combine(BaseDir, "trader-meta.json");
     private static string ProgressDir => Path.Combine(BaseDir, "progress");
     private static string TitleCatalogPath => Path.Combine(BaseDir, "titles.json");
@@ -39,6 +43,16 @@ public static class BattlePassStore
     private static string FleaControlPath => Path.Combine(BaseDir, "flea-control.json");
     private static string ItemBansPath => Path.Combine(BaseDir, "item-bans.json");
     private static string CustomRecipesPath => Path.Combine(BaseDir, "custom-recipes.json");
+    private static string LotteryDir => Path.Combine(BaseDir, "lottery");
+    private static string LotterySettingsPath => Path.Combine(LotteryDir, "settings.json");
+    private static string LotteryPoolsPath => Path.Combine(LotteryDir, "pools.json");
+    private static string LotteryShopPath => Path.Combine(LotteryDir, "shop.json");
+    private static string LotteryDrawRecordsPath => Path.Combine(LotteryDir, "draw-records.json");
+    private static string LotteryTransactionsPath => Path.Combine(LotteryDir, "transactions.json");
+    private static string LotteryAuditLogsPath => Path.Combine(LotteryDir, "audit-logs.json");
+    private static string LotteryWalletsDir => Path.Combine(LotteryDir, "wallets");
+    private static string LotteryProgressDir => Path.Combine(LotteryDir, "progress");
+    private static string LotteryShopPurchasesDir => Path.Combine(LotteryDir, "shop-purchases");
 
     /// <summary>商人头像文件的绝对路径（按配置的文件名，默认 trader-avatar.png）。</summary>
     public static string TraderAvatarPath(string? fileName = null)
@@ -49,6 +63,9 @@ public static class BattlePassStore
 
     private static readonly ConcurrentDictionary<string, BpProgress> ProgressCache = new();
     private static readonly ConcurrentDictionary<string, BpPlayerTitles> PlayerTitlesCache = new();
+    private static readonly ConcurrentDictionary<string, BpLotteryWallet> LotteryWalletCache = new();
+    private static readonly ConcurrentDictionary<string, Dictionary<string, BpLotteryPoolProgress>> LotteryProgressCache = new();
+    private static readonly ConcurrentDictionary<string, BpLotteryShopPurchaseProgress> LotteryShopPurchaseCache = new();
 
     /// <summary>启动时确保目录与默认配置存在（首次写入示例赛季/奖励轨/任务）。</summary>
     public static void EnsureSeeded()
@@ -57,6 +74,10 @@ public static class BattlePassStore
         Directory.CreateDirectory(ProgressDir);
         Directory.CreateDirectory(TitlesDir);
         Directory.CreateDirectory(TitleImageDir);
+        Directory.CreateDirectory(LotteryDir);
+        Directory.CreateDirectory(LotteryWalletsDir);
+        Directory.CreateDirectory(LotteryProgressDir);
+        Directory.CreateDirectory(LotteryShopPurchasesDir);
 
         if (!File.Exists(SeasonPath))
         {
@@ -107,6 +128,36 @@ public static class BattlePassStore
         {
             WriteJson(ItemBansPath, new BpItemBans());
         }
+
+        if (!File.Exists(LotterySettingsPath))
+        {
+            WriteJson(LotterySettingsPath, new BpLotterySettings());
+        }
+
+        if (!File.Exists(LotteryPoolsPath))
+        {
+            WriteJson(LotteryPoolsPath, new List<BpLotteryPool>());
+        }
+
+        if (!File.Exists(LotteryShopPath))
+        {
+            WriteJson(LotteryShopPath, new List<BpLotteryShopItem>());
+        }
+
+        if (!File.Exists(LotteryDrawRecordsPath))
+        {
+            WriteJson(LotteryDrawRecordsPath, new List<BpLotteryDrawRecord>());
+        }
+
+        if (!File.Exists(LotteryTransactionsPath))
+        {
+            WriteJson(LotteryTransactionsPath, new List<BpLotteryTransaction>());
+        }
+
+        if (!File.Exists(LotteryAuditLogsPath))
+        {
+            WriteJson(LotteryAuditLogsPath, new List<BpLotteryAuditLog>());
+        }
     }
 
     // ---- 赛季 ----
@@ -132,15 +183,48 @@ public static class BattlePassStore
     }
 
     // ---- 任务模板 ----
+    /// <summary>管理员手写的自定义任务池（不含程序生成的 gen_ 任务，后者独立存 <c>tasks-gen.json</c>）。</summary>
     public static List<BpTaskTemplate> GetTasks()
     {
-        var tasks = ReadJson<List<BpTaskTemplate>>(TasksPath);
-        return tasks ?? BattlePassDefaults.Tasks();
+        var tasks = ReadJson<List<BpTaskTemplate>>(TasksPath) ?? BattlePassDefaults.Tasks();
+        // 历史兼容：旧版把 gen_ 任务混存于此污染后台任务池——自定义池一律剔除生成任务。
+        tasks.RemoveAll(t => t.Id is not null && t.Id.StartsWith(TaskGeneratorService.GenPrefix, StringComparison.OrdinalIgnoreCase));
+        return tasks;
     }
 
     public static void SaveTasks(List<BpTaskTemplate> tasks)
     {
         WriteJson(TasksPath, tasks);
+    }
+
+    /// <summary>程序生成的任务池（gen_ 前缀，与自定义池物理隔离，多次刷新只整体替换、不堆积于后台管理）。</summary>
+    public static List<BpTaskTemplate> GetGenTasks()
+    {
+        var existing = ReadJson<List<BpTaskTemplate>>(GenTasksPath);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        // 首次访问：从旧版混存的 tasks.json 迁移已生成的 gen_ 任务，避免升级后已生成任务突然消失。
+        var migrated = (ReadJson<List<BpTaskTemplate>>(TasksPath) ?? new List<BpTaskTemplate>())
+            .Where(t => t.Id is not null && t.Id.StartsWith(TaskGeneratorService.GenPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        WriteJson(GenTasksPath, migrated);
+        return migrated;
+    }
+
+    public static void SaveGenTasks(List<BpTaskTemplate> tasks)
+    {
+        WriteJson(GenTasksPath, tasks);
+    }
+
+    /// <summary>自定义池 ∪ 生成池：玩家抽取活跃任务与模板查询使用全量。</summary>
+    public static List<BpTaskTemplate> GetAllTasks()
+    {
+        var all = GetTasks();
+        all.AddRange(GetGenTasks());
+        return all;
     }
 
     // ---- 激活码 ----
@@ -174,6 +258,44 @@ public static class BattlePassStore
     public static void SaveOffers(List<BpTraderOffer> offers)
     {
         WriteJson(OffersPath, offers);
+    }
+
+    // ---- 网页商店自定义货架（独立于游戏内商人 offers；管理员可单独维护）----
+    public static List<BpTraderOffer> GetShopOffers()
+    {
+        return ReadJson<List<BpTraderOffer>>(ShopPath) ?? new List<BpTraderOffer>();
+    }
+
+    public static void SaveShopOffers(List<BpTraderOffer> offers)
+    {
+        WriteJson(ShopPath, offers);
+    }
+
+    public static BpShopState GetShopState()
+    {
+        var state = ReadJson<BpShopState>(ShopStatePath) ?? new BpShopState();
+        state.Sales ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        return state;
+    }
+
+    public static void SaveShopState(BpShopState state)
+    {
+        WriteJson(ShopStatePath, state);
+    }
+
+    // ---- 任务生成规格 ----
+    public static BpGenSpec GetGenSpec()
+    {
+        var spec = ReadJson<BpGenSpec>(GenSpecPath) ?? new BpGenSpec();
+        spec.Daily ??= new BpGenScopeSpec();
+        spec.Weekly ??= new BpGenScopeSpec();
+        spec.Season ??= new BpGenScopeSpec();
+        return spec;
+    }
+
+    public static void SaveGenSpec(BpGenSpec spec)
+    {
+        WriteJson(GenSpecPath, spec);
     }
 
     // ---- 商人元信息 ----
@@ -389,6 +511,276 @@ public static class BattlePassStore
     public static void SaveItemBans(BpItemBans config)
     {
         WriteJson(ItemBansPath, config);
+    }
+
+    // ---- 抽奖模块：配置 ----
+    public static BpLotterySettings GetLotterySettings()
+    {
+        return ReadJson<BpLotterySettings>(LotterySettingsPath) ?? new BpLotterySettings();
+    }
+
+    public static void SaveLotterySettings(BpLotterySettings settings)
+    {
+        WriteJson(LotterySettingsPath, settings);
+    }
+
+    public static List<BpLotteryPool> GetLotteryPools()
+    {
+        return ReadJson<List<BpLotteryPool>>(LotteryPoolsPath) ?? new List<BpLotteryPool>();
+    }
+
+    public static void SaveLotteryPools(List<BpLotteryPool> pools)
+    {
+        WriteJson(LotteryPoolsPath, pools);
+    }
+
+    public static List<BpLotteryShopItem> GetLotteryShopItems()
+    {
+        return ReadJson<List<BpLotteryShopItem>>(LotteryShopPath) ?? new List<BpLotteryShopItem>();
+    }
+
+    public static void SaveLotteryShopItems(List<BpLotteryShopItem> items)
+    {
+        WriteJson(LotteryShopPath, items);
+    }
+
+    // ---- 抽奖模块：玩家钱包 ----
+    public static BpLotteryWallet GetLotteryWallet(string profileId)
+    {
+        if (LotteryWalletCache.TryGetValue(profileId, out var cached))
+        {
+            return cached;
+        }
+
+        var wallet = ReadJson<BpLotteryWallet>(LotteryWalletPath(profileId)) ?? new BpLotteryWallet { ProfileId = profileId };
+        wallet.ProfileId = profileId;
+        wallet.PoolTickets ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        LotteryWalletCache[profileId] = wallet;
+        return wallet;
+    }
+
+    public static void SaveLotteryWallet(string profileId, BpLotteryWallet wallet)
+    {
+        wallet.ProfileId = profileId;
+        wallet.PoolTickets ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        wallet.UpdatedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        LotteryWalletCache[profileId] = wallet;
+        WriteJson(LotteryWalletPath(profileId), wallet);
+    }
+
+    public static List<string> ListLotteryWalletProfileIds()
+    {
+        return ListJsonProfileIds(LotteryWalletsDir);
+    }
+
+    // ---- 抽奖模块：奖池进度 ----
+    public static BpLotteryPoolProgress GetLotteryPoolProgress(string profileId, string poolId)
+    {
+        var map = GetLotteryProgressMap(profileId);
+        if (map.TryGetValue(poolId, out var progress))
+        {
+            return progress;
+        }
+
+        progress = new BpLotteryPoolProgress { ProfileId = profileId, PoolId = poolId };
+        map[poolId] = progress;
+        return progress;
+    }
+
+    public static void SaveLotteryPoolProgress(string profileId, BpLotteryPoolProgress progress)
+    {
+        var map = GetLotteryProgressMap(profileId);
+        progress.ProfileId = profileId;
+        progress.UpdatedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        map[progress.PoolId] = progress;
+        LotteryProgressCache[profileId] = map;
+        WriteJson(LotteryProgressPath(profileId), map.Values.ToList());
+    }
+
+    public static bool ResetLotteryPoolProgress(string profileId, string poolId)
+    {
+        var map = GetLotteryProgressMap(profileId);
+        var removed = map.Remove(poolId);
+        if (removed)
+        {
+            LotteryProgressCache[profileId] = map;
+            WriteJson(LotteryProgressPath(profileId), map.Values.ToList());
+        }
+
+        return removed;
+    }
+
+    public static int ResetLotteryPoolProgressForAll(string poolId)
+    {
+        var count = 0;
+        foreach (var profileId in ListLotteryProgressProfileIds())
+        {
+            if (ResetLotteryPoolProgress(profileId, poolId))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public static List<string> ListLotteryProgressProfileIds()
+    {
+        return ListJsonProfileIds(LotteryProgressDir);
+    }
+
+    private static Dictionary<string, BpLotteryPoolProgress> GetLotteryProgressMap(string profileId)
+    {
+        if (LotteryProgressCache.TryGetValue(profileId, out var cached))
+        {
+            return cached;
+        }
+
+        var list = ReadJson<List<BpLotteryPoolProgress>>(LotteryProgressPath(profileId)) ?? new List<BpLotteryPoolProgress>();
+        var map = list
+            .Where(p => !string.IsNullOrWhiteSpace(p.PoolId))
+            .GroupBy(p => p.PoolId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g =>
+            {
+                var p = g.Last();
+                p.ProfileId = profileId;
+                p.DrawnPrizeIds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                return p;
+            }, StringComparer.OrdinalIgnoreCase);
+
+        LotteryProgressCache[profileId] = map;
+        return map;
+    }
+
+    // ---- 抽奖模块：记录与事务 ----
+    public static List<BpLotteryDrawRecord> GetLotteryDrawRecords()
+    {
+        return ReadJson<List<BpLotteryDrawRecord>>(LotteryDrawRecordsPath) ?? new List<BpLotteryDrawRecord>();
+    }
+
+    public static void SaveLotteryDrawRecords(List<BpLotteryDrawRecord> records)
+    {
+        WriteJson(LotteryDrawRecordsPath, records);
+    }
+
+    public static void AppendLotteryDrawRecords(IEnumerable<BpLotteryDrawRecord> newRecords)
+    {
+        lock (Gate)
+        {
+            var records = ReadJson<List<BpLotteryDrawRecord>>(LotteryDrawRecordsPath) ?? new List<BpLotteryDrawRecord>();
+            records.AddRange(newRecords);
+            WriteJson(LotteryDrawRecordsPath, records);
+        }
+    }
+
+    public static List<BpLotteryTransaction> GetLotteryTransactions()
+    {
+        return ReadJson<List<BpLotteryTransaction>>(LotteryTransactionsPath) ?? new List<BpLotteryTransaction>();
+    }
+
+    public static void SaveLotteryTransactions(List<BpLotteryTransaction> transactions)
+    {
+        WriteJson(LotteryTransactionsPath, transactions);
+    }
+
+    public static void UpsertLotteryTransaction(BpLotteryTransaction transaction)
+    {
+        lock (Gate)
+        {
+            var transactions = ReadJson<List<BpLotteryTransaction>>(LotteryTransactionsPath) ?? new List<BpLotteryTransaction>();
+            var index = transactions.FindIndex(t =>
+                (!string.IsNullOrWhiteSpace(transaction.Id) && string.Equals(t.Id, transaction.Id, StringComparison.OrdinalIgnoreCase))
+                || (string.Equals(t.ProfileId, transaction.ProfileId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(t.RequestId, transaction.RequestId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(t.Action, transaction.Action, StringComparison.OrdinalIgnoreCase)));
+
+            if (index >= 0)
+            {
+                transactions[index] = transaction;
+            }
+            else
+            {
+                transactions.Add(transaction);
+            }
+
+            WriteJson(LotteryTransactionsPath, transactions);
+        }
+    }
+
+    public static BpLotteryTransaction? FindLotteryTransaction(string profileId, string requestId, string action)
+    {
+        return GetLotteryTransactions().FirstOrDefault(t =>
+            string.Equals(t.ProfileId, profileId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(t.RequestId, requestId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(t.Action, action, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ---- 抽奖模块：兑换商店购买计数 ----
+    public static BpLotteryShopPurchaseProgress GetLotteryShopPurchases(string profileId)
+    {
+        if (LotteryShopPurchaseCache.TryGetValue(profileId, out var cached))
+        {
+            return cached;
+        }
+
+        var progress = ReadJson<BpLotteryShopPurchaseProgress>(LotteryShopPurchasesPath(profileId))
+            ?? new BpLotteryShopPurchaseProgress { ProfileId = profileId };
+        progress.ProfileId = profileId;
+        progress.Items ??= new Dictionary<string, BpLotteryShopPurchaseCounter>(StringComparer.OrdinalIgnoreCase);
+        LotteryShopPurchaseCache[profileId] = progress;
+        return progress;
+    }
+
+    public static void SaveLotteryShopPurchases(string profileId, BpLotteryShopPurchaseProgress progress)
+    {
+        progress.ProfileId = profileId;
+        progress.Items ??= new Dictionary<string, BpLotteryShopPurchaseCounter>(StringComparer.OrdinalIgnoreCase);
+        LotteryShopPurchaseCache[profileId] = progress;
+        WriteJson(LotteryShopPurchasesPath(profileId), progress);
+    }
+
+    // ---- 抽奖模块：审计日志 ----
+    public static List<BpLotteryAuditLog> GetLotteryAuditLogs()
+    {
+        return ReadJson<List<BpLotteryAuditLog>>(LotteryAuditLogsPath) ?? new List<BpLotteryAuditLog>();
+    }
+
+    public static void AppendLotteryAuditLog(BpLotteryAuditLog log)
+    {
+        lock (Gate)
+        {
+            var logs = ReadJson<List<BpLotteryAuditLog>>(LotteryAuditLogsPath) ?? new List<BpLotteryAuditLog>();
+            logs.Add(log);
+            WriteJson(LotteryAuditLogsPath, logs);
+        }
+    }
+
+    private static string LotteryWalletPath(string profileId) => Path.Combine(LotteryWalletsDir, profileId + ".json");
+
+    private static string LotteryProgressPath(string profileId) => Path.Combine(LotteryProgressDir, profileId + ".json");
+
+    private static string LotteryShopPurchasesPath(string profileId) => Path.Combine(LotteryShopPurchasesDir, profileId + ".json");
+
+    private static List<string> ListJsonProfileIds(string dir)
+    {
+        try
+        {
+            if (!Directory.Exists(dir))
+            {
+                return new List<string>();
+            }
+
+            return Directory
+                .EnumerateFiles(dir, "*.json")
+                .Select(Path.GetFileNameWithoutExtension)
+                .Where(x => !string.IsNullOrEmpty(x))
+                .Select(x => x!)
+                .ToList();
+        }
+        catch
+        {
+            return new List<string>();
+        }
     }
 
     // ---- 底层读写 ----

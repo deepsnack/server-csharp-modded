@@ -1,4 +1,5 @@
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Utils;
@@ -14,6 +15,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 public class BattlePassRewardService(
     MailSendService mailSendService,
     DatabaseService databaseService,
+    BattlePassItemBuilder itemBuilder,
     ISptLogger<BattlePassRewardService> logger
 )
 {
@@ -54,15 +56,19 @@ public class BattlePassRewardService(
                 continue;
             }
 
-            items.Add(
-                new Item
+            // 枪/甲/盔按默认完整形态发放；邮件奖励会按模板 StackMaxSize 拆分，避免不可堆叠物品被发成一叠。
+            var built = itemBuilder.BuildRewardStacks(new MongoId(tpl), r.Count);
+            if (r.FoundInRaid)
+            {
+                // FIR 开关：SpawnedInSession=true 即「战局内找到」标记；只打在每个根件即可（子件随根件入仓）。
+                foreach (var root in built.Where(item => item.ParentId is null))
                 {
-                    Id = new MongoId(),
-                    Template = new MongoId(tpl),
-                    // FIR 开关：SpawnedInSession=true 即「战局内找到」标记；false 时不写字段（保持原版邮件物品形态）
-                    Upd = new Upd { StackObjectsCount = r.Count, SpawnedInSession = r.FoundInRaid ? true : null },
+                    root.AddUpd();
+                    root.Upd!.SpawnedInSession = true;
                 }
-            );
+            }
+
+            items.AddRange(built);
         }
 
         if (items.Count == 0)

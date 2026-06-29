@@ -14,7 +14,9 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     玩家/管理 API 由 MVC 自动发现（程序集已由 AccountWebMetadata 的 IModWebMetadata 注册为 ApplicationPart）。
 ///     认证复用包内 PasswordStore（玩家）与 WebRegisterController 的 admin token（管理员）。
 /// </summary>
-[Injectable(TypePriority = OnLoadOrder.PostDBModLoader + 1)]
+// Mod item templates are created during PostDB callbacks. Run after the shared loot index (+89000),
+// but before item/trader control finalization (+90000), so configured mod offers exist in the initial assort.
+[Injectable(TypePriority = OnLoadOrder.PostDBModLoader + 89999)]
 public class BattlePassMod(
     ISptLogger<BattlePassMod> logger,
     ConfigServer configServer,

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>通行证商店 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">通行证商店</h1>
+            <p class="brand-sub">SHOP&nbsp;CONSOLE</p>
+            <div class="field">
+                <label>管理员密码</label>
+                <input id="admin-pass" type="password" placeholder="管理员密码" />
+            </div>
+            <button id="admin-login-btn" class="btn primary">进入</button>
+            <p id="admin-login-msg" class="msg"></p>
+            <p class="brand-sub" style="margin-top:18px">与通行证后台共用管理员密码</p>
+        </div>
+    </section>
+
+    <section id="shop-view" class="view hidden">
+        <header class="topbar">
+            <span class="season-name">通行证商店配置</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+            </nav>
+            <button id="admin-logout" class="btn ghost small">登出</button>
+        </header>
+
+        <main class="admin-content">
+            <h2>网页商店自定义货架</h2>
+            <p class="hint">这里维护<b>网页专属</b>的自定义商品（对所有玩家开放，与商人购买权无关）。玩家在网页直接以货币购买、邮件发货。
+                网页商店<b>只显示这里配置的商品</b>；游戏内商人货架/购买权不会并入网页商店。
+                价格按以物易物计，每行搜索一种支付物品或货币（如卢布 / GP 币）并填写数量。</p>
+
+            <div class="panel">
+                <div class="panel-head"><h2>商品刷新周期</h2></div>
+                <div class="form-body">
+                    <p class="hint">每隔设定时间，全部商品<b>库存补满、每人限购计数清零</b>。设为 0 = 不刷新（库存/限购按终身累计）。</p>
+                    <label>刷新周期（小时，0 = 不刷新）</label>
+                    <input id="o-refresh-hours" type="number" min="0" step="0.5" value="0" />
+                    <button id="save-refresh" class="btn primary small">保存刷新周期</button>
+                </div>
+            </div>
+
+            <div class="offers-admin">
+                <div class="panel">
+                    <div class="panel-head"><h2 id="offer-form-title">新增 / 编辑商品</h2></div>
+                    <div class="form-body">
+                        <label>商品 ID（唯一）</label><input id="o-id" placeholder="如 shop_gpcoin_pack" />
+                        <label>出售物品（搜索物品名称 / 简称 / tpl，支持 mod 物品）</label>
+                        <div class="tpl-row">
+                            <input id="o-tpl" placeholder="搜索物品名称或 tpl…" autocomplete="off" /><img id="o-tpl-icon" class="icon-preview" alt="" />
+                            <div id="o-tpl-results" class="rw-tpl-results" style="display:none"></div>
+                        </div>
+                        <label>展示名（可空）</label><input id="o-name" />
+                        <label>单次购买发放数量（堆叠物品如 GP 币 / 卢布可 &gt;1）</label><input id="o-sellcount" type="number" min="1" value="1" />
+                        <label>库存（&lt;=0 表示无限）</label><input id="o-stock" type="number" value="-1" />
+                        <label>每人限购（&lt;=0 表示不限）</label><input id="o-buylimit" type="number" value="0" />
+                        <label>价格 / 以物易物（搜索支付物品或货币并填写数量；可添加多项；留空=免费）</label>
+                        <div id="o-cost-editor"></div>
+                        <button id="save-offer" class="btn primary small">保存商品</button>
+                        <button id="clear-offer" class="btn ghost small">清空</button>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-head"><h2>现有商品</h2><button id="refresh-offers" class="btn ghost small">刷新</button></div>
+                    <div id="offer-rows"></div>
+                </div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="picker.js"></script>
+    <script src="price.js"></script>
+    <script src="shop.js"></script>
+</body>
+</html>

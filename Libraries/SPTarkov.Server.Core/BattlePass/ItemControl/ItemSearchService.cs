@@ -35,6 +35,20 @@ public class ItemSearchService(
     }
 
     /// <summary>
+    ///     解析展示名，<b>优先简体中文</b>（ch 表 Name→ShortName），再回退主表/英文。
+    ///     供面向中文用户的网页（如通行证商店）显示物品/货币名，避免英文服务端 locale 让欧元等显示成 "Euros"。
+    /// </summary>
+    public string ResolveItemNameZh(MongoId tpl)
+    {
+        var chDb = localeService.GetLocaleDb("ch");
+        var nameKey = $"{tpl} Name";
+        var shortKey = $"{tpl} ShortName";
+        if (chDb.TryGetValue(nameKey, out var cn) && cn.Length > 0) return cn;
+        if (chDb.TryGetValue(shortKey, out var cs) && cs.Length > 0) return cs;
+        return ResolveItemName(tpl);
+    }
+
+    /// <summary>
     ///     判断物品名是否命中查询（主表/ch/en 三表任一 Name/ShortName 包含即命中，与 <see cref="Search"/> 同语义）。
     ///     供配方等"按引用物品名检索"的查询接口复用，保证中英文查询行为与物品搜索一致。
     /// </summary>

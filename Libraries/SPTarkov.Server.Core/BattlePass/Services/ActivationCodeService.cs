@@ -8,16 +8,32 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     无外部支付依赖；premiumUnlocked 即"付费检测"标志。
 /// </summary>
 [Injectable]
-public class ActivationCodeService(BattlePassService battlePassService)
+public class ActivationCodeService(BattlePassService battlePassService, LotteryWalletService lotteryWalletService)
 {
     private static readonly object Gate = new();
     private const string Alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉易混字符
 
     /// <summary>批量生成激活码并落盘，返回新生成的码。</summary>
-    public List<BpActivationCode> Generate(string type, int value, int count, string? batchTag)
+    public List<BpActivationCode> Generate(
+        string type,
+        int value,
+        int count,
+        string? batchTag,
+        string? poolId = null,
+        long expiresUtc = 0,
+        int maxRedemptions = 1,
+        bool perPlayerOnce = true,
+        bool commonCode = false
+    )
     {
-        type = string.Equals(type, "levels", StringComparison.OrdinalIgnoreCase) ? "levels" : "premium";
+        type = NormalizeType(type);
         count = Math.Clamp(count, 1, 1000);
+        if (commonCode)
+        {
+            count = 1;
+            maxRedemptions = Math.Max(1, maxRedemptions);
+        }
+
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         lock (Gate)
@@ -39,9 +55,18 @@ public class ActivationCodeService(BattlePassService battlePassService)
                     Code = code,
                     Type = type,
                     Value = type == "levels" ? Math.Max(1, value) : 0,
+                    PoolId = poolId,
+                    ExpiresUtc = Math.Max(0, expiresUtc),
+                    MaxRedemptions = Math.Max(1, maxRedemptions),
+                    PerPlayerOnce = perPlayerOnce,
                     BatchTag = batchTag,
                     CreatedUtc = now,
                 };
+                if (type is "lotteryGlobalTickets" or "lotteryPoolTickets" or "lotteryExchangeCoins")
+                {
+                    entry.Value = Math.Max(1, value);
+                }
+
                 created.Add(entry);
                 all.Add(entry);
             }
@@ -70,12 +95,25 @@ public class ActivationCodeService(BattlePassService battlePassService)
                 return (false, "激活码无效");
             }
 
-            if (!string.IsNullOrEmpty(entry.RedeemedBy))
+            NormalizeEntry(entry);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (entry.ExpiresUtc > 0 && now >= entry.ExpiresUtc)
+            {
+                return (false, "激活码已过期");
+            }
+
+            if (entry.RedeemCount >= entry.MaxRedemptions)
             {
                 return (false, "激活码已被使用");
             }
 
-            if (entry.Type == "premium")
+            if (entry.PerPlayerOnce && entry.RedeemedProfileIds.Contains(profileId))
+            {
+                return (false, "你已兑换过该激活码");
+            }
+
+            var type = NormalizeType(entry.Type);
+            if (type == "premium")
             {
                 if (prog.PremiumUnlocked)
                 {
@@ -84,17 +122,71 @@ public class ActivationCodeService(BattlePassService battlePassService)
 
                 prog.PremiumUnlocked = true;
             }
-            else
+            else if (type == "levels")
             {
                 battlePassService.AddLevels(prog, season, entry.Value);
             }
+            else if (type == "lotteryGlobalTickets")
+            {
+                lotteryWalletService.Grant(profileId, globalTickets: entry.Value);
+            }
+            else if (type == "lotteryPoolTickets")
+            {
+                if (string.IsNullOrWhiteSpace(entry.PoolId))
+                {
+                    return (false, "激活码缺少绑定奖池");
+                }
 
-            entry.RedeemedBy = profileId;
-            entry.RedeemedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                lotteryWalletService.Grant(profileId, poolId: entry.PoolId, poolTickets: entry.Value);
+            }
+            else if (type == "lotteryExchangeCoins")
+            {
+                lotteryWalletService.Grant(profileId, exchangeCoins: entry.Value);
+            }
+
+            entry.RedeemedBy ??= profileId;
+            entry.RedeemedUtc = now;
+            entry.RedeemCount++;
+            entry.RedeemedProfileIds.Add(profileId);
             BattlePassStore.SaveCodes(all);
 
-            return (true, entry.Type == "premium" ? "付费轨已解锁" : $"已直升 {entry.Value} 级");
+            return (true, MessageFor(type, entry));
         }
+    }
+
+    private static string NormalizeType(string? type)
+    {
+        return type?.Trim().ToLowerInvariant() switch
+        {
+            "levels" => "levels",
+            "lotteryglobaltickets" => "lotteryGlobalTickets",
+            "lotterypooltickets" => "lotteryPoolTickets",
+            "lotteryexchangecoins" => "lotteryExchangeCoins",
+            _ => "premium",
+        };
+    }
+
+    private static void NormalizeEntry(BpActivationCode entry)
+    {
+        entry.MaxRedemptions = entry.MaxRedemptions <= 0 ? 1 : entry.MaxRedemptions;
+        entry.RedeemedProfileIds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(entry.RedeemedBy))
+        {
+            entry.RedeemedProfileIds.Add(entry.RedeemedBy);
+            entry.RedeemCount = Math.Max(entry.RedeemCount, 1);
+        }
+    }
+
+    private static string MessageFor(string type, BpActivationCode entry)
+    {
+        return type switch
+        {
+            "levels" => $"已直升 {entry.Value} 级",
+            "lotteryGlobalTickets" => $"已获得 {entry.Value} 张通用抽奖券",
+            "lotteryPoolTickets" => $"已获得 {entry.Value} 张限定抽奖券",
+            "lotteryExchangeCoins" => $"已获得 {entry.Value} 枚兑换币",
+            _ => "付费轨已解锁",
+        };
     }
 
     private static string NewCode()

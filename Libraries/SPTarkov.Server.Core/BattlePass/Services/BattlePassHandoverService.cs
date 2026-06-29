@@ -21,7 +21,7 @@ public class BattlePassHandoverService(
     BattlePassService battlePassService,
     ProfileHelper profileHelper,
     SaveServer saveServer,
-    InventoryHelper inventoryHelper,
+    BattlePassStashService stashService,
     ItemSearchService itemSearchService,
     ISptLogger<BattlePassHandoverService> logger
 )
@@ -49,7 +49,7 @@ public class BattlePassHandoverService(
         var lines = new List<HandoverItemLine>();
         foreach (var tpl in wanted)
         {
-            var available = CollectStashCandidates(pmc, tpl, ctx.Template.FindInRaid).Sum(i => StackOf(i));
+            var available = stashService.CountTpl(pmc, tpl, ctx.Template.FindInRaid);
             lines.Add(new HandoverItemLine
             {
                 Tpl = tpl,
@@ -108,27 +108,7 @@ public class BattlePassHandoverService(
                 break;
             }
 
-            // 每次重新取候选：移除会改动 Items 列表
-            foreach (var item in CollectStashCandidates(pmc, tpl, ctx.Template.FindInRaid).ToList())
-            {
-                if (handed >= remaining)
-                {
-                    break;
-                }
-
-                var stack = StackOf(item);
-                var take = Math.Min(stack, remaining - handed);
-                if (take >= stack)
-                {
-                    inventoryHelper.RemoveItem(pmc, item.Id, sessionId);
-                }
-                else
-                {
-                    item.Upd!.StackObjectsCount = stack - take; // 部分扣减堆叠
-                }
-
-                handed += take;
-            }
+            handed += stashService.RemoveTpl(pmc, sessionId, tpl, remaining - handed, ctx.Template.FindInRaid);
         }
 
         if (handed <= 0)
@@ -142,13 +122,8 @@ public class BattlePassHandoverService(
         if (ctx.Active.Progress >= ctx.Target)
         {
             ctx.Active.Progress = ctx.Target;
-            gainedXp = ctx.Template.Xp;
-            if (ctx.Progress.PremiumUnlocked && season.PremiumXpMultiplier > 1.0)
-            {
-                gainedXp = (int)Math.Round(gainedXp * season.PremiumXpMultiplier);
-            }
-
-            battlePassService.AddXp(ctx.Progress, season, gainedXp); // 仅记 BP 经验，不动角色经验
+            // 统一结算：按任务 rewardMode 给 BP 经验 / 任务自带奖励 / 两者
+            gainedXp = battlePassService.CreditTaskCompletion(profileId, ctx.Progress, season, ctx.Template);
             ctx.Active.CreditedXp = true;
         }
 
@@ -193,7 +168,7 @@ public class BattlePassHandoverService(
         var season = BattlePassStore.GetSeason();
         var prog = battlePassService.GetOrResetProgress(profileId, season);
 
-        var templates = BattlePassStore.GetTasks().ToDictionary(t => t.Id);
+        var templates = BattlePassStore.GetAllTasks().ToDictionary(t => t.Id);
         var candidates = prog.ActiveTasks
             .Where(a => templates.TryGetValue(a.TaskId, out var t)
                 && string.Equals(t.ConditionType?.Trim(), "HandoverItem", StringComparison.OrdinalIgnoreCase))
@@ -232,54 +207,6 @@ public class BattlePassHandoverService(
             .Select(r => r.Tpl)
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-    }
-
-    /// <summary>仓库内、匹配 tpl、（按需）FiR、且无子物品（非容器）的可上交候选。</summary>
-    private static List<Item> CollectStashCandidates(PmcData pmc, string tpl, bool requireFir)
-    {
-        var items = pmc.Inventory!.Items!;
-        var stashId = pmc.Inventory.Stash?.ToString();
-        if (string.IsNullOrEmpty(stashId))
-        {
-            return [];
-        }
-
-        var byId = items.ToDictionary(i => i.Id.ToString(), StringComparer.Ordinal);
-        var parents = items.Where(i => i.ParentId is not null).Select(i => i.ParentId!).ToHashSet(StringComparer.Ordinal);
-
-        return items.Where(i =>
-                string.Equals(i.Template.ToString(), tpl, StringComparison.OrdinalIgnoreCase)
-                && !parents.Contains(i.Id.ToString()) // 跳过带子物品的容器，避免连带删除嵌套战利品
-                && (!requireFir || i.Upd?.SpawnedInSession == true)
-                && IsInStash(i, byId, stashId))
-            .ToList();
-    }
-
-    private static bool IsInStash(Item item, Dictionary<string, Item> byId, string stashId)
-    {
-        var cursor = item;
-        var guard = 0;
-        while (cursor is not null && guard++ < 64)
-        {
-            if (string.IsNullOrEmpty(cursor.ParentId))
-            {
-                return false;
-            }
-
-            if (string.Equals(cursor.ParentId, stashId, StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            byId.TryGetValue(cursor.ParentId, out cursor);
-        }
-
-        return false;
-    }
-
-    private static int StackOf(Item item)
-    {
-        return Math.Max(1, (int)Math.Floor(item.Upd?.StackObjectsCount ?? 1));
     }
 
     private string NameOf(BpTaskTemplate tpl, string itemTpl)

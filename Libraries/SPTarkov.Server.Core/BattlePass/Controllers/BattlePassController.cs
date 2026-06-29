@@ -22,13 +22,14 @@ public class BattlePassController(
     Services.DatabaseService databaseService,
     ItemControl.ItemSearchService itemSearchService,
     BattlePassHandoverService handoverService,
+    BattlePassShopService shopService,
     ISptLogger<BattlePassController> logger
 ) : ControllerBase
 {
     /// <summary>
     ///     mod 物品兜底：item 类奖励的 tpl 不在物品库（mod 被删除）时从玩家页下发数据中剔除——
     ///     该格自然回退为空（全部剔除时空格）。只过滤下发，存储配置不动：mod 装回后奖励自动恢复。
-    ///     非 item 类型（购买权/配方/称号）不在此过滤，其引用失效由各自领取链路兜底。
+    ///     非 item 类型（购买权/配方/称号/服装）不在此过滤，其引用失效由各自领取链路兜底。
     ///     展示名兜底：item 类奖励未填展示名时，按本地化解析物品名（原版/mod 通用）下发，
     ///     解析不到才让前端回退到 MongoID——即 展示名 → 物品名 → MongoID。用 record with 生成
     ///     下发副本，不改存储配置。
@@ -45,7 +46,7 @@ public class BattlePassController(
             .Where(r =>
             {
                 var type = (r.Type ?? "item").Trim().ToLowerInvariant();
-                if (type is "purchaseright" or "recipe" or "title")
+                if (type is "purchaseright" or "recipe" or "title" or "clothing" or "lotteryglobaltickets" or "lotterypooltickets" or "lotteryexchangecoins")
                 {
                     return true;
                 }
@@ -226,7 +227,7 @@ public class BattlePassController(
                 BattlePassStore.SaveProgress(profileId, prog);
             }
 
-            var templates = BattlePassStore.GetTasks().ToDictionary(t => t.Id);
+            var templates = BattlePassStore.GetAllTasks().ToDictionary(t => t.Id);
             var tasks = prog.ActiveTasks
                 .Select(a =>
                 {
@@ -298,6 +299,48 @@ public class BattlePassController(
             var taskId = request.TryGetProperty("taskId", out var t) ? t.GetString() : null;
             var (ok, message, result) = handoverService.Handover(profileId, taskId);
             return ok ? new { success = true, result } : new { success = false, message };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, message = ex.Message };
+        }
+    }
+
+    /// <summary>网页通行证商店货架：已解锁的商人购买项 + 管理员自定义条目（含每项是否买得起/库存/限购）。</summary>
+    [HttpGet("shop")]
+    public object GetShop([FromHeader(Name = "X-BP-Token")] string? token = null)
+    {
+        var profileId = BattlePassSession.Resolve(token);
+        if (profileId is null)
+        {
+            return new { success = false, message = "未登录或会话已过期" };
+        }
+
+        try
+        {
+            return new { success = true, catalog = shopService.GetCatalog(profileId) };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, message = ex.Message };
+        }
+    }
+
+    /// <summary>网页商店购买：校验货币足额→扣减→邮件发货。</summary>
+    [HttpPost("shop/buy")]
+    public object BuyShop([FromBody] JsonElement request, [FromHeader(Name = "X-BP-Token")] string? token = null)
+    {
+        var profileId = BattlePassSession.Resolve(token);
+        if (profileId is null)
+        {
+            return new { success = false, message = "未登录或会话已过期" };
+        }
+
+        try
+        {
+            var offerId = request.TryGetProperty("offerId", out var o) ? o.GetString() : null;
+            var (ok, message) = shopService.Buy(profileId, offerId ?? "");
+            return new { success = ok, message };
         }
         catch (Exception ex)
         {
@@ -483,7 +526,7 @@ public class BattlePassController(
                 BattlePassStore.SaveProgress(profileId, prog);
             }
 
-            var templates = BattlePassStore.GetTasks().ToDictionary(t => t.Id);
+            var templates = BattlePassStore.GetAllTasks().ToDictionary(t => t.Id);
             var tasks = prog.ActiveTasks
                 .Select(a =>
                 {

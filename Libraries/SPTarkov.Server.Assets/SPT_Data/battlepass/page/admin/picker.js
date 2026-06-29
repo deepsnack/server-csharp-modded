@@ -6,6 +6,7 @@
  * 统一走后端统一查询接口，统一响应形状，避免各页各写一套、键名分歧再次出现。
  *   物品： GET /battlepass/api/admin/query/items?q=&source=&limit=  → { success, items:[{tpl,name,shortName,...}] }
  *   任务： GET /battlepass/api/admin/query/tasks?q=&limit=          → { success, tasks:[{id,title,scope,conditionType,...}] }
+ *   服装： GET /battlepass/api/admin/query/clothing?q=&limit=       → { success, clothing:[{suitId,name,offerId,traderId,...}] }
  * 图标统一： /battlepass/api/icons/{tpl}
  *
  * 用法：
@@ -21,7 +22,7 @@
     function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
     function isTpl(s) { return /^[a-fA-F0-9]{24}$/.test((s || '').trim()); }
 
-    const RESULT_KEYS = { items: 'items', tasks: 'tasks', offers: 'offers', recipes: 'recipes', titles: 'titles' };
+    const RESULT_KEYS = { items: 'items', tasks: 'tasks', offers: 'offers', recipes: 'recipes', titles: 'titles', clothing: 'clothing' };
 
     async function query(kind, q, opts) {
         opts = opts || {};
@@ -75,9 +76,17 @@
             <span class="sr-name">${name}</span><span class="sr-tpl">${esc(t.type || '')}·${esc(t.id)}</span>
         </div>`;
     }
+    function clothingRow(c) {
+        const suitId = c.suitId || c.id;
+        const name = esc(c.name || c.shortName || suitId);
+        const meta = [c.traderId ? `商人 ${c.traderId.slice(0, 8)}…` : '', c.offerId ? `offer ${c.offerId.slice(0, 8)}…` : '', (c.side || []).join('/')].filter(Boolean).join(' · ');
+        return `<div class="sr-item" data-id="${esc(suitId)}" data-suit-id="${esc(suitId)}" data-name="${name}">
+            <span class="sr-name">${name}</span><span class="sr-tpl">${esc(meta || suitId)}</span>
+        </div>`;
+    }
 
     // 通用绑定：input 输入 → 防抖检索 → 渲染下拉 → 点选回调（收到选中项的 dataset）
-    const ROW_FNS = { items: itemRow, tasks: taskRow, offers: offerRow, recipes: recipeRow, titles: titleRow };
+    const ROW_FNS = { items: itemRow, tasks: taskRow, offers: offerRow, recipes: recipeRow, titles: titleRow, clothing: clothingRow };
     function attach(kind, input, results, onPick, opts) {
         opts = opts || {};
         let timer = null;
@@ -117,5 +126,6 @@
         attachOffer: (input, results, onPick, opts) => attach('offers', input, results, onPick, opts),
         attachRecipe: (input, results, onPick, opts) => attach('recipes', input, results, onPick, opts),
         attachTitle: (input, results, onPick, opts) => attach('titles', input, results, onPick, opts),
+        attachClothing: (input, results, onPick, opts) => attach('clothing', input, results, onPick, opts),
     };
 })(window);
