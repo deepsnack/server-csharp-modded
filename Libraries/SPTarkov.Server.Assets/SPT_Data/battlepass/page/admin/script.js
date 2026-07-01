@@ -151,7 +151,7 @@ el('save-json-tracks').onclick = () => {
 
 async function postTracksAndSeason(tracksPayload) {
     const r = await api('/tracks', 'POST', tracksPayload);
-    if (!r.success) return toast(r.message || '保存失败', false);
+    if (!r.success) { toast(r.message || '保存失败', false); return false; }
     // 等级上限 + 循环每轮经验同步进赛季配置（单一数据源）
     try {
         const sr = await api('/season');
@@ -163,7 +163,8 @@ async function postTracksAndSeason(tracksPayload) {
         }
     } catch (e) { /* 上限同步失败不影响奖励保存 */ }
     toast('已保存全部', true);
-    loadTracks();
+    await loadTracks();
+    return true;
 }
 
 // 采集所有已渲染等级块回写模型（未渲染等级保留原值）
@@ -177,59 +178,13 @@ function collectAllFromDom() {
 }
 
 // 按类型收集与校验：item 需要 tpl；purchaseRight/recipe/title/clothing 需要对应引用 id（tpl 可空）。
-// 修复旧逻辑 if(!tpl) return 的静默丢卡——非物品奖励没填 tpl 会在保存时直接消失。
-// 完全空白的卡（新加未填）跳过；填了内容但缺关键字段的卡保留并标红提示，不再无声丢失。
+// 收集委托给共享组件 RewardEditor.collect；缺关键字段的卡保留并标红，invalid 累加到 rwInvalidCount 供保存时提示。
 function collectRewardsIn(block, track) {
-    const items = [];
-    block.querySelectorAll(`.reward-cards[data-track="${track}"] .rw-card`).forEach(card => {
-        const type = card.querySelector('.rw-type')?.value || 'item';
-        const tpl = card.querySelector('.rw-tpl')?.value?.trim() || '';
-        const name = card.querySelector('.rw-name')?.value?.trim() || null;
-        const offerId = card.querySelector('.rw-offerid')?.value?.trim() || null;
-        const recipeId = card.querySelector('.rw-recipeid')?.value?.trim() || null;
-        const titleId = card.querySelector('.rw-titleid')?.value?.trim() || null;
-        const suitId = card.querySelector('.rw-suitid')?.value?.trim() || null;
-        const poolId = card.querySelector('.rw-poolid')?.value?.trim() || null;
-        const isTokenReward = ['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'].includes(type);
-        const rewardCount = Math.max(1, +(isTokenReward
-            ? (card.querySelector('.rw-token-count')?.value || 1)
-            : (card.querySelector('.rw-count')?.value || 1)));
-
-        const keyField = {
-            item: tpl,
-            purchaseRight: offerId,
-            recipe: recipeId,
-            title: titleId,
-            clothing: suitId,
-            lotteryGlobalTickets: true,
-            lotteryPoolTickets: poolId,
-            lotteryExchangeCoins: true,
-        }[type];
-        const isBlank = type === 'item' && !tpl && !name;
-        if (isBlank) return; // 全空卡 = 未填的新卡，不入库
-
-        if (!keyField) {
-            card.classList.add('rw-invalid');
-            rwInvalidCount++;
-        } else {
-            card.classList.remove('rw-invalid');
-        }
-
-        items.push({
-            tpl: type === 'item' ? tpl : (tpl || null),
-            count: (type === 'item' || isTokenReward) ? rewardCount : 1,
-            name,
-            featured: card.querySelector('.rw-featured')?.checked || false,
-            foundInRaid: type === 'item' ? (card.querySelector('.rw-fir')?.checked || false) : false,
-            type,
-            offerId: type === 'purchaseRight' ? offerId : null,
-            recipeId: type === 'recipe' ? recipeId : null,
-            titleId: type === 'title' ? titleId : null,
-            suitId: type === 'clothing' ? suitId : null,
-            poolId: type === 'lotteryPoolTickets' ? poolId : null,
-        });
-    });
-    return items;
+    const box = block.querySelector(`.reward-cards[data-track="${track}"]`);
+    if (!box) return [];
+    const { rewards, invalid } = RewardEditor.collect(box);
+    rwInvalidCount += invalid;
+    return rewards;
 }
 
 // 本轮收集中缺关键字段的卡数（collectAllFromDom 前清零，保存时提示）
@@ -274,34 +229,10 @@ function renderLevelBlock(level, isCycle) {
     wireBlock(block);
 }
 
+// 渲染委托给共享组件 RewardEditor.fill（奖池用 lotteryPoolsForCodes）。
 function fillRewardCards(block, track, items) {
     const box = block.querySelector(`.reward-cards[data-track="${track}"]`);
-    if (!items.length) { box.innerHTML = '<div class="muted rw-empty">暂无，点「＋ 添加」</div>'; return; }
-    box.innerHTML = items.map((r, i) => rewardCardHtml(track, r, i)).join('');
-    box.querySelectorAll('.rw-tpl').forEach(inp => setupRwItemPicker(inp));
-    box.querySelectorAll('.rw-offerid').forEach(inp => setupRwRefPicker(inp, 'offer'));
-    box.querySelectorAll('.rw-recipeid').forEach(inp => setupRwRefPicker(inp, 'recipe'));
-    box.querySelectorAll('.rw-titleid').forEach(inp => setupRwRefPicker(inp, 'title'));
-    box.querySelectorAll('.rw-suitid').forEach(inp => setupRwRefPicker(inp, 'clothing'));
-    box.querySelectorAll('.rw-type').forEach(sel => sel.addEventListener('change', () => onRwTypeChange(sel)));
-}
-
-function onRwTypeChange(sel) {
-    const card = sel.closest('.rw-card');
-    const itemRow = card.querySelector('.rw-item-row');
-    if (itemRow) itemRow.style.display = sel.value === 'item' ? '' : 'none';
-    card.querySelector('.rw-extra').style.display = sel.value === 'item' ? 'none' : '';
-    ['.rw-offerid-row', '.rw-recipeid-row', '.rw-titleid-row', '.rw-suitid-row', '.rw-token-row', '.rw-poolid-row'].forEach(s => { const e = card.querySelector(s); if (e) e.style.display = 'none'; });
-    const map = { purchaseRight: '.rw-offerid-row', recipe: '.rw-recipeid-row', title: '.rw-titleid-row', clothing: '.rw-suitid-row' };
-    if (map[sel.value]) { const e = card.querySelector(map[sel.value]); if (e) e.style.display = ''; }
-    if (['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'].includes(sel.value)) {
-        const tokenRow = card.querySelector('.rw-token-row');
-        if (tokenRow) tokenRow.style.display = '';
-    }
-    if (sel.value === 'lotteryPoolTickets') {
-        const poolRow = card.querySelector('.rw-poolid-row');
-        if (poolRow) poolRow.style.display = '';
-    }
+    if (box) RewardEditor.fill(box, items, lotteryPoolsForCodes);
 }
 
 function wireBlock(block) {
@@ -326,128 +257,126 @@ function wireBlock(block) {
     };
 }
 
-function rewardCardHtml(track, r, i) {
-    const type = r.type || 'item';
-    const iconUrl = isTpl(r.tpl) ? ICON_API + r.tpl : '';
-    const iconStyle = iconUrl ? '' : 'display:none';
-    // 类型决定表单形态：item 显示物品搜索+数量；其余显示对应引用选择器，tpl/数量不再要求
-    const itemStyle = type === 'item' ? '' : 'display:none';
-    const extraStyle = type !== 'item' ? '' : 'display:none';
-    const offerStyle = type === 'purchaseRight' ? '' : 'display:none';
-    const recipeStyle = type === 'recipe' ? '' : 'display:none';
-    const titleStyle = type === 'title' ? '' : 'display:none';
-    const clothingStyle = type === 'clothing' ? '' : 'display:none';
-    const tokenStyle = ['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'].includes(type) ? '' : 'display:none';
-    const poolStyle = type === 'lotteryPoolTickets' ? '' : 'display:none';
-    return `<div class="rw-card">
-        <div class="rw-card-main">
-            <div class="rw-icon-wrap"><img src="${iconUrl}" class="rw-icon" style="${iconStyle}" alt="" onerror="this.style.display='none'" /></div>
-            <div class="rw-fields">
-                <div class="rw-row">
-                    <select class="rw-type" style="width:90px">
-                        <option value="item" ${type==='item'?'selected':''}>物品</option>
-                        <option value="purchaseRight" ${type==='purchaseRight'?'selected':''}>购买权</option>
-                        <option value="recipe" ${type==='recipe'?'selected':''}>配方</option>
-                        <option value="title" ${type==='title'?'selected':''}>称号</option>
-                        <option value="clothing" ${type==='clothing'?'selected':''}>服装</option>
-                        <option value="lotteryGlobalTickets" ${type==='lotteryGlobalTickets'?'selected':''}>通用券</option>
-                        <option value="lotteryPoolTickets" ${type==='lotteryPoolTickets'?'selected':''}>限定券</option>
-                        <option value="lotteryExchangeCoins" ${type==='lotteryExchangeCoins'?'selected':''}>兑换币</option>
-                    </select>
-                    <input class="rw-name" value="${esc(r.name || '')}" placeholder="展示名（可空）" style="flex:1" />
-                    <label class="with-cb" style="white-space:nowrap"><input class="rw-featured" type="checkbox" ${r.featured?'checked':''} /> 大奖</label>
-                    <button class="mini del rw-del" title="删除" onclick="this.closest('.rw-card').remove()">×</button>
-                </div>
-                <div class="rw-row rw-item-row" style="${itemStyle}">
-                    <input class="rw-tpl" value="${esc(r.tpl || '')}" placeholder="搜索物品名称或 tpl…" autocomplete="off" />
-                    <input class="rw-count" type="number" value="${r.count || 1}" min="1" style="width:58px" title="数量" />
-                    <label class="with-cb" style="white-space:nowrap" title="发放物品标记为战局内找到（SpawnedInSession）"><input class="rw-fir" type="checkbox" ${r.foundInRaid?'checked':''} /> FIR</label>
-                    <div class="rw-tpl-results" style="display:none"></div>
-                </div>
-                <div class="rw-extra" style="${extraStyle}">
-                    <div class="rw-row rw-offerid-row" style="${offerStyle}">
-                        <label style="font-size:10px">购买权</label>
-                        <input class="rw-offerid" value="${esc(r.offerId||'')}" placeholder="聚焦列出 / 搜索货架项…" style="flex:1" autocomplete="off" />
-                        <div class="rw-offerid-results rw-tpl-results" style="display:none"></div>
-                    </div>
-                    <div class="rw-row rw-recipeid-row" style="${recipeStyle}">
-                        <label style="font-size:10px">配方</label>
-                        <input class="rw-recipeid" value="${esc(r.recipeId||'')}" placeholder="搜索配方产物名称或 id…" style="flex:1" autocomplete="off" />
-                        <div class="rw-recipeid-results rw-tpl-results" style="display:none"></div>
-                    </div>
-                    <div class="rw-row rw-titleid-row" style="${titleStyle}">
-                        <label style="font-size:10px">称号</label>
-                        <input class="rw-titleid" value="${esc(r.titleId||'')}" placeholder="聚焦列出 / 搜索称号…" style="flex:1" autocomplete="off" />
-                        <div class="rw-titleid-results rw-tpl-results" style="display:none"></div>
-                    </div>
-                    <div class="rw-row rw-suitid-row" style="${clothingStyle}">
-                        <label style="font-size:10px">服装</label>
-                        <input class="rw-suitid" value="${esc(r.suitId||'')}" placeholder="聚焦列出 / 搜索服装、suiteId、offerId…" style="flex:1" autocomplete="off" />
-                        <div class="rw-suitid-results rw-tpl-results" style="display:none"></div>
-                    </div>
-                    <div class="rw-row rw-token-row" style="${tokenStyle}">
-                        <label style="font-size:10px">数量</label>
-                        <input class="rw-token-count" type="number" min="1" value="${r.count || 1}" style="width:96px" />
-                        <span class="muted" style="font-size:10px">发放到抽奖钱包，不进入玩家仓库</span>
-                    </div>
-                    <div class="rw-row rw-poolid-row" style="${poolStyle}">
-                        <label style="font-size:10px">奖池</label>
-                        <select class="rw-poolid" style="flex:1">${lotteryPoolSelectOptions(r.poolId || '')}</select>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>`;
+// 奖励卡渲染/选择器/类型切换已迁到共享组件 reward-editor.js（RewardEditor）。
+
+// ---- 奖励轨批量追加 ----
+function resetBulkRewardEditor() {
+    const host = el('bulk-reward-editor');
+    fillRewardCards(host, 'bulk', [{ tpl: '', count: 1, name: null, featured: false, type: 'item' }]);
+    el('bulk-reward-end').value = String(trackMaxLevel);
+    el('bulk-reward-hint').textContent = '配置一种奖励后，将按等级范围追加并立即保存。';
 }
 
-// 奖励项引用选择器（购买权→货架项 / 配方→藏身处配方 / 称号 / 服装；统一组件 BpPicker）。
-// 货架/称号/服装数据量少：minChars=0 聚焦即列出全部；配方多：输 2 字后按产物名检索。
-// 选中后回填 id；物品类引用（货架商品/配方产物）顺带把卡片图标换成对应物品。
-function setupRwRefPicker(input, kind) {
-    const card = input.closest('.rw-card');
-    const results = input.parentElement.querySelector('.rw-tpl-results');
-    if (!results) return;
-    const icon = card.querySelector('.rw-icon');
-    const attach = { offer: BpPicker.attachOffer, recipe: BpPicker.attachRecipe, title: BpPicker.attachTitle, clothing: BpPicker.attachClothing }[kind];
-    const minChars = kind === 'recipe' ? 2 : 0;
-    attach(input, results, ds => {
-        input.value = ds.suitId || ds.id;
-        card.classList.remove('rw-invalid');
-        const nameInput = card.querySelector('.rw-name');
-        if (ds.name && nameInput && !nameInput.value.trim()) nameInput.value = ds.name;
-        if (ds.tpl && BpPicker.isTpl(ds.tpl)) {
-            icon.src = BpPicker.ICON_API + ds.tpl; icon.style.display = '';
-            icon.onerror = () => { icon.style.display = 'none'; };
+async function applyBulkReward() {
+    collectAllFromDom();
+    const start = Math.max(1, Math.min(trackMaxLevel, +el('bulk-reward-start').value || 1));
+    const end = Math.max(start, Math.min(trackMaxLevel, +el('bulk-reward-end').value || trackMaxLevel));
+    const step = Math.max(1, +el('bulk-reward-step').value || 1);
+    const track = el('bulk-reward-track').value;
+
+    rwInvalidCount = 0;
+    const rewards = collectRewardsIn(el('bulk-reward-editor'), 'bulk');
+    if (rewards.length !== 1 || rwInvalidCount > 0) {
+        toast('请完整配置要批量添加的奖励', false);
+        return;
+    }
+
+    const levels = [];
+    for (let level = start; level <= end; level += step) levels.push(level);
+    const trackLabel = track === 'both' ? '免费轨与付费轨' : (track === 'premium' ? '付费轨' : '免费轨');
+    if (!confirm(`确认向 ${levels.length} 个等级的${trackLabel}追加该奖励并立即保存？\n\n等级：${start}–${end}，间隔 ${step}。已有奖励不会被覆盖。`)) {
+        return;
+    }
+
+    const button = el('bulk-reward-apply');
+    button.disabled = true;
+    try {
+        for (const level of levels) {
+            const key = String(level);
+            allTracks[key] ||= { free: [], premium: [] };
+            allTracks[key].free ||= [];
+            allTracks[key].premium ||= [];
+            if (track === 'free' || track === 'both') allTracks[key].free.push(deepClone(rewards[0]));
+            if (track === 'premium' || track === 'both') allTracks[key].premium.push(deepClone(rewards[0]));
         }
-    }, { limit: 8, minChars });
-    // 配方下拉底部固定一条「＋ 新建自定义配方」直达配方管理页
-    if (kind === 'recipe') {
-        input.addEventListener('focus', () => {
-            setTimeout(() => {
-                if (results.querySelector('.sr-new-link')) return;
-                const a = document.createElement('a');
-                a.className = 'sr-new-link'; a.textContent = '＋ 新建自定义配方（配方管理页）'; a.href = 'recipes.html'; a.target = '_blank';
-                results.appendChild(a);
-            }, 350);
-        });
+        syncTracksJson();
+        el('bulk-reward-hint').textContent = `正在保存：${levels.length} 个等级 · ${trackLabel}`;
+        const saved = await postTracksAndSeason(allTracks);
+        el('bulk-reward-hint').textContent = saved
+            ? `已追加到 ${levels.length} 个等级的${trackLabel}`
+            : '保存失败，当前页面仍保留批量修改，可再次保存';
+    } finally {
+        button.disabled = false;
     }
 }
 
-// 奖励项物品选择器（统一组件 BpPicker，见 picker.js；走统一查询接口）
-function setupRwItemPicker(input) {
-    const card = input.closest('.rw-card');
-    const results = card.querySelector('.rw-tpl-results');
-    const icon = card.querySelector('.rw-icon');
-    BpPicker.attachItem(input, results, ds => {
-        input.value = ds.tpl;
-        icon.src = BpPicker.ICON_API + ds.tpl; icon.style.display = '';
-        icon.onerror = () => { icon.style.display = 'none'; };
-    }, { limit: 6 });
-    input.addEventListener('input', () => {
-        const q = input.value.trim();
-        if (BpPicker.isTpl(q)) { icon.src = BpPicker.ICON_API + q; icon.style.display = ''; }
+el('bulk-reward-reset').onclick = resetBulkRewardEditor;
+el('bulk-reward-apply').onclick = applyBulkReward;
+
+// ---- 奖励总览 · 搜索 / 筛选 / 批量移除 ----
+const OV_TYPE_LABEL = { item: '物品', purchaseRight: '购买权', recipe: '配方', title: '称号', clothing: '服装', lotteryGlobalTickets: '通用券', lotteryPoolTickets: '限定券', lotteryExchangeCoins: '兑换币' };
+function rewardKeyText(r) { return [r.name, r.tpl, r.offerId, r.recipeId, r.titleId, r.suitId, r.poolId].filter(Boolean).join(' '); }
+function rewardLabel(r) { return r.name || r.tpl || r.offerId || r.recipeId || r.titleId || r.suitId || r.poolId || '(空)'; }
+
+// 从 allTracks 汇总匹配当前筛选的奖励（含循环键 '0'）。返回 {key,lvl,track,idx,r}[]。
+function overviewFilter() {
+    const q = el('ov-q').value.trim().toLowerCase();
+    const type = el('ov-type').value;
+    const track = el('ov-track').value;
+    const from = el('ov-from').value.trim();
+    const to = el('ov-to').value.trim();
+    const lo = from === '' ? -Infinity : +from;
+    const hi = to === '' ? Infinity : +to;
+    const rows = [];
+    Object.keys(allTracks).forEach(key => {
+        if (!/^\d+$/.test(key)) return; // 只处理数字等级键（'0'=循环）
+        const lvl = +key;
+        if (lvl < lo || lvl > hi) return;
+        ['free', 'premium'].forEach(tk => {
+            if (track && track !== tk) return;
+            (allTracks[key]?.[tk] || []).forEach((r, idx) => {
+                if (type && (r.type || 'item') !== type) return;
+                if (q && !rewardKeyText(r).toLowerCase().includes(q)) return;
+                rows.push({ key, lvl, track: tk, idx, r });
+            });
+        });
     });
+    return rows;
 }
+
+function buildRewardOverview() {
+    if (!el('ov-list')) return;
+    const rows = overviewFilter();
+    el('ov-count').textContent = `匹配 ${rows.length} 项`;
+    if (!rows.length) { el('ov-list').innerHTML = '<div class="muted" style="font-size:11px">无匹配奖励</div>'; return; }
+    el('ov-list').innerHTML = '<table class="grid"><tr><th>等级</th><th>轨</th><th>类型</th><th>奖励</th><th>数量</th><th>大奖</th></tr>' +
+        rows.map(x => `<tr><td>${x.lvl === 0 ? '♾️循环' : x.lvl}</td><td>${x.track === 'free' ? '免费' : '付费'}</td>` +
+            `<td>${esc(OV_TYPE_LABEL[x.r.type || 'item'] || x.r.type)}</td><td>${esc(rewardLabel(x.r))}</td>` +
+            `<td>${x.r.count || 1}</td><td>${x.r.featured ? '★' : ''}</td></tr>`).join('') + '</table>';
+}
+
+async function batchRemoveRewards() {
+    collectAllFromDom();
+    const rows = overviewFilter();
+    if (!rows.length) { toast('没有匹配的奖励可移除', false); return; }
+    if (!confirm(`确认按当前筛选移除 ${rows.length} 项奖励并立即保存？此操作不可撤销。`)) return;
+    // 按 (key,track) 分组后倒序 splice，避免删除时索引错位
+    const byGroup = {};
+    rows.forEach(x => { (byGroup[x.key + '|' + x.track] ||= []).push(x.idx); });
+    Object.entries(byGroup).forEach(([g, idxs]) => {
+        const sep = g.lastIndexOf('|');
+        const key = g.slice(0, sep), track = g.slice(sep + 1);
+        idxs.sort((a, b) => b - a).forEach(i => allTracks[key][track].splice(i, 1));
+    });
+    syncTracksJson();
+    const saved = await postTracksAndSeason(allTracks); // 成功会 loadTracks→resetAndRender→buildRewardOverview
+    toast(saved ? `已移除 ${rows.length} 项并保存` : '已移除但保存失败，可点「保存全部」重试', saved);
+    buildRewardOverview();
+}
+
+el('ov-refresh').onclick = () => { collectAllFromDom(); buildRewardOverview(); };
+el('ov-remove').onclick = batchRemoveRewards;
+['ov-q', 'ov-type', 'ov-track', 'ov-from', 'ov-to'].forEach(id => el(id).addEventListener('input', buildRewardOverview));
 
 // ---- 分步懒加载 ----
 function renderNextChunk() {
@@ -489,22 +418,13 @@ async function loadTracks() {
     } catch (e) { /* 用默认上限 */ }
     syncTracksJson();
     resetAndRender();
+    if (!el('bulk-reward-editor').querySelector('.rw-card')) resetBulkRewardEditor();
+    buildRewardOverview();
 }
 
 // ---- 激活码 ----
 function lotteryPoolSelectOptions(selected) {
-    selected = selected || '';
-    const sorted = lotteryPoolsForCodes
-        .filter(p => p.costType === 'lotteryTickets')
-        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-    const hasSelected = selected && sorted.some(p => p.id === selected);
-    const options = sorted
-        .map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)} (${esc(p.id)})</option>`)
-        .join('');
-    const legacy = selected && !hasSelected
-        ? `<option value="${esc(selected)}">${esc(selected)}（当前奖池列表未找到）</option>`
-        : '';
-    return `<option value="">请选择奖池</option>${legacy}${options}`;
+    return RewardEditor.poolOptions(lotteryPoolsForCodes, selected);
 }
 
 function refreshLotteryPoolSelect(select) {
@@ -525,8 +445,14 @@ function renderCodePoolOptions() {
 }
 
 function updateCodePoolVisibility() {
-    const isPoolTicket = el('c-type').value === 'lotteryPoolTickets';
-    el('c-pool').disabled = !isPoolTicket;
+    const type = el('c-type').value;
+    el('c-pool').disabled = type !== 'lotteryPoolTickets';
+    const isRewards = type === 'rewards';
+    el('c-rewards-wrap').style.display = isRewards ? '' : 'none';
+    const vw = el('c-value-wrap'); if (vw) vw.style.display = isRewards ? 'none' : '';
+    if (isRewards && !el('c-reward-editor').querySelector('.rw-card')) {
+        RewardEditor.addCard(el('c-reward-editor'), null, lotteryPoolsForCodes);
+    }
 }
 
 async function loadLotteryPoolsForCodes() {
@@ -543,26 +469,36 @@ async function loadLotteryPoolsForCodes() {
 }
 
 el('gen-codes').onclick = async () => {
-    if (el('c-type').value === 'lotteryPoolTickets' && !el('c-pool').value) {
+    const type = el('c-type').value;
+    if (type === 'lotteryPoolTickets' && !el('c-pool').value) {
         toast('请选择限定抽奖券绑定的奖池', false);
         return;
     }
 
+    let rewards = null;
+    if (type === 'rewards') {
+        const res = RewardEditor.collect(el('c-reward-editor'));
+        if (!res.rewards.length || res.invalid > 0) { toast('请完整配置激活码奖励（缺关键字段已标红）', false); return; }
+        rewards = res.rewards;
+    }
+
     const payload = {
-        type: el('c-type').value,
+        type,
         value: +el('c-value').value,
         count: +el('c-count').value,
         batchTag: el('c-batch').value.trim() || null,
-        poolId: el('c-type').value === 'lotteryPoolTickets' ? (el('c-pool').value || null) : null,
+        poolId: type === 'lotteryPoolTickets' ? (el('c-pool').value || null) : null,
         expiresUtc: toUnixSec(el('c-expire').value),
         maxRedemptions: Math.max(1, +el('c-max-redemptions').value || 1),
         perPlayerOnce: el('c-per-player-once').checked,
         commonCode: el('c-common').checked,
+        rewards,
     };
     const r = await api('/codes/generate', 'POST', payload);
     if (r.success) { el('gen-out').value = r.codes.join('\n'); toast('已生成 ' + r.codes.length + ' 个', true); loadCodes(); }
     else toast(r.message || '失败', false);
 };
+el('c-add-reward').onclick = () => RewardEditor.addCard(el('c-reward-editor'), null, lotteryPoolsForCodes);
 el('c-type').onchange = updateCodePoolVisibility;
 updateCodePoolVisibility();
 el('refresh-codes').onclick = loadCodes;
@@ -596,6 +532,7 @@ async function loadCodes() {
         lotteryGlobalTickets: '通用券 ×' + c.value,
         lotteryPoolTickets: '限定券 ×' + c.value,
         lotteryExchangeCoins: '兑换币 ×' + c.value,
+        rewards: '自定义奖励 ×' + ((c.rewards && c.rewards.length) || 0),
     }[c.type] || c.type || '-');
     const statusLabel = c => {
         const max = c.maxRedemptions || 1;

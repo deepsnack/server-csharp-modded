@@ -13,7 +13,7 @@
     <div class="grain"></div>
 
     <section id="lottery-view" class="view">
-        <header class="topbar">
+        <header class="topbar player-topbar">
             <div class="season-info">
                 <span class="season-name">通行证抽奖</span>
                 <span class="season-timer" id="lottery-status">LOTTERY ACCESS</span>
@@ -23,9 +23,13 @@
                 <span>兑换币 <b id="wallet-coins">0</b></span>
                 <span>限定券 <b id="wallet-pool">0</b></span>
             </div>
+            <nav class="player-nav" aria-label="玩家功能导航">
+                <a class="player-nav-link" href="index.html">通行证</a>
+                <a class="player-nav-link" href="quest-skip.html">任务跳过</a>
+                <a class="player-nav-link active" aria-current="page" href="lottery.html">抽奖</a>
+                <a class="player-nav-link" href="titles.html">我的称号</a>
+            </nav>
             <div class="user-block">
-                <a class="btn ghost small" href="index.html">返回通行证</a>
-                <a class="btn ghost small" href="titles.html">我的称号</a>
                 <button id="lottery-logout" class="btn ghost small">登出</button>
             </div>
         </header>

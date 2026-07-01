@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>任务跳过 · Battle Pass</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body class="quest-skip-page">
+    <div class="grain"></div>
+
+    <section id="login-view" class="view">
+        <div class="login-card">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <h1 class="brand">任务跳过</h1>
+            <p class="brand-sub">BATTLE&nbsp;PASS&nbsp;//&nbsp;QUEST&nbsp;CLEARANCE</p>
+            <div class="field">
+                <label>账号</label>
+                <input id="login-username" type="text" autocomplete="username" placeholder="账号" />
+            </div>
+            <div class="field">
+                <label>密码</label>
+                <input id="login-password" type="password" autocomplete="current-password" placeholder="密码" />
+            </div>
+            <button id="login-btn" class="btn primary">接入 / LOGIN</button>
+            <p id="login-msg" class="msg"></p>
+        </div>
+    </section>
+
+    <section id="quest-skip-view" class="view hidden">
+        <header class="topbar player-topbar">
+            <div class="season-info">
+                <span class="season-name">任务跳过</span>
+                <span class="season-timer">QUEST OBJECTIVE CLEARANCE</span>
+            </div>
+            <nav class="player-nav" aria-label="玩家功能导航">
+                <a class="player-nav-link" href="index.html">通行证</a>
+                <a class="player-nav-link active" aria-current="page" href="quest-skip.html">任务跳过</a>
+                <a class="player-nav-link" href="lottery.html">抽奖</a>
+                <a class="player-nav-link" href="titles.html">我的称号</a>
+            </nav>
+            <div class="user-block">
+                <button id="refresh-btn" class="btn ghost small" type="button">刷新任务</button>
+                <button id="logout-btn" class="btn ghost small" type="button">登出</button>
+            </div>
+        </header>
+
+        <main class="content quest-skip-content">
+            <section class="quest-skip-summary">
+                <div class="ticket-panel">
+                    <span class="ticket-label">主仓库任务跳过券</span>
+                    <strong id="ticket-count">0</strong>
+                    <span class="ticket-unit">张</span>
+                </div>
+                <p class="quest-skip-help">每张券可跳过一个任务目标。券必须放在主仓库中；最后一个目标完成后，任务会进入可交付状态。</p>
+            </section>
+
+            <section id="raid-warning" class="quest-skip-warning hidden" role="status">
+                当前处于战局中或地图转移期间：可以查看任务，但不能跳过目标。
+            </section>
+
+            <section class="panel quest-skip-panel">
+                <div class="panel-head">
+                    <h2>正在进行的任务</h2>
+                    <span id="task-count" class="muted">读取中</span>
+                </div>
+                <div id="quest-list" class="quest-skip-list" aria-live="polite"></div>
+            </section>
+        </main>
+    </section>
+
+    <div id="skip-confirm" class="skip-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="skip-confirm-title">
+        <div class="skip-confirm-box">
+            <h2 id="skip-confirm-title">确认跳过任务目标</h2>
+            <p id="skip-confirm-task" class="skip-confirm-task"></p>
+            <p id="skip-confirm-objective" class="skip-confirm-objective"></p>
+            <p class="skip-confirm-cost">本次操作将消耗 <strong>1 张任务跳过券</strong>。</p>
+            <div class="skip-confirm-actions">
+                <button id="skip-cancel" class="btn ghost small" type="button">取消</button>
+                <button id="skip-submit" class="btn primary small" type="button">确认消耗并跳过</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="quest-skip.js"></script>
+</body>
+</html>

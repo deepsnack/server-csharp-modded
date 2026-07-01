@@ -101,6 +101,60 @@
                     <div style="flex:1"></div>
                     <button id="save-all-tracks" class="btn primary small">保存全部</button>
                 </div>
+                <details class="bulk-reward-panel" open>
+                    <summary>批量添加一种奖励</summary>
+                    <p class="hint">把下方奖励追加到指定等级范围，不覆盖这些等级已有的奖励。可设置间隔，例如 1–50 级、每 5 级添加一次。</p>
+                    <div class="bulk-reward-range">
+                        <label>起始等级 <input id="bulk-reward-start" type="number" min="1" value="1" /></label>
+                        <label>结束等级 <input id="bulk-reward-end" type="number" min="1" value="50" /></label>
+                        <label>每隔等级 <input id="bulk-reward-step" type="number" min="1" value="1" /></label>
+                        <label>目标轨
+                            <select id="bulk-reward-track">
+                                <option value="free">免费轨</option>
+                                <option value="premium">付费轨</option>
+                                <option value="both">免费轨与付费轨</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div id="bulk-reward-editor" class="bulk-reward-editor">
+                        <div class="reward-cards" data-track="bulk"></div>
+                    </div>
+                    <div class="bulk-reward-actions">
+                        <button id="bulk-reward-reset" class="btn ghost small" type="button">重置奖励</button>
+                        <span id="bulk-reward-hint" class="muted"></span>
+                        <button id="bulk-reward-apply" class="btn primary small" type="button">批量添加并保存</button>
+                    </div>
+                </details>
+                <details class="bulk-reward-panel reward-overview-panel">
+                    <summary>奖励总览 · 搜索 / 筛选 / 批量移除</summary>
+                    <p class="hint">汇总所有等级与双轨的已配置奖励；可按关键字 / 类型 / 轨 / 等级范围筛选，并对筛选结果一键批量移除（立即保存）。循环奖励按等级 0 计。</p>
+                    <div class="overview-filters">
+                        <input id="ov-q" placeholder="关键字：展示名 / tpl / offerId / 称号 / 奖池…" />
+                        <select id="ov-type">
+                            <option value="">全部类型</option>
+                            <option value="item">物品</option>
+                            <option value="purchaseRight">购买权</option>
+                            <option value="recipe">配方</option>
+                            <option value="title">称号</option>
+                            <option value="clothing">服装</option>
+                            <option value="lotteryGlobalTickets">通用券</option>
+                            <option value="lotteryPoolTickets">限定券</option>
+                            <option value="lotteryExchangeCoins">兑换币</option>
+                        </select>
+                        <select id="ov-track">
+                            <option value="">全部轨</option>
+                            <option value="free">免费轨</option>
+                            <option value="premium">付费轨</option>
+                        </select>
+                        <label>等级 <input id="ov-from" type="number" min="0" placeholder="从" style="width:60px" /></label>
+                        <label>– <input id="ov-to" type="number" min="0" placeholder="到" style="width:60px" /></label>
+                        <button id="ov-refresh" class="btn ghost small" type="button">刷新总览</button>
+                        <span id="ov-count" class="muted"></span>
+                        <div style="flex:1"></div>
+                        <button id="ov-remove" class="btn danger small" type="button">按筛选批量移除</button>
+                    </div>
+                    <div id="ov-list" class="overview-list"></div>
+                </details>
                 <div id="tracks-list" class="tracks-list"></div>
                 <div id="tracks-sentinel" style="height:1px"></div>
                 <details id="tracks-json-details" style="margin-top:14px">
@@ -119,8 +173,8 @@
                 <h2>激活码</h2>
                 <div class="code-gen panel">
                     <div class="form-body row">
-                        <div><label>类型</label><select id="c-type"><option value="premium">解锁付费轨</option><option value="levels">直升等级</option><option value="lotteryGlobalTickets">通用抽奖券</option><option value="lotteryPoolTickets">限定抽奖券</option><option value="lotteryExchangeCoins">抽奖兑换币</option></select></div>
-                        <div><label>数值（等级 / 券 / 币）</label><input id="c-value" type="number" value="5" min="1" /></div>
+                        <div><label>类型</label><select id="c-type"><option value="premium">解锁付费轨</option><option value="levels">直升等级</option><option value="lotteryGlobalTickets">通用抽奖券</option><option value="lotteryPoolTickets">限定抽奖券</option><option value="lotteryExchangeCoins">抽奖兑换币</option><option value="rewards">自定义奖励（物品/称号…）</option></select></div>
+                        <div id="c-value-wrap"><label>数值（等级 / 券 / 币）</label><input id="c-value" type="number" value="5" min="1" /></div>
                         <div><label>绑定奖池（限定券）</label><select id="c-pool"><option value="">请选择奖池</option></select></div>
                         <div><label>数量</label><input id="c-count" type="number" value="10" /></div>
                         <div><label>批次标签</label><input id="c-batch" placeholder="可选" /></div>
@@ -129,6 +183,10 @@
                         <label class="with-cb"><input id="c-per-player-once" type="checkbox" checked /> 每玩家一次</label>
                         <label class="with-cb"><input id="c-common" type="checkbox" /> 通用码</label>
                         <button id="gen-codes" class="btn primary small">生成</button>
+                    </div>
+                    <div id="c-rewards-wrap" class="code-rewards" style="display:none">
+                        <div class="code-rewards-head"><span>自定义奖励（与等级奖励/任务同一套，支持物品含任务跳过券、称号、配方、服装、购买权、抽奖资源）</span><button id="c-add-reward" class="mini" type="button">＋ 添加奖励</button></div>
+                        <div id="c-reward-editor" class="reward-cards"></div>
                     </div>
                     <textarea id="gen-out" class="json-edit" spellcheck="false" readonly placeholder="生成的激活码将显示在此，便于复制分发"></textarea>
                 </div>
@@ -158,6 +216,7 @@
 
     <div id="toast" class="toast"></div>
     <script src="picker.js"></script>
+    <script src="reward-editor.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

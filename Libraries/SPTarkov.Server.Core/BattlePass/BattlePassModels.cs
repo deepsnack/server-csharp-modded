@@ -471,13 +471,21 @@ public record BpActivationCode
     [JsonPropertyName("code")]
     public string Code { get; set; } = "";
 
-    /// <summary>premium | levels。</summary>
+    /// <summary>premium | levels | lotteryGlobalTickets | lotteryPoolTickets | lotteryExchangeCoins | rewards。</summary>
     [JsonPropertyName("type")]
     public string Type { get; set; } = "premium";
 
     /// <summary>type=levels 时直升的等级数；premium 时忽略。</summary>
     [JsonPropertyName("value")]
     public int Value { get; set; }
+
+    /// <summary>
+    ///     type=rewards 时携带的统一奖励列表（复用等级奖励/任务同款 <see cref="BpReward"/>）。
+    ///     兑换时经 <see cref="BattlePassService.GrantRewards"/> 发放，支持物品(含任务跳过券)/称号/配方/服装/购买权/抽奖资源，
+    ///     无需为激活码单独实现每种奖励类型。
+    /// </summary>
+    [JsonPropertyName("rewards")]
+    public List<BpReward>? Rewards { get; set; }
 
     /// <summary>批次标签（便于管理员分发归类）。</summary>
     [JsonPropertyName("batchTag")]

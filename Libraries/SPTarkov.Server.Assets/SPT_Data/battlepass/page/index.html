@@ -34,11 +34,17 @@
 
     <!-- 主界面 -->
     <section id="main-view" class="view hidden">
-        <header class="topbar">
+        <header class="topbar player-topbar">
             <div class="season-info">
                 <span class="season-name" id="season-name">—</span>
                 <span class="season-timer" id="season-timer"></span>
             </div>
+            <nav class="player-nav" aria-label="玩家功能导航">
+                <a class="player-nav-link active" aria-current="page" href="index.html">通行证</a>
+                <a class="player-nav-link" href="quest-skip.html">任务跳过</a>
+                <a class="player-nav-link" href="lottery.html">抽奖</a>
+                <a class="player-nav-link" href="titles.html">我的称号</a>
+            </nav>
             <div class="level-block">
                 <div class="level-badge">LV <span id="bp-level">1</span></div>
                 <div class="xp-bar"><div class="xp-fill" id="xp-fill"></div><span class="xp-text" id="xp-text"></span></div>
@@ -46,8 +52,6 @@
             </div>
             <div class="user-block">
                 <span id="bp-username"></span>
-                <a class="btn small lottery-entry-btn" href="lottery.html">抽奖</a>
-                <a class="btn ghost small" href="titles.html">我的称号</a>
                 <button id="redeem-entry" class="btn ghost small">兑换激活码</button>
                 <button id="logout-btn" class="btn ghost small">登出</button>
             </div>

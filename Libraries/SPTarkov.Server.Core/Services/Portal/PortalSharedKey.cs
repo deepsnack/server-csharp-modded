@@ -29,10 +29,23 @@ public static class PortalSharedKey
         }
     }
 
+    public static string? TryGetPlayerTokenSecret()
+    {
+        try
+        {
+            var path = SharedFilePath;
+            if (!File.Exists(path)) return null;
+            var dto = JsonSerializer.Deserialize<SharedSecretsDto>(File.ReadAllText(path));
+            return string.IsNullOrEmpty(dto?.PlayerTokenSecret) ? null : dto.PlayerTokenSecret;
+        }
+        catch { return null; }
+    }
+
     private record SharedSecretsDto
     {
         [JsonPropertyName("keyHash")] public KeyHashDto? KeyHash { get; set; }
         [JsonPropertyName("tokenSecret")] public string TokenSecret { get; set; } = "";
+        [JsonPropertyName("playerTokenSecret")] public string PlayerTokenSecret { get; set; } = "";
     }
 
     private record KeyHashDto

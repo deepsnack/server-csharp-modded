@@ -23,6 +23,7 @@ public class BattlePassMod(
     BattlePassPortalBridgeService portalBridge,
     BattlePassTraderSync traderSync,
     BattlePassRecipeSync recipeSync,
+    QuestSkipTicketService questSkipTicketService,
     BattlePassService battlePassService,
     BattlePassTraderAccessService traderAccessService
 ) : IOnLoad
@@ -33,6 +34,7 @@ public class BattlePassMod(
         BattlePassStore.EnsureSeeded();
         battlePassService.InitializeExistingRewardLedgers();
         traderAccessService.Register();
+        questSkipTicketService.Register();
         // 页面随 Assets 工程输出到 SPT_Data/battlepass/page/，无需运行期解压；
         // 静态页 /battlepass 由 BattlePassPageController（MVC catch-all）提供。
         traderSync.Sync(); // 注入「通行证商人」：货架/元信息全后台可配，购买权限逐玩家解锁

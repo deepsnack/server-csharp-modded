@@ -366,6 +366,31 @@ label.with-cb input[type=checkbox] { width: auto; margin: 0; }
 .track-jump { position: fixed; right: 22px; bottom: 26px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
 .track-jump button { box-shadow: 0 3px 10px rgba(0,0,0,.4); }
 
+/* 奖励轨批量追加：复用单条奖励卡编辑器，只负责范围与目标轨选择。 */
+.bulk-reward-panel {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-bright);
+    border-radius: 7px;
+    background: rgba(201,162,39,.035);
+}
+.bulk-reward-panel > summary { color: var(--accent); font-weight: 600; cursor: pointer; }
+.bulk-reward-panel .hint { margin: 8px 0; }
+.bulk-reward-range { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.bulk-reward-range label { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; }
+.bulk-reward-range input { width: 74px; }
+.bulk-reward-range select { min-width: 150px; }
+.bulk-reward-editor .reward-cards { min-height: 0; }
+.bulk-reward-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.bulk-reward-actions .muted { flex: 1; font-size: 11px; }
+@media (max-width: 640px) {
+    .bulk-reward-range { display: grid; grid-template-columns: 1fr 1fr; }
+    .bulk-reward-range label { flex-direction: column; align-items: stretch; }
+    .bulk-reward-range input, .bulk-reward-range select { width: 100%; min-width: 0; }
+    .bulk-reward-actions { align-items: stretch; flex-direction: column; }
+    .bulk-reward-actions .btn { width: 100%; }
+}
+
 /* ---- 统一价格编辑器（BpPrice，约定组件 price.js） ---- */
 .price-editor .price-rows { display: flex; flex-direction: column; gap: 8px; }
 .price-row { display: flex; gap: 8px; align-items: center; }
@@ -535,3 +560,17 @@ label.with-cb input[type=checkbox] { width: auto; margin: 0; }
 .g-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
     border: 1px solid var(--line, #555); border-radius: 3px; font-size: 12px; }
 .g-chip-x { background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
+
+/* 激活码：自定义奖励区（复用 .reward-cards 卡片样式） */
+.code-rewards { margin: 10px 0; padding: 10px; border: 1px dashed var(--line, #555); border-radius: 4px; }
+.code-rewards-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; font-size: 11px; color: var(--text-dim, #aaa); }
+
+/* 奖励总览 · 搜索/筛选/批量移除 */
+.overview-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.overview-filters input, .overview-filters select { font-size: 12px; }
+.overview-filters #ov-q { flex: 1; min-width: 180px; }
+.overview-filters label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim, #aaa); font-size: 11px; }
+.overview-list { max-height: 320px; overflow: auto; }
+.overview-list table.grid { width: 100%; font-size: 12px; }
+.btn.danger { background: #b23b3b; border-color: #b23b3b; color: #fff; }
+.btn.danger:hover { background: #c94a4a; border-color: #c94a4a; }

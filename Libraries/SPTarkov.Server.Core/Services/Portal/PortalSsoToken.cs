@@ -64,6 +64,48 @@ public static class PortalSsoToken
     }
 }
 
+/// <summary>玩家 SSO 专用验证器；必须使用 playerTokenSecret，不能与管理员 tokenSecret 混用。</summary>
+public static class PlayerPortalSsoToken
+{
+    public record Payload
+    {
+        [JsonPropertyName("typ")] public string Type { get; set; } = "";
+        [JsonPropertyName("aud")] public string Audience { get; set; } = "";
+        [JsonPropertyName("sub")] public string Subject { get; set; } = "";
+        [JsonPropertyName("name")] public string Name { get; set; } = "";
+        [JsonPropertyName("exp")] public long ExpiresAt { get; set; }
+        [JsonPropertyName("jti")] public string TokenId { get; set; } = "";
+    }
+
+    public static Payload? Verify(string token, string secretBase64, string expectedAudience)
+    {
+        try
+        {
+            var dot = token.IndexOf('.');
+            if (dot <= 0 || dot == token.Length - 1) return null;
+            var payloadBytes = Decode(token[..dot]);
+            var signature = Decode(token[(dot + 1)..]);
+            var expected = HMACSHA256.HashData(Convert.FromBase64String(secretBase64), payloadBytes);
+            if (!CryptographicOperations.FixedTimeEquals(signature, expected)) return null;
+            var payload = JsonSerializer.Deserialize<Payload>(payloadBytes);
+            if (payload is null || payload.Type != "player-sso") return null;
+            if (!payload.Audience.Equals(expectedAudience, StringComparison.Ordinal)) return null;
+            if (payload.ExpiresAt < DateTimeOffset.UtcNow.ToUnixTimeSeconds()) return null;
+            if (string.IsNullOrWhiteSpace(payload.Subject) || string.IsNullOrWhiteSpace(payload.TokenId)) return null;
+            return payload;
+        }
+        catch { return null; }
+    }
+
+    private static byte[] Decode(string value)
+    {
+        var padded = value.Replace('-', '+').Replace('_', '/');
+        if (padded.Length % 4 == 2) padded += "==";
+        else if (padded.Length % 4 == 3) padded += "=";
+        return Convert.FromBase64String(padded);
+    }
+}
+
 /// <summary>5 分钟窗口内跟踪已见过的 jti，拒绝重放。</summary>
 public class JtiReplayGuard
 {

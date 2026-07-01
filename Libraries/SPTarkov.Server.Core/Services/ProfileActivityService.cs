@@ -23,6 +23,7 @@ public class ProfileActivityService(TimeUtil timeUtil)
                 existingValue.ClientStartedTimestamp = clientStartedTimestamp;
                 existingValue.LastActive = timeUtil.GetTimeStamp();
                 existingValue.RaidData = null;
+                existingValue.IsInRaid = false;
                 return existingValue;
             }
         );
@@ -36,6 +37,26 @@ public class ProfileActivityService(TimeUtil timeUtil)
     public bool ContainsActiveProfile(MongoId sessionId)
     {
         return _activeProfiles.ContainsKey(sessionId);
+    }
+
+    /// <summary>记录玩家是否仍处于本地战局；地图转移期间保持为 true。</summary>
+    public void SetRaidActive(MongoId sessionId, bool isInRaid)
+    {
+        if (!ContainsActiveProfile(sessionId))
+        {
+            AddActiveProfile(sessionId, timeUtil.GetTimeStamp());
+        }
+
+        if (_activeProfiles.TryGetValue(sessionId, out var activity))
+        {
+            activity.IsInRaid = isInRaid;
+            activity.LastActive = timeUtil.GetTimeStamp();
+        }
+    }
+
+    public bool IsRaidActive(MongoId sessionId)
+    {
+        return _activeProfiles.TryGetValue(sessionId, out var activity) && activity.IsInRaid;
     }
 
     /// <summary>

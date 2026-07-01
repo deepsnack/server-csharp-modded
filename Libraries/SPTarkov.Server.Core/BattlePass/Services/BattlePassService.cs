@@ -51,19 +51,10 @@ public class BattlePassService(
         return passwordStoreService.Verify(sessionId, password) ? profileId : null;
     }
 
-    /// <summary>按用户名（忽略大小写）在已加载档案中查 profileId。</summary>
+    /// <summary>按用户名（忽略大小写）查 profileId；懒加载时只使用头索引，不物化存档。</summary>
     public string? ResolveProfileIdByUsername(string username)
     {
-        foreach (var (id, profile) in saveServer.GetProfiles())
-        {
-            var uname = profile.ProfileInfo?.Username;
-            if (!string.IsNullOrEmpty(uname) && string.Equals(uname, username, StringComparison.OrdinalIgnoreCase))
-            {
-                return id.ToString();
-            }
-        }
-
-        return null;
+        return saveServer.GetSessionIdByUsername(username.Trim())?.ToString();
     }
 
     public string? GetUsername(string profileId)
@@ -73,18 +64,7 @@ public class BattlePassService(
             return null;
         }
 
-        var sessionId = new MongoId(profileId);
-        if (saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
-        {
-            return profile.ProfileInfo?.Username;
-        }
-
-        if (saveServer.LazyEnabled && saveServer.GetLazyHeaders().TryGetValue(sessionId, out var header))
-        {
-            return header.ProfileInfo.Username;
-        }
-
-        return null;
+        return saveServer.GetUsernameBySessionId(new MongoId(profileId));
     }
 
     public string? GetNickname(string profileId)
@@ -94,15 +74,7 @@ public class BattlePassService(
             return null;
         }
 
-        var sessionId = new MongoId(profileId);
-        if (saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
-        {
-            return profile.CharacterData?.PmcData?.Info?.Nickname;
-        }
-
-        return saveServer.LazyEnabled && saveServer.GetLazyHeaders().TryGetValue(sessionId, out var header)
-            ? header.Nickname
-            : null;
+        return saveServer.GetPmcNicknameBySessionId(new MongoId(profileId));
     }
 
     /// <summary>Fika headless 自动档案不属于通行证管理范围。</summary>
@@ -116,7 +88,8 @@ public class BattlePassService(
 
     public List<string> ListProfileIds()
     {
-        var ids = saveServer.GetProfiles().Keys.Select(id => id.ToString());
+        var loaded = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var ids = loaded.Keys.Select(id => id.ToString());
         if (saveServer.LazyEnabled)
         {
             ids = ids.Concat(saveServer.GetLazyHeaders().Keys.Select(id => id.ToString()));
@@ -178,7 +151,8 @@ public class BattlePassService(
             return result;
         }
 
-        foreach (var (id, profile) in saveServer.GetProfiles())
+        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        foreach (var (id, profile) in profiles)
         {
             var nick = profile.CharacterData?.PmcData?.Info?.Nickname;
             if (string.IsNullOrEmpty(nick) || !wanted.Contains(nick) || result.ContainsKey(nick))

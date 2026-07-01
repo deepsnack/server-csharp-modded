@@ -67,7 +67,7 @@ public class SaveServer(
     {
         foreach (var kvp in profiles)
         {
-            if (kvp.Value.ProfileInfo?.Username == username)
+            if (string.Equals(kvp.Value.ProfileInfo?.Username, username, StringComparison.OrdinalIgnoreCase))
             {
                 return kvp.Key;
             }
@@ -137,7 +137,7 @@ public class SaveServer(
 
     // ---- 懒加载（原 SPT-ProfileCore LazyProfile 内联；开关 CoreConfig.Features.LazyProfileLoad，默认关）----
     protected readonly ConcurrentDictionary<MongoId, LazyProfileHeader> lazyHeaders = new();
-    protected readonly ConcurrentDictionary<string, MongoId> lazyUsernameIndex = new(StringComparer.Ordinal);
+    protected readonly ConcurrentDictionary<string, MongoId> lazyUsernameIndex = new(StringComparer.OrdinalIgnoreCase);
     protected readonly ConcurrentDictionary<MongoId, object> lazyLoadLocks = new();
     protected bool? lazyEnabled;
 

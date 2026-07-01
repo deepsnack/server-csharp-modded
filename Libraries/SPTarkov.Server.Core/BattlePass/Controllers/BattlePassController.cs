@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Services.Portal;
 
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
 
@@ -26,6 +27,8 @@ public class BattlePassController(
     ISptLogger<BattlePassController> logger
 ) : ControllerBase
 {
+    private const string PlayerSsoAudience = "battlepass-player";
+    private static readonly JtiReplayGuard PlayerSsoReplayGuard = new();
     /// <summary>
     ///     mod 物品兜底：item 类奖励的 tpl 不在物品库（mod 被删除）时从玩家页下发数据中剔除——
     ///     该格自然回退为空（全部剔除时空格）。只过滤下发，存储配置不动：mod 装回后奖励自动恢复。
@@ -121,6 +124,38 @@ public class BattlePassController(
         {
             return new { success = false, message = ex.Message };
         }
+    }
+
+    /// <summary>官网快照复用的公开赛季摘要，不包含任何玩家进度或管理配置。</summary>
+    [HttpGet("public/summary")]
+    public object GetPublicSummary()
+    {
+        var season = BattlePassStore.GetSeason();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return new
+        {
+            success = true,
+            season.SeasonId,
+            season.Name,
+            season.StartUtc,
+            season.EndUtc,
+            active = now >= season.StartUtc && now < season.EndUtc,
+            remainingSeconds = Math.Max(0, season.EndUtc - now),
+        };
+    }
+
+    /// <summary>消费 SptManagerPortal 的玩家 SSO 短令牌，换取通行证自己的玩家会话。</summary>
+    [HttpGet("portal-sso")]
+    public IActionResult PlayerPortalSso([FromQuery] string? token = null)
+    {
+        var secret = PortalSharedKey.TryGetPlayerTokenSecret();
+        if (string.IsNullOrEmpty(secret) || string.IsNullOrEmpty(token)) return Unauthorized();
+        var payload = PlayerPortalSsoToken.Verify(token, secret, PlayerSsoAudience);
+        if (payload is null || !PlayerSsoReplayGuard.TryAccept(payload.TokenId)) return Unauthorized();
+        if (battlePassService.GetUsername(payload.Subject) is null || battlePassService.IsHeadlessProfile(payload.Subject))
+            return Unauthorized();
+        var battlePassToken = BattlePassSession.Issue(payload.Subject);
+        return Redirect("/battlepass#sso=" + Uri.EscapeDataString(battlePassToken));
     }
 
     [HttpGet("state")]
@@ -306,7 +341,7 @@ public class BattlePassController(
         }
     }
 
-    /// <summary>网页通行证商店货架：已解锁的商人购买项 + 管理员自定义条目（含每项是否买得起/库存/限购）。</summary>
+    /// <summary>网页通行证商店货架：管理员自定义条目（含每项是否买得起/库存/限购）。</summary>
     [HttpGet("shop")]
     public object GetShop([FromHeader(Name = "X-BP-Token")] string? token = null)
     {
@@ -326,7 +361,7 @@ public class BattlePassController(
         }
     }
 
-    /// <summary>网页商店购买：校验货币足额→扣减→邮件发货。</summary>
+    /// <summary>网页商店批量购买：校验数量、限购、库存与货币足额→扣减→邮件发货。</summary>
     [HttpPost("shop/buy")]
     public object BuyShop([FromBody] JsonElement request, [FromHeader(Name = "X-BP-Token")] string? token = null)
     {
@@ -339,7 +374,16 @@ public class BattlePassController(
         try
         {
             var offerId = request.TryGetProperty("offerId", out var o) ? o.GetString() : null;
-            var (ok, message) = shopService.Buy(profileId, offerId ?? "");
+            var quantity = 1;
+            if (
+                request.TryGetProperty("quantity", out var q)
+                && (q.ValueKind != JsonValueKind.Number || !q.TryGetInt32(out quantity))
+            )
+            {
+                return new { success = false, message = "购买数量格式无效" };
+            }
+
+            var (ok, message) = shopService.Buy(profileId, offerId ?? "", quantity);
             return new { success = ok, message };
         }
         catch (Exception ex)

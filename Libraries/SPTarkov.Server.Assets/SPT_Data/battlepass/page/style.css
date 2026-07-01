@@ -638,8 +638,21 @@ input:focus { border-color: var(--brass); box-shadow: 0 0 0 1px rgba(216,162,74,
 .shop-cost.lack { background: rgba(226,96,42,.15); color: #e2602a; border-color: rgba(226,96,42,.4); }
 .shop-limit { font-size: 10px; opacity: .7; padding: 1px 6px; border-radius: 3px;
     background: rgba(255,255,255,.05); border: 1px solid var(--line, rgba(255,255,255,.12)); white-space: nowrap; }
-/* 购买按钮独占第 2 行整宽；覆盖 .btn.primary 的 width:100%/margin-top 在卡片栅格里造成的挤压 */
-.shop-card .shop-buy { grid-column: 1 / -1; width: 100%; margin-top: 8px; }
+/* 批量购买：数量步进器与购买按钮共用稳定操作行，避免数量变化造成卡片跳动 */
+.shop-actions { grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+.shop-quantity { display: grid; grid-template-columns: 34px 56px 34px; height: 36px; }
+.shop-qty-step {
+    width: 34px; height: 36px; border: 1px solid var(--line); background: #0a0b07; color: var(--brass-hi);
+    font-family: var(--f-mono); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.shop-qty-step:hover:not(:disabled) { border-color: var(--brass); color: #fff; }
+.shop-qty-step:disabled { opacity: .35; cursor: not-allowed; }
+.shop-qty {
+    width: 56px; height: 36px; padding: 0 4px; border-left: 0; border-right: 0; text-align: center;
+    font-size: 13px; appearance: textfield;
+}
+.shop-qty::-webkit-inner-spin-button, .shop-qty::-webkit-outer-spin-button { margin: 0; appearance: none; }
+.shop-card .shop-buy { width: 100%; min-height: 36px; margin-top: 0; }
 .shop-buy:disabled { opacity: .45; cursor: not-allowed; }
 .shop-search { flex: 0 1 240px; min-width: 120px; margin-left: 14px; padding: 7px 12px; font-size: 13px;
     background: rgba(0,0,0,.25); border: 1px solid var(--line, #34302a); border-radius: 4px; color: var(--text, #e8e2d2); }
@@ -651,6 +664,10 @@ input:focus { border-color: var(--brass); box-shadow: 0 0 0 1px rgba(216,162,74,
 .redeem-modal input { width: 100%; text-align: center; letter-spacing: 1px; }
 .redeem-modal .btn.primary { width: 100%; }
 .redeem-modal .msg { margin-top: 10px; text-align: center; }
+@media (max-width: 380px) {
+    .shop-actions { grid-template-columns: 1fr; }
+    .shop-quantity { justify-content: center; }
+}
 
 /* ---- 通行证抽奖 ---- */
 a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
@@ -1073,4 +1090,172 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
     .lottery-page .user-block { grid-template-columns: 1fr; }
     .lottery-buttons { grid-template-columns: 1fr; }
     .lottery-result { grid-template-columns: 1fr; }
+}
+
+/* ---- 玩家页统一置顶导航 ---- */
+.player-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 1200;
+    flex-wrap: wrap;
+    box-shadow: 0 10px 30px rgba(0,0,0,.34);
+}
+.player-nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    background: rgba(6,7,5,.62);
+}
+.player-nav-link {
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 11px;
+    color: var(--text-dim);
+    font-family: var(--f-display);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .8px;
+    text-decoration: none;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+.player-nav-link:hover { color: var(--brass-hi); border-color: var(--line-bright); }
+.player-nav-link.active {
+    color: #171309;
+    border-color: var(--brass-hi);
+    background: linear-gradient(180deg, var(--brass-hi), var(--brass));
+}
+
+/* ---- 任务跳过玩家页 ---- */
+.quest-skip-content { max-width: 1180px; width: 100%; margin: 0 auto; }
+.quest-skip-summary {
+    display: grid;
+    grid-template-columns: minmax(220px, auto) minmax(0, 1fr);
+    gap: 18px;
+    align-items: center;
+}
+.ticket-panel {
+    min-height: 92px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto 1fr;
+    align-items: end;
+    gap: 0 8px;
+    padding: 14px 18px;
+    border: 1px solid var(--brass-dim);
+    background: linear-gradient(135deg, rgba(216,162,74,.14), rgba(16,17,9,.9));
+    box-shadow: inset 0 0 24px rgba(216,162,74,.05);
+}
+.ticket-label { grid-column: 1 / -1; color: var(--text-dim); font-size: 12px; letter-spacing: 1px; }
+.ticket-panel strong { font-family: var(--f-mono); color: var(--brass-hi); font-size: 38px; line-height: 1; }
+.ticket-unit { color: var(--text-dim); padding-bottom: 3px; }
+.quest-skip-help { color: var(--text-dim); line-height: 1.75; font-size: 13px; }
+.quest-skip-warning {
+    padding: 12px 15px;
+    color: #ffd5c3;
+    border: 1px solid rgba(226,96,42,.6);
+    border-left: 4px solid var(--molten);
+    background: rgba(226,96,42,.12);
+}
+.quest-skip-list { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.quest-skip-card { border: 1px solid var(--line); background: rgba(10,11,7,.48); }
+.quest-skip-title {
+    padding: 12px 14px;
+    color: var(--brass-hi);
+    font-family: var(--f-display);
+    font-size: 19px;
+    letter-spacing: .6px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(90deg, rgba(216,162,74,.1), transparent 65%);
+}
+.quest-objectives { display: flex; flex-direction: column; }
+.quest-objective {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: center;
+    padding: 13px 14px;
+    border-bottom: 1px solid rgba(76,77,60,.55);
+}
+.quest-objective:last-child { border-bottom: 0; }
+.quest-objective.completed { opacity: .68; background: rgba(147,182,92,.04); }
+.quest-objective-copy { min-width: 0; }
+.quest-objective-name { display: block; color: var(--text); font-size: 14px; margin-bottom: 5px; }
+.quest-objective-description { color: var(--text-dim); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.quest-objective-action { min-width: 128px; display: flex; justify-content: flex-end; }
+.quest-skip-button { min-width: 128px; margin: 0; }
+.quest-skip-button:disabled { opacity: .48; cursor: not-allowed; }
+.quest-completed-badge {
+    padding: 5px 10px;
+    color: var(--green);
+    font-size: 11px;
+    border: 1px solid rgba(147,182,92,.45);
+    background: rgba(147,182,92,.08);
+}
+.quest-skip-empty { padding: 36px 16px; color: var(--text-dim); text-align: center; }
+.skip-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 4000;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: rgba(3,4,3,.82);
+    backdrop-filter: blur(4px);
+}
+.skip-confirm-box {
+    width: min(520px, 100%);
+    padding: 22px;
+    border: 1px solid var(--brass-dim);
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    box-shadow: 0 24px 80px rgba(0,0,0,.65);
+}
+.skip-confirm-box h2 { color: var(--brass-hi); font-family: var(--f-display); font-size: 23px; }
+.skip-confirm-task { margin-top: 16px; color: var(--text); font-weight: 600; }
+.skip-confirm-objective { margin-top: 8px; color: var(--text-dim); line-height: 1.6; }
+.skip-confirm-cost { margin-top: 18px; padding: 11px; border-left: 3px solid var(--molten); background: rgba(226,96,42,.1); }
+.skip-confirm-cost strong { color: var(--molten-hi); }
+.skip-confirm-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin-top: 18px; }
+.skip-confirm-actions .btn { width: 100%; margin: 0; }
+
+@media (max-width: 920px) {
+    .player-topbar { gap: 10px; padding: 12px 14px; }
+    .player-nav { order: 4; width: 100%; overflow-x: auto; }
+    .player-nav-link { flex: 1 0 auto; }
+    .player-topbar .user-block { margin-left: auto; }
+    .lottery-page .player-nav { order: 4; }
+    .lottery-page .user-block { display: flex; width: auto; order: 3; }
+}
+
+@media (max-width: 640px) {
+    .player-topbar { position: sticky; display: grid; grid-template-columns: 1fr auto; align-items: center; }
+    .player-topbar .season-info, .player-topbar > .season-name { min-width: 0; }
+    .player-topbar .season-name { font-size: 21px; }
+    .player-topbar .level-block { grid-column: 1 / -1; order: 3; }
+    .player-topbar .player-nav { grid-column: 1 / -1; order: 4; }
+    .player-topbar .user-block { width: auto; margin-left: 0; gap: 6px; }
+    .player-topbar .user-block #bp-username { display: none; }
+    .player-topbar .user-block .btn { min-height: 36px; padding: 6px 8px; font-size: 10px; }
+    .lottery-page .player-topbar { display: grid; grid-template-columns: 1fr auto; }
+    .lottery-page .lottery-wallet { grid-column: 1 / -1; order: 3; }
+    .lottery-page .player-nav { grid-column: 1 / -1; order: 4; }
+    .lottery-page .user-block { width: auto; display: flex; grid-template-columns: none; order: 2; }
+    .quest-skip-content { padding: 14px 10px 28px; }
+    .quest-skip-summary { grid-template-columns: 1fr; gap: 10px; }
+    .ticket-panel { min-height: 82px; }
+    .quest-objective { grid-template-columns: 1fr; gap: 10px; }
+    .quest-objective-action { min-width: 0; justify-content: stretch; }
+    .quest-skip-button { width: 100%; }
+}
+
+@media (max-width: 390px) {
+    .player-topbar { grid-template-columns: 1fr; }
+    .player-topbar .user-block { width: 100%; justify-content: stretch; }
+    .player-topbar .user-block .btn { flex: 1; }
+    .player-nav-link { padding-inline: 9px; }
+    .skip-confirm-actions { grid-template-columns: 1fr; }
 }

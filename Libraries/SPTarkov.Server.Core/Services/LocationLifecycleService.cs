@@ -80,6 +80,9 @@ public class LocationLifecycleService(
     /// </summary>
     public virtual StartLocalRaidResponseData StartLocalRaid(MongoId sessionId, StartLocalRaidRequestData request)
     {
+        profileActivityService.SetRaidActive(sessionId, true);
+        try
+        {
         // Backup the profile on raid start
         backupService.Init().GetAwaiter().GetResult();
 
@@ -206,6 +209,12 @@ public class LocationLifecycleService(
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
 
         return result;
+        }
+        catch
+        {
+            profileActivityService.SetRaidActive(sessionId, false);
+            throw;
+        }
     }
 
     /// <summary>
@@ -469,6 +478,9 @@ public class LocationLifecycleService(
     /// </summary>
     public virtual void EndLocalRaid(MongoId sessionId, EndLocalRaidRequestData request)
     {
+        var keepRaidActive = false;
+        try
+        {
         // Clear bot loot cache
         botLootCacheService.ClearCache();
 
@@ -492,6 +504,7 @@ public class LocationLifecycleService(
         var isPmc = serverDetails[1].ToLowerInvariant().Contains("pmc");
         var isDead = request.Results.IsPlayerDead();
         var isTransfer = request.Results.IsMapToMapTransfer();
+        keepRaidActive = isTransfer;
         var isSurvived = request.Results.IsPlayerSurvived();
 
         // Handle items transferred via BTR or transit to player mailbox
@@ -540,6 +553,11 @@ public class LocationLifecycleService(
         // Save and backup the profile on raid end
         saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
         backupService.Init().GetAwaiter().GetResult();
+        }
+        finally
+        {
+            profileActivityService.SetRaidActive(sessionId, keepRaidActive);
+        }
     }
 
     /// <summary>

@@ -8,6 +8,7 @@ public class ProfileActivityData
 {
     public long ClientStartedTimestamp { get; set; }
     public long LastActive { get; set; }
+    public bool IsInRaid { get; set; }
     public ProfileActivityRaidData? RaidData { get; set; } = null;
     public IReadOnlyList<ProfileActiveClientMods> ActiveClientMods { get; set; } = [];
 }

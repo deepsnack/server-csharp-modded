@@ -3,6 +3,14 @@
 const API = '/battlepass/api';
 let TOKEN = sessionStorage.getItem('bp_token') || '';
 
+// 玩家官网 SSO：短令牌已由服务端换成本页面自己的 bp_token，并放在 URL fragment 中。
+const SSO_MATCH = location.hash.match(/(?:^#|&)sso=([^&]+)/);
+if (SSO_MATCH) {
+    TOKEN = decodeURIComponent(SSO_MATCH[1]);
+    sessionStorage.setItem('bp_token', TOKEN);
+    history.replaceState(null, '', location.pathname + location.search);
+}
+
 function el(id) { return document.getElementById(id); }
 
 function toast(msg, ok) {
@@ -520,7 +528,10 @@ function renderShopList() {
     const collapsed = !q && !shopExpanded && matched.length > SHOP_COLLAPSED;
     const shown = collapsed ? matched.slice(0, SHOP_COLLAPSED) : matched;
     box.innerHTML = shown.map(shopCardHtml).join('');
-    box.querySelectorAll('.shop-buy').forEach(btn => { btn.onclick = () => buyShopItem(btn.dataset.id); });
+    box.querySelectorAll('.shop-card').forEach(card => {
+        const item = shown.find(it => String(it.id) === card.dataset.id);
+        if (item) bindShopCard(card, item);
+    });
 
     if (collapsed) { more.style.display = ''; more.textContent = `展开更多（还有 ${matched.length - SHOP_COLLAPSED} 件）`; }
     else { more.style.display = 'none'; }
@@ -529,29 +540,77 @@ function renderShopList() {
 function shopCardHtml(it) {
     const costs = (it.costs || []).map(c => {
         const enough = c.have >= c.count;
-        return `<span class="shop-cost ${enough ? '' : 'lack'}">${esc(c.name)} ${c.count}<small>（持有 ${c.have}）</small></span>`;
+        return `<span class="shop-cost ${enough ? '' : 'lack'}" data-unit-count="${c.count}" data-have="${c.have}">${esc(c.name)} <b>${c.count}</b><small>（持有 ${c.have}）</small></span>`;
     }).join('');
     const qty = it.sellCount > 1 ? ` ×${it.sellCount}` : '';
     const limit = it.buyLimit > 0 ? `<span class="shop-limit">限购 ${it.bought}/${it.buyLimit}</span>` : '';
-    const stock = it.stock > 0 ? `<span class="shop-limit">库存 ${it.stock}</span>` : '';
+    const stock = it.stock >= 0 ? `<span class="shop-limit">库存 ${it.stock}</span>` : '';
     const badges = (limit || stock) ? `<div class="shop-badges">${limit}${stock}</div>` : '';
-    const disabled = !!it.error || it.soldOut || !it.affordable;
+    const maxQuantity = Math.max(0, Math.floor(Number(it.maxPurchaseQuantity) || 0));
+    const disabled = !!it.error || it.soldOut || !it.affordable || maxQuantity < 1;
     const label = it.error || (it.soldOut ? '已售罄' : (it.affordable ? '购买' : '货币不足'));
-    return `<div class="shop-card">
+    return `<div class="shop-card" data-id="${esc(it.id)}" data-max-quantity="${maxQuantity}">
         <img class="shop-icon" src="${SHOP_ICON}${esc(it.tpl)}" alt="" onerror="this.style.display='none'" />
         <div class="shop-body">
             <div class="shop-name">${esc(it.name)}${qty}</div>
             ${badges}
             <div class="shop-costs">${costs || '<span class="shop-cost">免费</span>'}</div>
         </div>
-        <button class="btn primary small shop-buy" data-id="${esc(it.id)}"${disabled ? ' disabled' : ''}>${label}</button>
+        <div class="shop-actions">
+            <div class="shop-quantity">
+                <button class="shop-qty-step" type="button" data-delta="-1" title="减少购买数量" aria-label="减少购买数量"${disabled ? ' disabled' : ''}>-</button>
+                <input class="shop-qty" type="number" min="1" max="${Math.max(1, maxQuantity)}" value="1" inputmode="numeric" title="购买份数" aria-label="购买份数"${disabled ? ' disabled' : ''} />
+                <button class="shop-qty-step" type="button" data-delta="1" title="增加购买数量" aria-label="增加购买数量"${disabled ? ' disabled' : ''}>+</button>
+            </div>
+            <button class="btn primary small shop-buy" type="button"${disabled ? ' disabled' : ''}>${label}</button>
+        </div>
     </div>`;
 }
 
-async function buyShopItem(id) {
-    const r = await api('/shop/buy', 'POST', { offerId: id });
+function bindShopCard(card, item) {
+    const maxQuantity = Math.max(0, Math.floor(Number(item.maxPurchaseQuantity) || 0));
+    const input = card.querySelector('.shop-qty');
+    const buyButton = card.querySelector('.shop-buy');
+    const stepButtons = [...card.querySelectorAll('.shop-qty-step')];
+    if (!input || !buyButton || maxQuantity < 1) return;
+
+    const update = quantity => {
+        const value = Math.min(maxQuantity, Math.max(1, Math.floor(Number(quantity) || 1)));
+        input.value = String(value);
+        card.querySelectorAll('.shop-cost[data-unit-count]').forEach(cost => {
+            const unitCount = Number(cost.dataset.unitCount) || 0;
+            const have = Number(cost.dataset.have) || 0;
+            const total = unitCount * value;
+            const count = cost.querySelector('b');
+            if (count) count.textContent = String(total);
+            cost.classList.toggle('lack', have < total);
+        });
+        buyButton.textContent = value > 1 ? `购买 ×${value}` : '购买';
+        stepButtons.forEach(button => {
+            const delta = Number(button.dataset.delta);
+            button.disabled = delta < 0 ? value <= 1 : value >= maxQuantity;
+        });
+        return value;
+    };
+
+    stepButtons.forEach(button => {
+        button.onclick = () => update(Number(input.value) + Number(button.dataset.delta));
+    });
+    input.oninput = () => {
+        const value = Number(input.value);
+        if (Number.isInteger(value) && value >= 1) update(value);
+    };
+    input.onchange = () => update(input.value);
+    buyButton.onclick = () => buyShopItem(item.id, update(input.value), buyButton);
+    update(1);
+}
+
+async function buyShopItem(id, quantity, button) {
+    button.disabled = true;
+    const r = await api('/shop/buy', 'POST', { offerId: id, quantity });
     toast(r.message || (r.success ? '购买成功' : '购买失败'), r.success);
-    if (r.success) loadShop();
+    if (r.success) await loadShop();
+    else button.disabled = false;
 }
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }

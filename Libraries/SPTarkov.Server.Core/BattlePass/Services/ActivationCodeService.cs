@@ -23,7 +23,8 @@ public class ActivationCodeService(BattlePassService battlePassService, LotteryW
         long expiresUtc = 0,
         int maxRedemptions = 1,
         bool perPlayerOnce = true,
-        bool commonCode = false
+        bool commonCode = false,
+        List<BpReward>? rewards = null
     )
     {
         type = NormalizeType(type);
@@ -65,6 +66,12 @@ public class ActivationCodeService(BattlePassService battlePassService, LotteryW
                 if (type is "lotteryGlobalTickets" or "lotteryPoolTickets" or "lotteryExchangeCoins")
                 {
                     entry.Value = Math.Max(1, value);
+                }
+
+                if (type == "rewards")
+                {
+                    // 每张码独立持有一份奖励列表副本，避免共享引用被后续修改牵连。
+                    entry.Rewards = rewards is null ? new List<BpReward>() : new List<BpReward>(rewards);
                 }
 
                 created.Add(entry);
@@ -143,6 +150,16 @@ public class ActivationCodeService(BattlePassService battlePassService, LotteryW
             {
                 lotteryWalletService.Grant(profileId, exchangeCoins: entry.Value);
             }
+            else if (type == "rewards")
+            {
+                if (entry.Rewards is not { Count: > 0 })
+                {
+                    return (false, "激活码未配置任何奖励");
+                }
+
+                // 统一奖励发放：物品(含任务跳过券)/称号/配方/服装/购买权/抽奖资源，与等级奖励/任务同一条链路。
+                battlePassService.GrantRewards(profileId, prog, entry.Rewards, "激活码奖励");
+            }
 
             entry.RedeemedBy ??= profileId;
             entry.RedeemedUtc = now;
@@ -162,6 +179,7 @@ public class ActivationCodeService(BattlePassService battlePassService, LotteryW
             "lotteryglobaltickets" => "lotteryGlobalTickets",
             "lotterypooltickets" => "lotteryPoolTickets",
             "lotteryexchangecoins" => "lotteryExchangeCoins",
+            "rewards" => "rewards",
             _ => "premium",
         };
     }
@@ -185,6 +203,7 @@ public class ActivationCodeService(BattlePassService battlePassService, LotteryW
             "lotteryGlobalTickets" => $"已获得 {entry.Value} 张通用抽奖券",
             "lotteryPoolTickets" => $"已获得 {entry.Value} 张限定抽奖券",
             "lotteryExchangeCoins" => $"已获得 {entry.Value} 枚兑换币",
+            "rewards" => "激活码奖励已发放，请查收游戏内邮件 / 通行证",
             _ => "付费轨已解锁",
         };
     }

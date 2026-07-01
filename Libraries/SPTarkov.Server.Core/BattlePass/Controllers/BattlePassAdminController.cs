@@ -434,6 +434,17 @@ public class BattlePassAdminController(
         var perPlayerOnce = !request.TryGetProperty("perPlayerOnce", out var once) || once.GetBoolean();
         var commonCode = request.TryGetProperty("commonCode", out var common) && common.GetBoolean();
 
+        List<BpReward>? rewards = null;
+        if (request.TryGetProperty("rewards", out var rw) && rw.ValueKind == JsonValueKind.Array)
+        {
+            rewards = rw.Deserialize<List<BpReward>>();
+        }
+
+        if (string.Equals(type, "rewards", StringComparison.OrdinalIgnoreCase) && rewards is not { Count: > 0 })
+        {
+            return new { success = false, message = "自定义奖励码必须至少配置一项奖励" };
+        }
+
         if (string.Equals(type, "lotteryPoolTickets", StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(poolId))
@@ -449,7 +460,7 @@ public class BattlePassAdminController(
             }
         }
 
-        var created = activationCodeService.Generate(type, value, count, batchTag, poolId, expiresUtc, maxRedemptions, perPlayerOnce, commonCode);
+        var created = activationCodeService.Generate(type, value, count, batchTag, poolId, expiresUtc, maxRedemptions, perPlayerOnce, commonCode, rewards);
         return new { success = true, codes = created.Select(c2 => c2.Code).ToList(), entries = created };
     }
 
