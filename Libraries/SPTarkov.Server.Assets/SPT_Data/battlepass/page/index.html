@@ -52,6 +52,7 @@
             </div>
             <div class="user-block">
                 <span id="bp-username"></span>
+                <button id="admin-entry-btn" class="btn ghost small" style="display:none">管理</button>
                 <button id="redeem-entry" class="btn ghost small">兑换激活码</button>
                 <button id="logout-btn" class="btn ghost small">登出</button>
             </div>
@@ -119,6 +120,7 @@
                     <span id="shop-next-refresh" class="muted"></span>
                     <button id="shop-refresh" class="t-reroll" type="button">刷新</button>
                 </div>
+                <nav id="shop-categories" class="shop-categories" aria-label="商品分类筛选"></nav>
                 <div id="shop-list" class="shop-list"></div>
                 <div class="shop-more-wrap"><button id="shop-more" class="btn ghost small" type="button" style="display:none">展开更多</button></div>
             </section>
@@ -138,6 +140,6 @@
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="script.js"></script>
+    <script src="script.js?v=20260711-shop-icon-fallback"></script>
 </body>
 </html>

@@ -94,6 +94,44 @@ async function loadState() {
     updateCompensation(r.compensation);
     renderRail(r.levels, r.progress.premiumUnlocked);
     renderCycle(r.cycle, r.progress, r.season);
+
+    // 协管管理按钮
+    const mgmtBtn = el('admin-entry-btn');
+    if (mgmtBtn) {
+        if (r.management && r.management.canEnterAdmin) {
+            mgmtBtn.style.display = '';
+            // 协管复用管理员后台页面：先在玩家页完成会话交换，把协管会话 token 落地为管理会话
+            // （bp_admin_token + bp_actor_type=collaborator），再进入 /battlepass/admin/。
+            // 各模块页由 isCollaborator() 分流成「提交审核」模式；会话失效时显示无密码提示。
+            mgmtBtn.onclick = async () => {
+                mgmtBtn.disabled = true;
+                const oldText = mgmtBtn.textContent;
+                mgmtBtn.textContent = '正在进入…';
+                try {
+                    const res = await fetch('/battlepass/api/admin/session/exchange', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-BP-Token': TOKEN },
+                    });
+                    const data = await res.json();
+                    if (!data.success || !data.token || data.actorType !== 'collaborator') {
+                        throw new Error(data.message || '协管会话建立失败');
+                    }
+                    // 清理旧独立工作台残留键，避免串用。
+                    sessionStorage.removeItem('bp_collab_token');
+                    sessionStorage.removeItem('bp_collab_principal');
+                    sessionStorage.setItem('bp_admin_token', data.token);
+                    sessionStorage.setItem('bp_actor_type', 'collaborator');
+                    location.href = '/battlepass/admin/index.html';
+                } catch (error) {
+                    toast(error.message || '无法进入协管工作台', false);
+                    mgmtBtn.disabled = false;
+                    mgmtBtn.textContent = oldText;
+                }
+            };
+        } else {
+            mgmtBtn.style.display = 'none';
+        }
+    }
 }
 
 function updateCompensation(compensation) {
@@ -369,16 +407,25 @@ async function loadTasks() {
         const progress = Math.max(0, Number(t.progress || 0));
         const target = Math.max(0, Number(t.target || t.count || 0));
         const xp = Math.max(0, Number(t.xp || 0));
+        const rewardMode = String(t.rewardMode || 'xp').toLowerCase();
+        const rewards = Array.isArray(t.rewards) ? t.rewards : [];
         const pct = target > 0 ? Math.min(100, (progress / target) * 100) : (completed ? 100 : 0);
         const dailyLeft = Math.max(0, Number(refreshLeft.daily ?? r.freeRerollsLeft ?? 0));
         const canReroll = !!taskId && !completed && rotation !== 'fixed' && scope === 'daily' && dailyLeft > 0;
         const div = document.createElement('div');
         div.className = 'task' + (completed ? ' done' : '');
+        const xpReward = rewardMode !== 'items' ? `<span class="t-reward-xp">+${xp} BP XP</span>` : '';
+        const itemRewards = rewards.map(taskRewardHtml).join('');
+        const rewardBlock = (xpReward || itemRewards)
+            ? `<div class="t-rewards"><span class="t-rewards-label">完成奖励</span>${xpReward}${itemRewards}</div>`
+            : '';
+        const xpProgress = rewardMode !== 'items' ? `+${xp} XP · ` : '';
         div.innerHTML =
             `<div class="t-head"><span class="t-title">${esc(t.title || taskId || '未命名任务')}</span><span class="t-scope">${esc(scope || 'task')}</span></div>
              <div class="t-desc">${esc(t.description)}</div>
+             ${rewardBlock}
              <div class="t-prog"><div class="pf" style="width:${pct}%"></div></div>
-             <div class="t-foot"><span class="t-xp">+${xp} XP · ${progress}/${target}</span></div>`;
+             <div class="t-foot"><span class="t-xp">${xpProgress}${progress}/${target}</span></div>`;
         if (canReroll) {
             const rb = document.createElement('button'); rb.className = 't-reroll'; rb.textContent = '刷新';
             rb.onclick = () => reroll(taskId);
@@ -396,6 +443,18 @@ async function loadTasks() {
     });
     if (tasks.length === 0) list.innerHTML = '<div class="task-empty">暂无任务</div>';
     applyTaskDisplayLimit();
+}
+
+function taskRewardHtml(reward) {
+    const type = String(reward.type || 'item').toLowerCase();
+    const tpl = String(reward.tpl || '');
+    const isItem = type === 'item' && /^[a-fA-F0-9]{24}$/.test(tpl);
+    const count = Math.max(1, Number(reward.count) || 1);
+    const name = reward.name || (isItem ? tpl.slice(0, 8) + '…' : rewardTypeLabel(reward));
+    const quantity = (type === 'item' || type.startsWith('lottery')) && count > 1 ? ` ×${count}` : '';
+    const icon = isItem ? `<img src="${API}/icons/${esc(tpl)}" alt="" onerror="this.remove()" />` : '';
+    const fir = isItem && reward.foundInRaid ? '<small>FIR</small>' : '';
+    return `<span class="t-reward ${isItem ? 'item' : 'entitlement'}">${icon}<span>${esc(name)}${quantity}</span>${fir}</span>`;
 }
 
 // 三类任务各自的「主动刷新」按钮：仅当该类有活跃任务时显示，剩余次数为 0 时禁用
@@ -492,8 +551,10 @@ const SHOP_ICON = '/battlepass/api/icons/';
 const SHOP_COLLAPSED = 8; // 默认只渲染前 N 件，其余点「展开更多」再渲染，避免一次性加载过多
 
 let shopItems = [];      // 当前商店全量商品（用于搜索/折叠）
+let shopCategories = []; // 服务端返回的分类列表
 let shopExpanded = false; // 是否已展开全部
 let shopQuery = '';       // 搜索关键字
+let shopCategoryFilter = ''; // 当前选中分类 id（空=全部）
 
 async function loadShop() {
     const box = el('shop-list');
@@ -510,8 +571,33 @@ async function loadShop() {
         } else { nextEl.textContent = ''; }
     }
     shopItems = (r.catalog && r.catalog.items) || [];
+    shopCategories = (r.catalog && r.catalog.categories) || [];
     shopExpanded = false; // 刷新后回到折叠态
+    shopCategoryFilter = ''; // 刷新后重置分类
+    renderShopCategories();
     renderShopList();
+}
+
+function renderShopCategories() {
+    const nav = el('shop-categories');
+    if (!nav) return;
+    if (!shopCategories.length) { nav.innerHTML = ''; return; }
+
+    const total = shopItems.length;
+    let html = `<button class="shop-cat-btn${shopCategoryFilter === '' ? ' active' : ''}" type="button" data-cat="" aria-pressed="${shopCategoryFilter === '' ? 'true' : 'false'}">全部 ${total}</button>`;
+    for (const cat of shopCategories) {
+        const active = shopCategoryFilter === cat.id;
+        html += `<button class="shop-cat-btn${active ? ' active' : ''}" type="button" data-cat="${esc(cat.id)}" aria-pressed="${active ? 'true' : 'false'}">${esc(cat.name)} ${cat.count}</button>`;
+    }
+    nav.innerHTML = html;
+    nav.querySelectorAll('.shop-cat-btn').forEach(btn => {
+        btn.onclick = () => {
+            shopCategoryFilter = btn.dataset.cat || '';
+            shopExpanded = false; // 切换分类重置展开
+            renderShopCategories();
+            renderShopList();
+        };
+    });
 }
 
 function renderShopList() {
@@ -521,7 +607,15 @@ function renderShopList() {
     if (!shopItems.length) { box.innerHTML = '<div class="muted">商店暂无商品</div>'; more.style.display = 'none'; return; }
 
     const q = shopQuery.trim().toLowerCase();
-    const matched = q ? shopItems.filter(it => String(it.name || '').toLowerCase().includes(q)) : shopItems;
+    let matched = shopItems;
+    // 分类筛选
+    if (shopCategoryFilter) {
+        matched = matched.filter(it => String(it.categoryId || '') === shopCategoryFilter);
+    }
+    // 搜索筛选（与分类取交集）
+    if (q) {
+        matched = matched.filter(it => String(it.name || '').toLowerCase().includes(q));
+    }
     if (!matched.length) { box.innerHTML = '<div class="muted">没有匹配的商品</div>'; more.style.display = 'none'; return; }
 
     // 搜索时展示全部命中；否则折叠到前 N 件，多出的靠「展开更多」加载
@@ -537,6 +631,30 @@ function renderShopList() {
     else { more.style.display = 'none'; }
 }
 
+// 物品图标加载失败时，用占位徽章顶替，保持 48px 图标槽不塌陷（否则商品名会被挤进窄列）
+function shopIconFallback(img) {
+    const label = (img.getAttribute('data-fallback') || '').trim() || '？';
+    const box = document.createElement('div');
+    box.className = 'shop-icon shop-icon-virtual';
+    box.title = '暂无图标';
+    box.textContent = label;
+    img.replaceWith(box);
+}
+
+function shopVirtualBadge(rewardType) {
+    // 虚拟商品统一图标（抽奖券/兑换币无物品 tpl，用文字徽章代替物品图）
+    const label = { lotteryGlobalTickets: '券', lotteryPoolTickets: '限', lotteryExchangeCoins: '币' }[rewardType] || '奖';
+    return `<div class="shop-icon shop-icon-virtual" title="虚拟商品">${label}</div>`;
+}
+
+function shopItemRefreshText(it) {
+    const next = Number(it.nextRefreshUtc) || 0;
+    const left = next - Math.floor(Date.now() / 1000);
+    if (next <= 0 || left <= 0) return '';
+    const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60);
+    return `${h > 0 ? h + ' 小时 ' : ''}${m} 分后刷新`;
+}
+
 function shopCardHtml(it) {
     const costs = (it.costs || []).map(c => {
         const enough = c.have >= c.count;
@@ -545,12 +663,17 @@ function shopCardHtml(it) {
     const qty = it.sellCount > 1 ? ` ×${it.sellCount}` : '';
     const limit = it.buyLimit > 0 ? `<span class="shop-limit">限购 ${it.bought}/${it.buyLimit}</span>` : '';
     const stock = it.stock >= 0 ? `<span class="shop-limit">库存 ${it.stock}</span>` : '';
-    const badges = (limit || stock) ? `<div class="shop-badges">${limit}${stock}</div>` : '';
+    const refreshText = shopItemRefreshText(it);
+    const refresh = refreshText ? `<span class="shop-limit shop-refresh-badge">${refreshText}</span>` : '';
+    const badges = (limit || stock || refresh) ? `<div class="shop-badges">${limit}${stock}${refresh}</div>` : '';
     const maxQuantity = Math.max(0, Math.floor(Number(it.maxPurchaseQuantity) || 0));
     const disabled = !!it.error || it.soldOut || !it.affordable || maxQuantity < 1;
     const label = it.error || (it.soldOut ? '已售罄' : (it.affordable ? '购买' : '货币不足'));
+    const virtual = it.rewardType && it.rewardType !== 'item';
+    const icon = virtual ? shopVirtualBadge(it.rewardType)
+        : `<img class="shop-icon" src="${SHOP_ICON}${esc(it.tpl)}" alt="" data-fallback="${esc((it.name || '').trim().slice(0, 1))}" onerror="shopIconFallback(this)" />`;
     return `<div class="shop-card" data-id="${esc(it.id)}" data-max-quantity="${maxQuantity}">
-        <img class="shop-icon" src="${SHOP_ICON}${esc(it.tpl)}" alt="" onerror="this.style.display='none'" />
+        ${icon}
         <div class="shop-body">
             <div class="shop-name">${esc(it.name)}${qty}</div>
             ${badges}

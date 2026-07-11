@@ -32,6 +32,24 @@ public class BattlePassIconController
         return new RedirectResult(url, permanent: false); // 302
     }
 
+    // 旧图标路由必须用 MongoId 约束收窄：单段参数路由 {tpl} 的匹配优先级高于页面 catch-all
+    // battlepass/{**path}，若不加约束，/battlepass/style.css、/battlepass/script.js 等单段静态资源
+    // 会被本路由截走，IsItemId 判否后返回 404，导致玩家页 CSS/JS 全部加载失败（美化不生效）。
+    // regex 只放行 24 位十六进制，其余单段请求正常落到页面 catch-all。
+    // 注意路由模板转义：花括号 { } 需写作 {{ }}；方括号 [ ] 是 token 替换符（如 [controller]），
+    //   在 regex 字符类中必须转义为 [[ ]]，否则 ASP.NET 会把 [0-9a-fA-F] 当作待替换 token 并启动崩溃。
+    [HttpGet("battlepass/{tpl:regex(^[[0-9a-fA-F]]{{24}}$)}")]
+    public IActionResult LegacyItem(string tpl)
+    {
+        return Item(tpl);
+    }
+
+    [HttpGet("battlepass/favicon.ico")]
+    public IActionResult Favicon()
+    {
+        return new NoContentResult();
+    }
+
     private static bool IsItemId(string? s)
     {
         if (string.IsNullOrEmpty(s) || s.Length != 24)

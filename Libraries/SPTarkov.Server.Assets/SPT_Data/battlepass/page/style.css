@@ -454,6 +454,16 @@ input:focus { border-color: var(--brass); box-shadow: 0 0 0 1px rgba(216,162,74,
     color: var(--olive); text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;
 }
 .task .t-desc { font-size: 12.5px; color: var(--text-dim); margin: 6px 0 9px; line-height: 1.45; }
+.task .t-rewards { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 9px; }
+.task .t-rewards-label { font-family: var(--f-mono); font-size: 9px; color: var(--text-faint); letter-spacing: 1px; }
+.task .t-reward, .task .t-reward-xp {
+    min-height: 25px; display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px;
+    border: 1px solid rgba(216,162,74,.35); background: rgba(216,162,74,.08);
+    color: var(--brass-hi); font-family: var(--f-mono); font-size: 10.5px;
+}
+.task .t-reward img { width: 20px; height: 20px; flex: none; object-fit: contain; }
+.task .t-reward small { padding: 1px 3px; border: 1px solid currentColor; font-size: 8px; line-height: 1; }
+.task .t-reward.entitlement { border-color: rgba(131,138,94,.45); background: rgba(131,138,94,.1); color: var(--green); }
 .task .t-prog { position: relative; height: 13px; background: #070805; border: 1px solid var(--line); overflow: hidden; }
 .task .t-prog .pf {
     height: 100%; width: 0; background: linear-gradient(90deg, #5e7a3a, var(--green));
@@ -628,6 +638,10 @@ input:focus { border-color: var(--brass); box-shadow: 0 0 0 1px rgba(216,162,74,
     align-items: center; padding: 12px; border-radius: 8px;
     background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); }
 .shop-icon { grid-row: 1 / span 2; width: 48px; height: 48px; object-fit: contain; }
+.shop-icon-virtual { display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-title, inherit); font-weight: 700; font-size: 20px; border-radius: 6px;
+    color: var(--accent, #c9a227); background: rgba(201,162,39,.12); border: 1px solid rgba(201,162,39,.4); }
+.shop-refresh-badge { color: var(--accent, #c9a227); opacity: .85; }
 .shop-body { min-width: 0; }
 .shop-name { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
 .shop-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
@@ -657,6 +671,14 @@ input:focus { border-color: var(--brass); box-shadow: 0 0 0 1px rgba(216,162,74,
 .shop-search { flex: 0 1 240px; min-width: 120px; margin-left: 14px; padding: 7px 12px; font-size: 13px;
     background: rgba(0,0,0,.25); border: 1px solid var(--line, #34302a); border-radius: 4px; color: var(--text, #e8e2d2); }
 .shop-search:focus { outline: none; border-color: var(--brass, #d8a24a); box-shadow: 0 0 0 1px rgba(216,162,74,.25); }
+.shop-categories { display: flex; gap: 6px; padding: 6px 0 10px; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+.shop-categories:empty { display: none; }
+.shop-cat-btn { flex-shrink: 0; padding: 5px 12px; font-size: 12px; border-radius: 14px; cursor: pointer;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12); color: var(--text-faint, #7a7a6a);
+    transition: background .15s, border-color .15s, color .15s; white-space: nowrap; }
+.shop-cat-btn:hover { background: rgba(255,255,255,.08); color: var(--text, #e8e2d2); }
+.shop-cat-btn:focus-visible { outline: 2px solid var(--brass, #d8a24a); outline-offset: 2px; }
+.shop-cat-btn.active { background: rgba(216,162,74,.15); border-color: var(--brass, #d8a24a); color: var(--brass, #d8a24a); font-weight: 600; }
 .shop-more-wrap { display: flex; justify-content: center; margin-top: 12px; }
 .shop-more-wrap .btn { min-width: 200px; margin-top: 0; }
 .redeem-box { width: min(460px, 92vw); }
