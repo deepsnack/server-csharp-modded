@@ -343,9 +343,9 @@ public class BattlePassTrackService(
             var prevApplied = prog.CurrentRaidApplied.TryGetValue(active.TaskId, out var p) ? p : 0;
             bool advanced;
 
-            if (tpl.SingleRaid)
+            if (tpl.SingleRaid || tpl.OneLife)
             {
-                // 单局任务：进度即本场累计值（不跨局累加；切局时本值自然从小重新计）
+                // 单局/一命任务：进度即本场累计值（不跨局累加；切局时本值自然从小重新计）
                 advanced = active.Progress != fullDelta;
                 active.Progress = fullDelta;
                 prog.CurrentRaidApplied[active.TaskId] = fullDelta;
@@ -365,6 +365,17 @@ public class BattlePassTrackService(
                 }
             }
 
+            // 一命任务必须等权威战后结果确认 Survived；实时补充上报只能展示本局进度，绝不提前发奖。
+            if (tpl.OneLife)
+            {
+                if (advanced && string.IsNullOrWhiteSpace(payload.ExitStatus))
+                {
+                    result.Credited.Add(new RaidTrackCredit { TaskId = active.TaskId, GainedXp = 0, Done = false });
+                }
+
+                continue;
+            }
+
             if (active.Progress >= target)
             {
                 // 统一结算：按任务 rewardMode 给 BP 经验 / 任务自带奖励 / 两者
@@ -378,6 +389,11 @@ public class BattlePassTrackService(
             {
                 result.Credited.Add(new RaidTrackCredit { TaskId = active.TaskId, GainedXp = 0, Done = false });
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.ExitStatus))
+        {
+            FinalizeOneLifeTasks(profileId, prog, season, templates, payload, result);
         }
 
         // 战局结束（上报带撤离状态）：归档本局，停止后续增量
@@ -396,10 +412,53 @@ public class BattlePassTrackService(
         return result;
     }
 
+    private void FinalizeOneLifeTasks(
+        string profileId,
+        BpProgress prog,
+        BpSeason season,
+        IReadOnlyDictionary<string, BpTaskTemplate> templates,
+        RaidTrackPayload payload,
+        RaidTrackResult result)
+    {
+        var survived = string.Equals(payload.ExitStatus, "Survived", StringComparison.OrdinalIgnoreCase);
+        foreach (var active in prog.ActiveTasks)
+        {
+            if (active.CreditedXp
+                || !templates.TryGetValue(active.TaskId, out var tpl)
+                || !tpl.OneLife)
+            {
+                continue;
+            }
+
+            var target = Math.Max(1, tpl.Count);
+            if (survived && active.Progress >= target)
+            {
+                var xp = battlePassService.CreditTaskCompletion(profileId, prog, season, tpl);
+                active.CreditedXp = true;
+                active.Progress = target;
+                result.Credited.RemoveAll(credit => credit.TaskId == active.TaskId && !credit.Done);
+                result.Credited.Add(new RaidTrackCredit { TaskId = active.TaskId, GainedXp = xp, Done = true });
+                logger.Info($"[SPT-BattlePass] 一命任务达成 profile={profileId} task={active.TaskId} +{xp}xp (raid={payload.RaidId})");
+            }
+            else
+            {
+                active.Progress = 0;
+                result.Credited.RemoveAll(credit => credit.TaskId == active.TaskId && !credit.Done);
+            }
+        }
+    }
+
     private static bool TaskSourceCanProcess(BpTaskTemplate tpl, RaidTrackSource source)
     {
         var ct = tpl.ConditionType?.Trim() ?? "Kills";
-        var supplemental = string.Equals(ct, "VisitZone", StringComparison.OrdinalIgnoreCase)
+
+        // 配件条件的击杀任务：服务端 Victim 战绩不含武器配件，只有客户端击杀瞬间能抓到整枪搭配，
+        // 故这类 Kills 改由客户端 supplemental 链路结算（普通击杀仍走服务端权威，防作弊不退化）。
+        var killWithMods = string.Equals(ct, "Kills", StringComparison.OrdinalIgnoreCase)
+            && (tpl.WeaponMods?.Count ?? 0) > 0;
+
+        var supplemental = killWithMods
+            || string.Equals(ct, "VisitZone", StringComparison.OrdinalIgnoreCase)
             || string.Equals(ct, "PlaceItem", StringComparison.OrdinalIgnoreCase);
 
         return source == RaidTrackSource.ClientSupplemental ? supplemental : !supplemental;
@@ -522,6 +581,11 @@ public class BattlePassTrackService(
             return false;
         }
 
+        if (!WeaponModsMatch(tpl.WeaponMods, k.WeaponMods))
+        {
+            return false;
+        }
+
         if (!ValueMatches(tpl.SavageRoles, k.Role))
         {
             return false;
@@ -589,6 +653,22 @@ public class BattlePassTrackService(
         }
 
         return !string.IsNullOrWhiteSpace(actual) && list.Any(v => string.Equals(v, actual, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    ///     武器配件 inclusive 匹配（仿原版"试驾"weaponModsInclusive）：击杀所用武器须<b>同时</b>装有全部指定配件才计数。
+    ///     配件数据只来自客户端上报（<see cref="BpKillEvent.WeaponMods"/>）；required 非空但本次击杀无配件信息 = 不匹配。
+    /// </summary>
+    private static bool WeaponModsMatch(IEnumerable<string>? required, IEnumerable<string>? actual)
+    {
+        var need = required?.Where(v => !string.IsNullOrWhiteSpace(v)).ToList();
+        if (need is null || need.Count == 0)
+        {
+            return true;
+        }
+
+        var have = actual?.Where(v => !string.IsNullOrWhiteSpace(v)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return have is { Count: > 0 } && need.All(have.Contains);
     }
 
     private static bool DistanceMatches(string? compare, double? expected, double? actual)

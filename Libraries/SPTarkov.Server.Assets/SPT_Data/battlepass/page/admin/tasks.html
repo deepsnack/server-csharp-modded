@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../style.css" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20260706-review-v7" />
 </head>
 <body>
     <div class="grain"></div>
@@ -171,6 +171,13 @@
                         </div>
                     </div>
 
+                    <div id="one-life-row" class="form-row" style="display:none">
+                        <div class="form-col grow">
+                            <label class="with-cb"><input id="f-one-life" type="checkbox" /> 一命完成</label>
+                            <span class="hint">所有条件必须在同一战局达成，且最终状态必须为成功撤离（Survived）；其它结果会清空本局进度。</span>
+                        </div>
+                    </div>
+
                     <!-- 目标配置（按类型动态显示） -->
                     <div id="target-section" class="target-section"></div>
 
@@ -189,7 +196,7 @@
                                     <div class="tag-entry"><input id="f-savageroles-search" list="f-savageroles-options" placeholder="选择或输入角色后添加" /><button id="f-savageroles-add" type="button" class="btn ghost small">添加</button></div>
                                     <input id="f-savageroles" type="hidden" />
                                     <div id="f-savageroles-chips" class="multi-chips"></div>
-                                    <datalist id="f-savageroles-options"><option value="assault"></option><option value="marksman"></option><option value="cursedAssault"></option><option value="exUsec"></option><option value="pmcBot"></option><option value="bossKilla"></option><option value="bossTagilla"></option><option value="bossBully"></option><option value="bossGluhar"></option><option value="bossSanitar"></option><option value="bossKojaniy"></option></datalist>
+                                    <datalist id="f-savageroles-options"><option value="assault"></option><option value="marksman"></option><option value="cursedAssault"></option><option value="exUsec"></option><option value="pmcBot"></option><option value="bossKilla"></option><option value="bossTagilla"></option><option value="bossBully"></option><option value="bossGluhar"></option><option value="bossSanitar"></option><option value="bossKojaniy"></option><option value="bossBoar"></option><option value="bossKolontay"></option></datalist>
                                 </div>
                             </div>
 
@@ -202,6 +209,14 @@
                                     <input id="f-weapons" type="hidden" />
                                     <div id="f-weapons-chips" class="multi-chips"></div>
                                 </div>
+                                <label>指定配件（须全部装上）</label>
+                                <div class="multi-item-picker" data-field="f-weaponmods">
+                                    <input id="f-weaponmods-search" placeholder="搜索配件名称或 tpl…" autocomplete="off" />
+                                    <div id="f-weaponmods-results" class="ip-results" style="display:none"></div>
+                                    <input id="f-weaponmods" type="hidden" />
+                                    <div id="f-weaponmods-chips" class="multi-chips"></div>
+                                </div>
+                                <p class="hint">仿"试驾"任务：用装有指定配件的枪击杀才计数。此条件依赖客户端上报，须安装 SPT-BattlePass-Client 客户端模组；且不与命中部位/距离/时段叠加。</p>
                                 <label>指定口径</label>
                                 <div class="tag-picker">
                                     <div class="tag-entry"><input id="f-calibers-search" list="f-calibers-options" placeholder="选择或输入口径后添加" /><button id="f-calibers-add" type="button" class="btn ghost small">添加</button></div>
@@ -271,8 +286,9 @@
     </section>
 
     <div id="toast" class="toast"></div>
-    <script src="picker.js"></script>
+    <script src="picker.js?v=20260707-picker-v2"></script>
     <script src="reward-editor.js"></script>
-    <script src="tasks.js"></script>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="tasks.js?v=20260707-one-life-v1"></script>
 </body>
 </html>
