@@ -1,14 +1,17 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.DI.Annotations;
 
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
 
 /// <summary>
-///     通行证管理端 API。鉴权复用 WebRegister 的 admin 域（X-Admin-Token / Portal SSO）——
-///     管理页先调 /register/api/admin/login 取 token，再带 X-Admin-Token 访问本控制器。
+///     通行证管理端 API。鉴权统一走 <see cref="BattlePassAdminSessionService.ValidateToken"/>：
+///     同时接受 WebRegister 原始 admin token（主后台 index.html / Portal SSO 直接携带）
+///     与 BattlePass 会话 token（session/exchange 签发），由 <c>IsAdmin</c> 裁决身份。
+///     协管（collaborator）会话在此控制器的写操作被拒绝——协管须走审核提交流程。
 /// </summary>
 [Injectable]
 [ApiController]
@@ -19,10 +22,17 @@ public class BattlePassAdminController(
     BattlePassTraderSync traderSync,
     BattlePassTrackService trackService,
     BattlePassRecipeSync recipeSync,
-    TaskGeneratorService taskGenerator
+    TaskGeneratorService taskGenerator,
+    BattlePassAdminSessionService sessionService
 ) : ControllerBase
 {
-    private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
+    // 统一鉴权：任意合法管理员 token（原始或会话）均放行；协管被 IsAdmin 挡下（写操作）。
+    private bool Auth(string? token) => sessionService.ValidateToken(token)?.IsAdmin == true;
+
+    // 读放宽：管理员或持有对应 *.read 能力的协管均可读取模块数据（协管复用同一模块页浏览/编辑，
+    // 保存时前端改走 /reviews/submit 进审核队列，而非本控制器的即时写端点）。
+    private bool CanRead(string? token, string capability)
+        => sessionService.ValidateToken(token)?.HasCapability(capability) == true;
 
     // 称号 id 安全 slug（同时是图片文件名约束，杜绝路径穿越）。
     private static readonly Regex TitleIdRegex = new("^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);
@@ -43,7 +53,8 @@ public class BattlePassAdminController(
     [HttpGet("season")]
     public object GetSeason([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        // 赛季信息为奖励轨页的基础上下文，协管持 tracks.read 即可读取。
+        if (!CanRead(token, "tracks.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -67,7 +78,7 @@ public class BattlePassAdminController(
     [HttpGet("tracks")]
     public object GetTracks([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "tracks.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -94,7 +105,7 @@ public class BattlePassAdminController(
     [HttpGet("tasks")]
     public object GetTasks([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "tasks.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -111,17 +122,10 @@ public class BattlePassAdminController(
             return new { success = false, message = "未授权" };
         }
 
-        if (string.IsNullOrWhiteSpace(task.Id))
+        var validationError = BattlePassTaskRules.Validate(task);
+        if (validationError is not null)
         {
-            return new { success = false, message = "任务 id 不能为空" };
-        }
-
-        if (
-            string.Equals(task.ConditionType, "Kills", StringComparison.OrdinalIgnoreCase)
-            && ((task.EnemyEquipment?.Count ?? 0) > 0 || (task.PlayerEquipment?.Count ?? 0) > 0 || (task.WeaponMods?.Count ?? 0) > 0)
-        )
-        {
-            return new { success = false, message = "战后记录不含敌我装备和武器改件，无法作为击杀任务条件" };
+            return new { success = false, message = validationError };
         }
 
         var tasks = BattlePassStore.GetTasks();
@@ -156,7 +160,7 @@ public class BattlePassAdminController(
     [HttpGet("tasks/gen-spec")]
     public object GetGenSpec([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "tasks.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -231,12 +235,22 @@ public class BattlePassAdminController(
     [HttpGet("shop")]
     public object GetShopOffers([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "shop.read"))
         {
             return new { success = false, message = "未授权" };
         }
 
-        return new { success = true, offers = BattlePassStore.GetShopOffers(), refreshSeconds = BattlePassStore.GetShopState().RefreshSeconds };
+        var pools = BattlePassStore.GetLotteryPools()
+            .OrderBy(p => p.SortOrder)
+            .Select(p => new { id = p.Id, name = p.Name })
+            .ToList();
+        return new
+        {
+            success = true,
+            offers = BattlePassStore.GetShopOffers(),
+            refreshSeconds = BattlePassStore.GetShopState().RefreshSeconds,
+            pools,
+        };
     }
 
     /// <summary>设置网页商店刷新周期（秒，&lt;=0 = 不刷新）。修改后从当前时刻起算新周期。</summary>
@@ -274,10 +288,41 @@ public class BattlePassAdminController(
         }
 
         offer.Id = offer.Id.Trim();
-        offer.Tpl = offer.Tpl.Trim();
-        if (!Models.Common.MongoId.IsValidMongoId(offer.Tpl))
+        offer.RewardType = NormalizeShopRewardType(offer.RewardType);
+        var isVirtual = BattlePassShopService.IsVirtualRewardType(offer.RewardType);
+
+        if (isVirtual)
         {
-            return new { success = false, message = "商品 tpl 无效" };
+            // 虚拟商品（抽奖券/兑换币）不邮寄实物，tpl 无意义，占位为空
+            offer.Tpl = "";
+            if (string.Equals(offer.RewardType, "lotteryPoolTickets", StringComparison.OrdinalIgnoreCase))
+            {
+                offer.PoolId = offer.PoolId?.Trim();
+                if (string.IsNullOrWhiteSpace(offer.PoolId))
+                {
+                    return new { success = false, message = "限定抽奖券必须选择绑定奖池" };
+                }
+
+                var exists = BattlePassStore.GetLotteryPools()
+                    .Any(pool => string.Equals(pool.Id, offer.PoolId, StringComparison.OrdinalIgnoreCase));
+                if (!exists)
+                {
+                    return new { success = false, message = "绑定奖池不存在" };
+                }
+            }
+            else
+            {
+                offer.PoolId = null;
+            }
+        }
+        else
+        {
+            offer.Tpl = offer.Tpl.Trim();
+            offer.PoolId = null;
+            if (!Models.Common.MongoId.IsValidMongoId(offer.Tpl))
+            {
+                return new { success = false, message = "商品 tpl 无效" };
+            }
         }
 
         offer.Cost ??= new List<BpBarterCost>();
@@ -293,9 +338,16 @@ public class BattlePassAdminController(
 
         offer.SellCount = Math.Max(1, offer.SellCount);
         offer.BuyLimit = Math.Max(0, offer.BuyLimit);
+        // RefreshSeconds：null=继承全局；否则夹到 >=0（0=本商品终身累计）
+        if (offer.RefreshSeconds.HasValue)
+        {
+            offer.RefreshSeconds = Math.Max(0, offer.RefreshSeconds.Value);
+        }
+
         var offers = BattlePassStore.GetShopOffers();
         var existing = offers.FirstOrDefault(o => string.Equals(o.Id, offer.Id, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null && existing.Stock != offer.Stock)
+        // 库存改动、或刷新周期模式改动，都清空该商品累计销量，避免旧账本误判售罄
+        if (existing is not null && (existing.Stock != offer.Stock || existing.RefreshSeconds != offer.RefreshSeconds))
         {
             ResetShopSales($"custom:{offer.Id}");
         }
@@ -304,6 +356,18 @@ public class BattlePassAdminController(
         offers.Add(offer);
         BattlePassStore.SaveShopOffers(offers);
         return new { success = true };
+    }
+
+    /// <summary>规范化网页商店发放方式（大小写容错，未知值回退 item）。</summary>
+    private static string NormalizeShopRewardType(string? rewardType)
+    {
+        return (rewardType ?? "item").Trim().ToLowerInvariant() switch
+        {
+            "lotteryglobaltickets" => "lotteryGlobalTickets",
+            "lotterypooltickets" => "lotteryPoolTickets",
+            "lotteryexchangecoins" => "lotteryExchangeCoins",
+            _ => "item",
+        };
     }
 
     [HttpDelete("shop")]
@@ -359,7 +423,9 @@ public class BattlePassAdminController(
     private static void ResetShopSales(string offerKey)
     {
         var state = BattlePassStore.GetShopState();
-        if (state.Sales.Remove(offerKey))
+        var salesRemoved = state.Sales.Remove(offerKey);
+        var periodRemoved = state.OfferPeriods.Remove(offerKey);
+        if (salesRemoved || periodRemoved)
         {
             BattlePassStore.SaveShopState(state);
         }
@@ -550,7 +616,7 @@ public class BattlePassAdminController(
     [HttpGet("custom-recipes")]
     public object GetCustomRecipes([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "recipes.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -633,7 +699,8 @@ public class BattlePassAdminController(
     [HttpGet("trader-meta")]
     public object GetTraderMeta([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        // 商人元信息为货架页基础上下文（货币展示等），协管持 trader.read 即可读取。
+        if (!CanRead(token, "trader.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -758,7 +825,8 @@ public class BattlePassAdminController(
     [HttpGet("offers")]
     public object GetOffers([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        // 读放宽：协管持 trader.read 可浏览货架；保存改走 /reviews/submit。
+        if (!CanRead(token, "trader.read"))
         {
             return new { success = false, message = "未授权" };
         }

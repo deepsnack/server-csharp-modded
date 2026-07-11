@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../style.css" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20260706-review-v7" />
 </head>
 <body>
     <div class="grain"></div>
@@ -59,15 +59,38 @@
                     <div class="panel-head"><h2 id="offer-form-title">新增 / 编辑商品</h2></div>
                     <div class="form-body">
                         <label>商品 ID（唯一）</label><input id="o-id" placeholder="如 shop_gpcoin_pack" />
-                        <label>出售物品（搜索物品名称 / 简称 / tpl，支持 mod 物品）</label>
-                        <div class="tpl-row">
-                            <input id="o-tpl" placeholder="搜索物品名称或 tpl…" autocomplete="off" /><img id="o-tpl-icon" class="icon-preview" alt="" />
-                            <div id="o-tpl-results" class="rw-tpl-results" style="display:none"></div>
+                        <label>商品类型</label>
+                        <select id="o-reward-type">
+                            <option value="item">实物（邮寄物品）</option>
+                            <option value="lotteryGlobalTickets">虚拟 · 通用抽奖券</option>
+                            <option value="lotteryPoolTickets">虚拟 · 限定抽奖券（绑定奖池）</option>
+                            <option value="lotteryExchangeCoins">虚拟 · 抽奖兑换币</option>
+                        </select>
+                        <div id="o-item-wrap">
+                            <label>出售物品（搜索物品名称 / 简称 / tpl，支持 mod 物品）</label>
+                            <div class="tpl-row">
+                                <input id="o-tpl" placeholder="搜索物品名称或 tpl…" autocomplete="off" /><img id="o-tpl-icon" class="icon-preview" alt="" />
+                                <div id="o-tpl-results" class="rw-tpl-results" style="display:none"></div>
+                            </div>
                         </div>
-                        <label>展示名（可空）</label><input id="o-name" />
-                        <label>单次购买发放数量（堆叠物品如 GP 币 / 卢布可 &gt;1）</label><input id="o-sellcount" type="number" min="1" value="1" />
+                        <div id="o-pool-wrap" style="display:none">
+                            <label>绑定奖池（限定抽奖券必填）</label>
+                            <select id="o-pool"></select>
+                        </div>
+                        <label>展示名（可空；虚拟商品留空则用默认名）</label><input id="o-name" />
+                        <label id="o-sellcount-label">单次购买发放数量（堆叠物品如 GP 币 / 卢布可 &gt;1）</label><input id="o-sellcount" type="number" min="1" value="1" />
                         <label>库存（&lt;=0 表示无限）</label><input id="o-stock" type="number" value="-1" />
                         <label>每人限购（&lt;=0 表示不限）</label><input id="o-buylimit" type="number" value="0" />
+                        <label>本商品刷新周期</label>
+                        <select id="o-refresh-mode">
+                            <option value="inherit">继承全局刷新周期</option>
+                            <option value="never">永不刷新（库存/限购终身累计）</option>
+                            <option value="custom">自定义周期</option>
+                        </select>
+                        <div id="o-refresh-custom-wrap" style="display:none">
+                            <label>自定义刷新周期（小时）</label>
+                            <input id="o-refresh-custom-hours" type="number" min="0" step="0.5" value="24" />
+                        </div>
                         <label>价格 / 以物易物（搜索支付物品或货币并填写数量；可添加多项；留空=免费）</label>
                         <div id="o-cost-editor"></div>
                         <button id="save-offer" class="btn primary small">保存商品</button>
@@ -83,8 +106,9 @@
     </section>
 
     <div id="toast" class="toast"></div>
-    <script src="picker.js"></script>
+    <script src="picker.js?v=20260707-picker-v2"></script>
     <script src="price.js"></script>
-    <script src="shop.js"></script>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="shop.js?v=20260707-pending-edit-v1"></script>
 </body>
 </html>

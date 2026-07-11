@@ -18,6 +18,7 @@ public class BattlePassShopService(
     BattlePassService battlePassService,
     BattlePassStashService stashService,
     BattlePassRewardService rewardService,
+    BattlePassItemCategoryService categoryService,
     ProfileHelper profileHelper,
     SaveServer saveServer,
     ItemSearchService itemSearchService,
@@ -52,8 +53,32 @@ public class BattlePassShopService(
 
             catalog.RefreshSeconds = Math.Max(0, state.RefreshSeconds);
             catalog.NextRefreshUtc = state.RefreshSeconds > 0 ? state.PeriodStartUtc + state.RefreshSeconds : 0;
+
+            // 填充分类摘要：只返回当前货架实际包含的分类
+            var categoryGroups = catalog.Items
+                .GroupBy(i => i.CategoryId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            catalog.Categories = categoryService.GetAllCategories()
+                .Where(c => categoryGroups.ContainsKey(c.Id))
+                .Select(c => new ShopCategoryView
+                {
+                    Id = c.Id,
+                    Name = c.Name,
+                    Order = c.Order,
+                    Count = categoryGroups[c.Id],
+                })
+                .ToList();
+
             return catalog;
         }
+    }
+
+    /// <summary>抽奖类虚拟商品的 rewardType（发放到抽奖钱包而非邮寄实物）。</summary>
+    internal static bool IsVirtualRewardType(string? rewardType)
+    {
+        var t = (rewardType ?? "item").Trim().ToLowerInvariant();
+        return t is "lotteryglobaltickets" or "lotterypooltickets" or "lotteryexchangecoins";
     }
 
     /// <summary>按份数执行购买。返回 (是否成功, 展示消息)。</summary>
@@ -199,8 +224,20 @@ public class BattlePassShopService(
             logger.Warning($"[SPT-BattlePass] 商店扣费后保存档案失败（内存态已生效）profile={profileId}: {ex.Message}");
         }
 
-        // ③ 发货
+        // ③ 发货：实物走邮件；虚拟商品（抽奖券/兑换币）经统一奖励接口入抽奖钱包，不邮寄。
         var totalSellCount = sellCount * quantity;
+        var rewardType = (offer.RewardType ?? "item").Trim();
+        if (IsVirtualRewardType(rewardType))
+        {
+            var reward = new BpReward { Type = rewardType, Count = totalSellCount, PoolId = offer.PoolId };
+            var mailMessage = $"通行证商店购买：{ResolveVirtualName(offer)}";
+            battlePassService.GrantRewards(profileId, prog, [reward], mailMessage);
+            logger.Info(
+                $"[SPT-BattlePass] 商店购买成功 profile={profileId} offer={offer.Id} 购买{quantity}份 发放虚拟商品 {rewardType}×{totalSellCount}"
+            );
+            return (true, $"购买成功（{quantity} 份），{VirtualDeliveredMessage(rewardType, totalSellCount)}");
+        }
+
         rewardService.Deliver(
             profileId,
             [new BpReward { Tpl = offer.Tpl, Count = totalSellCount, Type = "item" }],
@@ -241,36 +278,131 @@ public class BattlePassShopService(
     }
 
     /// <summary>
-    ///     按刷新周期滚动：到期则全局库存(销量)清零并 +1 代次；玩家限购代次落后则清空其限购计数。
+    ///     按刷新周期滚动库存(销量)与玩家限购。商品分三种刷新模式：
+    ///     <list type="bullet">
+    ///       <item>offer.RefreshSeconds == null：继承全局周期（<see cref="BpShopState.RefreshSeconds"/> / <see cref="BpShopState.Epoch"/>）。</item>
+    ///       <item>offer.RefreshSeconds == 0：本商品永不刷新（库存/限购终身累计）。</item>
+    ///       <item>offer.RefreshSeconds &gt; 0：本商品按 <see cref="BpShopState.OfferPeriods"/> 中独立周期滚动。</item>
+    ///     </list>
     ///     在 <see cref="ShopGate"/> 内调用，落盘有变更的 state / progress。
     /// </summary>
     private void RollPeriodAndSync(string profileId, BpProgress prog, BpShopState state)
     {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        prog.ShopOfferEpochs ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        // 按刷新模式对当前货架的 offerKey 归类
+        var globalKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var independentOffers = new List<(string key, int seconds)>();
+        foreach (var (offer, custom) in VisibleOffers())
+        {
+            var key = OfferKey(custom, offer.Id);
+            if (offer.RefreshSeconds is null)
+            {
+                globalKeys.Add(key);
+            }
+            else if (offer.RefreshSeconds > 0)
+            {
+                independentOffers.Add((key, offer.RefreshSeconds.Value));
+            }
+            // == 0：终身累计，不参与任何周期滚动
+        }
+
+        var stateChanged = false;
+        var progChanged = false;
+
+        // 1) 全局周期：滚动只清空「继承全局」的商品销量/限购，独立与终身商品不受影响
         if (state.RefreshSeconds > 0)
         {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             if (state.PeriodStartUtc <= 0)
             {
                 state.PeriodStartUtc = now; // 首次设定锚点
-                BattlePassStore.SaveShopState(state);
+                stateChanged = true;
             }
             else if (now >= state.PeriodStartUtc + state.RefreshSeconds)
             {
-                // 跨多个周期空窗也只滚一次：库存补满、限购代次前进，锚点对齐到当前周期起点
                 var elapsed = now - state.PeriodStartUtc;
                 state.PeriodStartUtc += elapsed - elapsed % state.RefreshSeconds;
                 state.Epoch++;
-                state.Sales.Clear();
-                BattlePassStore.SaveShopState(state);
+                foreach (var key in globalKeys)
+                {
+                    state.Sales.Remove(key);
+                }
+
+                stateChanged = true;
             }
         }
 
         if (prog.ShopEpoch != state.Epoch)
         {
             prog.ShopEpoch = state.Epoch;
-            prog.ShopPurchases.Clear();
+            foreach (var key in globalKeys)
+            {
+                prog.ShopPurchases.Remove(key);
+            }
+
+            progChanged = true;
+        }
+
+        // 2) 独立周期商品：各自滚动，互不影响
+        foreach (var (key, seconds) in independentOffers)
+        {
+            if (!state.OfferPeriods.TryGetValue(key, out var period))
+            {
+                period = new BpShopOfferPeriod { PeriodStartUtc = now };
+                state.OfferPeriods[key] = period;
+                stateChanged = true;
+            }
+            else if (period.PeriodStartUtc <= 0)
+            {
+                period.PeriodStartUtc = now;
+                stateChanged = true;
+            }
+            else if (now >= period.PeriodStartUtc + seconds)
+            {
+                var elapsed = now - period.PeriodStartUtc;
+                period.PeriodStartUtc += elapsed - elapsed % seconds;
+                period.Epoch++;
+                state.Sales.Remove(key);
+                stateChanged = true;
+            }
+
+            if (prog.ShopOfferEpochs.GetValueOrDefault(key) != period.Epoch)
+            {
+                prog.ShopOfferEpochs[key] = period.Epoch;
+                prog.ShopPurchases.Remove(key);
+                progChanged = true;
+            }
+        }
+
+        if (stateChanged)
+        {
+            BattlePassStore.SaveShopState(state);
+        }
+
+        if (progChanged)
+        {
             BattlePassStore.SaveProgress(profileId, prog);
         }
+    }
+
+    /// <summary>本商品下次刷新的 Unix 秒（0 = 不刷新）。按三种刷新模式解析。</summary>
+    private static long OfferNextRefreshUtc(BpTraderOffer offer, BpShopState state, string offerKey)
+    {
+        if (offer.RefreshSeconds is null)
+        {
+            return state.RefreshSeconds > 0 ? state.PeriodStartUtc + state.RefreshSeconds : 0;
+        }
+
+        if (offer.RefreshSeconds.Value <= 0)
+        {
+            return 0; // 终身累计
+        }
+
+        var start = state.OfferPeriods.TryGetValue(offerKey, out var period) && period.PeriodStartUtc > 0
+            ? period.PeriodStartUtc
+            : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return start + offer.RefreshSeconds.Value;
     }
 
     private static int RemainingStock(BpTraderOffer offer, BpShopState state, string offerKey)
@@ -299,11 +431,14 @@ public class BattlePassShopService(
         var maxPurchaseQuantity = validCosts
             ? CalculateMaxPurchaseQuantity(offer.BuyLimit, bought, remainingStock, sold, offer.SellCount, costs)
             : 0;
+        var rewardType = (offer.RewardType ?? "item").Trim();
+        var virtual_ = IsVirtualRewardType(rewardType);
+        var category = categoryService.Resolve(offer.Tpl, isVirtual: virtual_);
         return new ShopItemView
         {
             Id = offer.Id,
             Tpl = offer.Tpl,
-            Name = ResolveName(offer.Tpl, offer.Name),
+            Name = virtual_ ? ResolveVirtualName(offer) : ResolveName(offer.Tpl, offer.Name),
             SellCount = Math.Max(1, offer.SellCount),
             Stock = remainingStock,
             BuyLimit = offer.BuyLimit,
@@ -313,6 +448,40 @@ public class BattlePassShopService(
             MaxPurchaseQuantity = maxPurchaseQuantity,
             Error = validCosts ? null : "价格配置无效",
             Costs = costs,
+            RewardType = virtual_ ? rewardType : "item",
+            NextRefreshUtc = OfferNextRefreshUtc(offer, state, offerKey),
+            CategoryId = category.Id,
+            CategoryName = category.Name,
+            CategoryOrder = category.Order,
+        };
+    }
+
+    /// <summary>虚拟商品展示名：优先管理员填写的 Name，否则按 rewardType 给默认中文名。</summary>
+    private static string ResolveVirtualName(BpTraderOffer offer)
+    {
+        if (!string.IsNullOrWhiteSpace(offer.Name))
+        {
+            return offer.Name!;
+        }
+
+        return (offer.RewardType ?? "").Trim().ToLowerInvariant() switch
+        {
+            "lotteryglobaltickets" => "通用抽奖券",
+            "lotterypooltickets" => "限定抽奖券",
+            "lotteryexchangecoins" => "抽奖兑换币",
+            _ => "虚拟商品",
+        };
+    }
+
+    /// <summary>虚拟商品购买成功后的到账提示。</summary>
+    private static string VirtualDeliveredMessage(string rewardType, int amount)
+    {
+        return rewardType.Trim().ToLowerInvariant() switch
+        {
+            "lotteryglobaltickets" => $"已发放 {amount} 张通用抽奖券至抽奖钱包",
+            "lotterypooltickets" => $"已发放 {amount} 张限定抽奖券至抽奖钱包",
+            "lotteryexchangecoins" => $"已发放 {amount} 枚抽奖兑换币至抽奖钱包",
+            _ => "已到账",
         };
     }
 
@@ -427,6 +596,18 @@ public class ShopCatalog
 
     /// <summary>下次刷新的 Unix 秒时间戳（0 = 不刷新）。供前端展示倒计时。</summary>
     public long NextRefreshUtc { get; set; }
+
+    /// <summary>当前货架实际包含的一级分类列表（去重，按 Handbook 排序）。</summary>
+    public List<ShopCategoryView> Categories { get; set; } = new();
+}
+
+/// <summary>商店一级分类摘要。</summary>
+public class ShopCategoryView
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public int Order { get; set; }
+    public int Count { get; set; }
 }
 
 public class ShopItemView
@@ -443,6 +624,21 @@ public class ShopItemView
     public int MaxPurchaseQuantity { get; set; }
     public string? Error { get; set; }
     public List<ShopCostView> Costs { get; set; } = new();
+
+    /// <summary>发放方式：item（实物，前端按 tpl 显示物品图标）或抽奖类虚拟商品（不显示物品图标，用徽章标识）。</summary>
+    public string RewardType { get; set; } = "item";
+
+    /// <summary>本商品下次刷新的 Unix 秒（0 = 不刷新）。前端按此展示各商品独立倒计时。</summary>
+    public long NextRefreshUtc { get; set; }
+
+    /// <summary>一级分类稳定键（Handbook 分类 Id / virtual / other）。</summary>
+    public string CategoryId { get; set; } = "";
+
+    /// <summary>一级分类中文显示名。</summary>
+    public string CategoryName { get; set; } = "";
+
+    /// <summary>分类排序值（Handbook Order；virtual/other 排最后）。</summary>
+    public int CategoryOrder { get; set; }
 }
 
 public class ShopCostView
