@@ -1629,6 +1629,19 @@ public class WebRegisterController(
             : new { success = false, message = "激活码不存在或已使用/已作废" };
     }
 
+    [HttpDelete("admin/activation-codes/{code}/record")]
+    public object AdminDeleteActivationCode(string code, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
+    {
+        if (!IsAdminAuthorized(adminToken))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return activationCodeService.DeleteCode(code)
+            ? new { success = true, message = "激活码记录已删除，相关使用日志已保留" }
+            : new { success = false, message = "激活码记录不存在" };
+    }
+
     [HttpGet("admin/activation-codes/logs")]
     public object AdminGetActivationLogs([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
@@ -1823,6 +1836,9 @@ public class WebRegisterController(
                 .GroupBy(b => b.RootTemplate)
                 .Select(g => new { tpl = g.Key, rootCount = g.Count(), itemCount = g.Sum(x => x.Items.Count) })
                 .ToList(),
+            secureContainerChange = preview.SecureContainerBundle == null
+                ? null
+                : new { tpl = preview.SecureContainerBundle.RootTemplate },
             hideoutStashAdditions = preview.HideoutStashAdditions,
             dogTagChange = preview.DogTagTemplateChange == null
                 ? null
@@ -1833,6 +1849,17 @@ public class WebRegisterController(
                 newLoyaltyLevel = u.NewLoyaltyLevel,
                 newStanding = u.NewStanding,
             }).ToList(),
+            stashBonusAdditions = preview.StashBonusAdditions.Select(b => new { templateId = b.TemplateId.ToString() }).ToList(),
+            hideoutAreaLevelChanges = preview.HideoutAreaLevelChanges.Select(c => new
+            {
+                areaType = (int)c.AreaType,
+                areaName = c.AreaType.ToString(),
+                oldLevel = c.OldLevel,
+                newLevel = c.NewLevel,
+            }).ToList(),
+            stashTemplateChange = preview.StashTemplateChange == null
+                ? null
+                : new { from = preview.StashTemplateChange.OldTemplate.ToString(), to = preview.StashTemplateChange.NewTemplate.ToString() },
         };
     }
 

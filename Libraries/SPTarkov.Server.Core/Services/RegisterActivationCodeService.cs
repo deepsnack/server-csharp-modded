@@ -101,6 +101,27 @@ public class RegisterActivationCodeService(FileUtil fileUtil, JsonUtil jsonUtil,
         }
     }
 
+    /// <summary>永久删除激活码记录。使用日志作为独立审计记录继续保留。</summary>
+    public bool DeleteCode(string code)
+    {
+        lock (gate)
+        {
+            var normalized = Normalize(code);
+            var entry = Codes.FirstOrDefault(c => c.Code == normalized);
+            if (entry is null)
+            {
+                return false;
+            }
+
+            Codes.Remove(entry);
+            SaveCodes();
+            AppendLog("deleted", entry.Code, entry.Edition, entry.UsedByEmail, entry.UsedByUsername);
+            SaveLog();
+            logger.Warning($"[ActivationCode] 永久删除激活码记录 {entry.Code}（状态: {entry.Status}）");
+            return true;
+        }
+    }
+
     /// <summary>校验码当前是否可用（不消耗）。返回 (valid, edition, message)。</summary>
     public (bool Valid, string? Edition, string Message) ValidateCode(string code)
     {

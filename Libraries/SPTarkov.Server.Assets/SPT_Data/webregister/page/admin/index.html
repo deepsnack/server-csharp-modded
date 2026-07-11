@@ -97,12 +97,14 @@
                     <button class="primary-btn" onclick="addPreRegistration()">添加</button>
                 </div>
                 <div id="preregMessage" class="message"></div>
-                <table id="preregTable" class="preg-table">
-                    <thead>
-                        <tr><th>邮箱</th><th>锁定版本</th><th>操作</th></tr>
-                    </thead>
-                    <tbody id="preregBody"></tbody>
-                </table>
+                <div class="table-shell">
+                    <table id="preregTable" class="preg-table">
+                        <thead>
+                            <tr><th>邮箱</th><th>锁定版本</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="preregBody"></tbody>
+                    </table>
+                </div>
             </section>
 
             <!-- 账号管理区（N1） -->
@@ -115,12 +117,14 @@
                     <button class="delete-btn" onclick="softResetAll()" title="为所有账号清空游戏进度（保留账号与邮箱）">全部软重置</button>
                 </div>
                 <div id="accountMessage" class="message"></div>
-                <table id="accountTable" class="preg-table">
-                    <thead>
-                        <tr><th>用户名</th><th>邮箱</th><th>版本</th><th>最后登录</th><th>操作</th></tr>
-                    </thead>
-                    <tbody id="accountBody"></tbody>
-                </table>
+                <div class="table-shell">
+                    <table id="accountTable" class="preg-table">
+                        <thead>
+                            <tr><th>用户名</th><th>邮箱</th><th>版本</th><th>最后登录</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="accountBody"></tbody>
+                    </table>
+                </div>
             </section>
 
             <!-- 激活码管理区（N2） -->
@@ -133,33 +137,37 @@
                             <option value="">绑定版本</option>
                         </select>
                     </div>
-                    <input type="number" id="codeCount" placeholder="数量" min="1" max="500" value="1" style="max-width:80px;">
+                    <input type="number" id="codeCount" class="compact-input" aria-label="创建数量" placeholder="数量" min="1" max="500" value="1">
                     <input type="text" id="codeNote" placeholder="备注（选填）">
                     <button class="primary-btn" onclick="createActivationCodes()">创建</button>
                 </div>
                 <div id="codeMessage" class="message"></div>
-                <table id="codeTable" class="preg-table">
-                    <thead>
-                        <tr><th>激活码</th><th>版本</th><th>状态</th><th>使用邮箱</th><th>使用人</th><th>使用时间</th><th>备注</th><th>操作</th></tr>
-                    </thead>
-                    <tbody id="codeBody"></tbody>
-                </table>
+                <div class="table-shell">
+                    <table id="codeTable" class="preg-table">
+                        <thead>
+                            <tr><th>激活码</th><th>版本</th><th>状态</th><th>使用邮箱</th><th>使用人</th><th>使用时间</th><th>备注</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="codeBody"></tbody>
+                    </table>
+                </div>
 
                 <h3 class="sub-heading">使用日志 <span class="sec-en">AUDIT LOG</span></h3>
                 <div class="preregister-form">
-                    <span class="section-desc" style="margin:0;">保留期（天，0=不限时）：</span>
-                    <input type="number" id="logRetention" min="0" value="0" style="max-width:80px;">
+                    <label class="inline-field-label" for="logRetention">保留期（天，0=不限时）：</label>
+                    <input type="number" id="logRetention" class="compact-input" min="0" value="0">
                     <button class="primary-btn" onclick="saveLogRetention()">保存</button>
                     <button class="primary-btn" onclick="exportActivationLogs()">导出 CSV</button>
                     <button class="delete-btn" onclick="clearActivationLogs()">清空日志</button>
                 </div>
                 <div id="logMessage" class="message"></div>
-                <table id="logTable" class="preg-table">
-                    <thead>
-                        <tr><th>时间</th><th>事件</th><th>激活码</th><th>版本</th><th>邮箱</th><th>用户名</th><th>升级 from→to</th><th>物品数</th><th>操作员</th></tr>
-                    </thead>
-                    <tbody id="logBody"></tbody>
-                </table>
+                <div class="table-shell">
+                    <table id="logTable" class="preg-table">
+                        <thead>
+                            <tr><th>时间</th><th>事件</th><th>激活码</th><th>版本</th><th>邮箱</th><th>用户名</th><th>升级 from→to</th><th>物品数</th><th>操作员</th></tr>
+                        </thead>
+                        <tbody id="logBody"></tbody>
+                    </table>
+                </div>
             </section>
 
             <!-- 版本升级区（U1-U6） -->
@@ -170,7 +178,7 @@
                 <h3 class="sub-heading">版本别名映射 <span class="sec-en">EDITION ALIAS</span></h3>
                 <p class="section-desc">将 mod / 第三方改名后的版本（如「标准版」「测试档」）映射回标准 5 档之一。未配置且不在标准链中的存档将被拒绝升级。</p>
                 <div class="preregister-form">
-                    <input type="text" id="aliasFromInput" placeholder="原始名称（如 标准版）" style="min-width:160px;">
+                    <input type="text" id="aliasFromInput" class="wide-input" placeholder="原始名称（如 标准版）">
                     <div class="select-wrap">
                         <select id="aliasToSelect">
                             <option value="">映射到</option>
@@ -179,20 +187,22 @@
                     <button class="primary-btn" onclick="addEditionAlias()">添加 / 更新</button>
                 </div>
                 <div id="aliasMessage" class="message"></div>
-                <table id="aliasTable" class="preg-table">
-                    <thead>
-                        <tr><th>原始名称</th><th>映射到</th><th>操作</th></tr>
-                    </thead>
-                    <tbody id="aliasBody"></tbody>
-                </table>
+                <div class="table-shell">
+                    <table id="aliasTable" class="preg-table">
+                        <thead>
+                            <tr><th>原始名称</th><th>映射到</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="aliasBody"></tbody>
+                    </table>
+                </div>
 
                 <h3 class="sub-heading">邮件配置 <span class="sec-en">MAIL CONFIG</span></h3>
-                <div class="preregister-form" style="flex-wrap:wrap;gap:8px;">
-                    <input type="text" id="upgradeMailSubject" placeholder="邮件标题" style="flex:1;min-width:240px;">
-                    <input type="number" id="upgradeMailExpiry" min="1" max="3650" placeholder="保留天数" style="max-width:120px;">
+                <div class="preregister-form wrap-form">
+                    <input type="text" id="upgradeMailSubject" class="wide-input" placeholder="邮件标题">
+                    <input type="number" id="upgradeMailExpiry" class="expiry-input" min="1" max="3650" aria-label="邮件保留天数" placeholder="保留天数">
                 </div>
                 <div class="preregister-form">
-                    <textarea id="upgradeMailBody" rows="3" placeholder="邮件正文模板，可用 {from} {to} {count} 占位符" style="flex:1;min-width:100%;font-family:'Share Tech Mono',monospace;"></textarea>
+                    <textarea id="upgradeMailBody" rows="3" placeholder="邮件正文模板，可用 {from} {to} {count} 占位符"></textarea>
                 </div>
                 <div class="preregister-form">
                     <button class="primary-btn" onclick="saveUpgradeMailConfig()">保存邮件配置</button>

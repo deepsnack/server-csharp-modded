@@ -125,7 +125,7 @@ function renderPreregTable(regs) {
     var entries = Object.keys(regs);
     if (entries.length === 0) {
         var tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="3" style="color:#aaa;text-align:center;padding:16px;">暂无预注册记录</td>';
+        tr.innerHTML = '<td colspan="3" class="empty-state-cell">暂无预注册记录</td>';
         tbody.appendChild(tr);
         return;
     }
@@ -133,10 +133,14 @@ function renderPreregTable(regs) {
         var version = regs[email];
         var tr = document.createElement('tr');
         var tdEmail = document.createElement('td');
+        tdEmail.dataset.label = '邮箱';
         tdEmail.textContent = email;
         var tdVersion = document.createElement('td');
+        tdVersion.dataset.label = '锁定版本';
         tdVersion.textContent = version;
         var tdAction = document.createElement('td');
+        tdAction.dataset.label = '操作';
+        tdAction.className = 'table-actions';
         var delBtn = document.createElement('button');
         delBtn.className = 'delete-btn';
         delBtn.textContent = '删除';
@@ -190,17 +194,21 @@ function renderAccountTable(accounts) {
     var tbody = document.getElementById('accountBody');
     tbody.innerHTML = '';
     if (accounts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="color:#aaa;text-align:center;padding:16px;">无匹配账号</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state-cell">无匹配账号</td></tr>';
         return;
     }
     accounts.forEach(function(a) {
         var tr = document.createElement('tr');
-        [a.username, a.email || '—', a.edition || '—', a.lastLogin ? new Date(a.lastLogin).toLocaleString() : '从未登录'].forEach(function(text) {
+        var accountLabels = ['用户名', '邮箱', '版本', '最后登录'];
+        [a.username, a.email || '—', a.edition || '—', a.lastLogin ? new Date(a.lastLogin).toLocaleString() : '从未登录'].forEach(function(text, index) {
             var td = document.createElement('td');
+            td.dataset.label = accountLabels[index];
             td.textContent = text;
             tr.appendChild(td);
         });
         var tdAction = document.createElement('td');
+        tdAction.dataset.label = '操作';
+        tdAction.className = 'table-actions';
         var upBtn = document.createElement('button');
         upBtn.className = 'primary-btn';
         upBtn.textContent = '升级版本';
@@ -291,12 +299,13 @@ function renderCodeTable(codes) {
     var tbody = document.getElementById('codeBody');
     tbody.innerHTML = '';
     if (codes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="color:#aaa;text-align:center;padding:16px;">暂无激活码</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state-cell">暂无激活码</td></tr>';
         return;
     }
     var statusText = { Unused: '未使用', Used: '已使用', Revoked: '已作废' };
     codes.forEach(function(c) {
         var tr = document.createElement('tr');
+        var codeLabels = ['激活码', '版本', '状态', '使用邮箱', '使用人', '使用时间', '备注'];
         [
             c.code,
             c.edition,
@@ -305,24 +314,60 @@ function renderCodeTable(codes) {
             c.usedByUsername || '—',
             c.usedAt ? new Date(c.usedAt).toLocaleString() : '—',
             c.note || '—'
-        ].forEach(function(text) {
+        ].forEach(function(text, index) {
             var td = document.createElement('td');
+            td.dataset.label = codeLabels[index];
             td.textContent = text;
             tr.appendChild(td);
         });
         var tdAction = document.createElement('td');
+        tdAction.dataset.label = '操作';
+        tdAction.className = 'table-actions';
         if (c.status === 'Unused') {
+            var copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-btn';
+            copyBtn.textContent = '复制';
+            copyBtn.onclick = function() { copyActivationCode(c.code); };
+            tdAction.appendChild(copyBtn);
             var btn = document.createElement('button');
-            btn.className = 'delete-btn';
+            btn.className = 'secondary-btn';
             btn.textContent = '作废';
             btn.onclick = function() { revokeActivationCode(c.code); };
             tdAction.appendChild(btn);
-        } else {
-            tdAction.textContent = '—';
         }
+        var deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-btn';
+        deleteBtn.textContent = '删除记录';
+        deleteBtn.title = '永久删除激活码记录，相关使用日志仍会保留';
+        deleteBtn.onclick = function() { deleteActivationCode(c); };
+        tdAction.appendChild(deleteBtn);
         tr.appendChild(tdAction);
         tbody.appendChild(tr);
     });
+}
+
+async function copyActivationCode(code) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(code);
+        } else {
+            var textarea = document.createElement('textarea');
+            try {
+                textarea.value = code;
+                textarea.setAttribute('readonly', '');
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                if (!document.execCommand('copy')) throw new Error('copy failed');
+            } finally {
+                textarea.remove();
+            }
+        }
+        showMsg('codeMessage', '已复制激活码 ' + code, 'success');
+    } catch (e) {
+        showMsg('codeMessage', '复制失败，请手动复制激活码', 'error');
+    }
 }
 
 async function createActivationCodes() {
@@ -353,6 +398,28 @@ async function revokeActivationCode(code) {
     }
 }
 
+async function deleteActivationCode(codeRecord) {
+    var usage = codeRecord.status === 'Used'
+        ? '\n该激活码已由 ' + (codeRecord.usedByUsername || codeRecord.usedByEmail || '未知用户') + ' 使用。'
+        : '';
+    if (!window.confirm(
+        '确认永久删除激活码记录 ' + codeRecord.code + '？' + usage
+        + '\n\n相关使用日志会继续保留，但激活码记录本身无法恢复。'
+    )) return;
+
+    var data = await apiFetch(
+        'DELETE',
+        '/register/api/admin/activation-codes/' + encodeURIComponent(codeRecord.code) + '/record'
+    );
+    if (data && data.success) {
+        showMsg('codeMessage', data.message || '激活码记录已删除', 'success');
+        await loadActivationCodes();
+        await loadActivationLogs();
+    } else {
+        showMsg('codeMessage', (data && data.message) || '删除失败', 'error');
+    }
+}
+
 // ==================== 激活码日志（N2） ====================
 
 async function loadActivationLogs() {
@@ -363,14 +430,15 @@ async function loadActivationLogs() {
     tbody.innerHTML = '';
     var logs = data.logs || [];
     if (logs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="color:#aaa;text-align:center;padding:16px;">暂无日志</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state-cell">暂无日志</td></tr>';
         return;
     }
-    var eventText = { created: '创建', used: '使用', revoked: '作废', released: '回滚', upgrade: '升级' };
+    var eventText = { created: '创建', used: '使用', revoked: '作废', released: '回滚', deleted: '删除记录', upgrade: '升级' };
     // 最新在前
     logs.slice().reverse().forEach(function(e) {
         var tr = document.createElement('tr');
         var fromTo = (e.fromEdition || e.toEdition) ? ((e.fromEdition || '?') + ' → ' + (e.toEdition || '?')) : '—';
+        var logLabels = ['时间', '事件', '激活码', '版本', '邮箱', '用户名', '升级', '物品数', '操作员'];
         [
             new Date(e.time).toLocaleString(),
             eventText[e.event] || e.event,
@@ -381,8 +449,9 @@ async function loadActivationLogs() {
             fromTo,
             e.itemCount != null ? String(e.itemCount) : '—',
             e.operatorName || '—'
-        ].forEach(function(text) {
+        ].forEach(function(text, index) {
             var td = document.createElement('td');
+            td.dataset.label = logLabels[index];
             td.textContent = text;
             tr.appendChild(td);
         });
@@ -477,14 +546,16 @@ function renderAliasTable(aliases) {
     tbody.innerHTML = '';
     var keys = Object.keys(aliases);
     if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" style="color:#aaa;text-align:center;padding:16px;">暂无别名映射</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="3" class="empty-state-cell">暂无别名映射</td></tr>';
         return;
     }
     keys.forEach(function(k) {
         var tr = document.createElement('tr');
-        var tdK = document.createElement('td'); tdK.textContent = k;
-        var tdV = document.createElement('td'); tdV.textContent = aliases[k];
+        var tdK = document.createElement('td'); tdK.dataset.label = '原始名称'; tdK.textContent = k;
+        var tdV = document.createElement('td'); tdV.dataset.label = '映射到'; tdV.textContent = aliases[k];
         var tdAct = document.createElement('td');
+        tdAct.dataset.label = '操作';
+        tdAct.className = 'table-actions';
         var del = document.createElement('button');
         del.className = 'delete-btn';
         del.textContent = '删除';
@@ -599,11 +670,24 @@ async function requestUpgradePreview(target) {
     if (data.itemBundles && data.itemBundles.length) {
         html += '<details><summary>按 _tpl 分组明细</summary><table class="preg-table"><thead><tr><th>_tpl</th><th>根数</th><th>含子物品总数</th></tr></thead><tbody>';
         data.itemBundles.forEach(function(b) {
-            html += '<tr><td>' + b.tpl + '</td><td>' + b.rootCount + '</td><td>' + b.itemCount + '</td></tr>';
+            html += '<tr><td data-label="_tpl">' + b.tpl + '</td><td data-label="根数">' + b.rootCount + '</td><td data-label="总数">' + b.itemCount + '</td></tr>';
         });
         html += '</tbody></table></details>';
     }
     var nonItem = [];
+    if (data.secureContainerChange) {
+        nonItem.push('安全箱补发：' + data.secureContainerChange.tpl);
+    }
+    if (data.stashBonusAdditions && data.stashBonusAdditions.length) {
+        nonItem.push('仓库 StashSize bonus +' + data.stashBonusAdditions.length + ' 条');
+    }
+    if (data.hideoutAreaLevelChanges && data.hideoutAreaLevelChanges.length) {
+        var areaDetails = data.hideoutAreaLevelChanges.map(function(c) { return c.areaName + ' Lv' + c.oldLevel + '→' + c.newLevel; }).join('、');
+        nonItem.push('藏身处等级：' + areaDetails);
+    }
+    if (data.stashTemplateChange) {
+        nonItem.push('仓库 _tpl：' + data.stashTemplateChange.from + ' → ' + data.stashTemplateChange.to);
+    }
     if (data.hideoutStashAdditions && Object.keys(data.hideoutStashAdditions).length) {
         nonItem.push('保险柜区域 +' + Object.keys(data.hideoutStashAdditions).length + ' 项');
     }

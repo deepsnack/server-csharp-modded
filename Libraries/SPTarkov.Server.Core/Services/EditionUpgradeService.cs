@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
+using SPTarkov.Server.Core.Models.Enums;
+using SPTarkov.Server.Core.Models.Enums.Hideout;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Utils.Cloners;
@@ -13,7 +15,7 @@ namespace SPTarkov.Server.Core.Services;
 ///     版本升级（U1-U6）：单向升级 Standard → Left Behind → Prepare To Escape → Edge Of Darkness → Unheard。
 ///     差量算法按 _tpl × upd 子集做集合减法；捆绑物品（带 mod 的武器、装满弹的弹匣等）整组发送；
 ///     管理员可配置版本别名映射，未命中时拒绝升级。
-///     非物品差异（hideoutAreaStashes / DogTag _tpl / TradersInfo 初始声望和等级）同步。
+///     非物品差异（hideoutAreaStashes / DogTag _tpl / TradersInfo / 安全箱 / StashSize bonus / 藏身处等级）同步。
 ///     存储：SPT_Data/webregister/edition_aliases.json + edition_upgrade_config.json。
 /// </summary>
 [Injectable(InjectionType.Singleton)]
@@ -252,13 +254,24 @@ public class EditionUpgradeService(
         // 物品差：目标模板独占的根容器/根物品 → 整组挂送
         var bundles = ComputeItemBundleDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
         preview.ItemBundles = bundles;
-        preview.ItemRootCount = bundles.Count;
-        preview.ItemTotalCount = bundles.Sum(b => b.Items.Count);
+
+        // 安全箱差：目标版本安全箱 _tpl 不同于源且玩家未持有 → 邮件补发
+        var secContainerBundle = ComputeSecureContainerDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
+        preview.SecureContainerBundle = secContainerBundle;
+
+        // 汇总邮件物品数
+        var totalMailBundles = secContainerBundle != null ? bundles.Count + 1 : bundles.Count;
+        var totalMailItems = bundles.Sum(b => b.Items.Count) + (secContainerBundle?.Items.Count ?? 0);
+        preview.ItemRootCount = totalMailBundles;
+        preview.ItemTotalCount = totalMailItems;
 
         // 非物品差
         preview.HideoutStashAdditions = ComputeHideoutStashDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
         preview.DogTagTemplateChange = ComputeDogTagDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
         preview.TraderInfoUpgrades = ComputeTraderUpgrades(sourceSide, targetSide, profile.CharacterData.PmcData);
+        preview.StashBonusAdditions = ComputeStashBonusDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
+        preview.HideoutAreaLevelChanges = ComputeHideoutAreaLevelDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
+        preview.StashTemplateChange = ComputeStashTemplateDiff(sourceSide, targetSide, profile.CharacterData.PmcData);
 
         return preview;
     }
@@ -325,20 +338,89 @@ public class EditionUpgradeService(
             }
         }
 
-        // 发邮件
-        if (preview.ItemTotalCount > 0)
+        // 同步 StashSize bonus（藏身处仓库升级解锁记录）
+        if (preview.StashBonusAdditions.Count > 0)
         {
-            var allItems = preview.ItemBundles.SelectMany(b => b.Items).ToList();
+            pmc.Bonuses ??= new List<Bonus>();
+            foreach (var bonus in preview.StashBonusAdditions)
+            {
+                pmc.Bonuses.Add(new Bonus
+                {
+                    Id = new MongoId(),
+                    Type = BonusType.StashSize,
+                    TemplateId = bonus.TemplateId,
+                    IsPassive = true,
+                    IsVisible = true,
+                    IsProduction = false,
+                });
+                nonItemChanges.Add($"StashSize bonus templateId={bonus.TemplateId}");
+            }
+        }
+
+        // 同步藏身处区域等级（仅升不降）
+        if (preview.HideoutAreaLevelChanges.Count > 0)
+        {
+            pmc.Hideout ??= new Hideout();
+            pmc.Hideout.Areas ??= new List<BotHideoutArea>();
+            foreach (var change in preview.HideoutAreaLevelChanges)
+            {
+                var area = pmc.Hideout.Areas.FirstOrDefault(a => a.Type == change.AreaType);
+                if (area is not null)
+                {
+                    area = area with { Level = change.NewLevel };
+                    var idx = pmc.Hideout.Areas.FindIndex(a => a.Type == change.AreaType);
+                    if (idx >= 0)
+                    {
+                        pmc.Hideout.Areas[idx] = area;
+                    }
+                }
+                else
+                {
+                    pmc.Hideout.Areas.Add(new BotHideoutArea
+                    {
+                        Type = change.AreaType,
+                        Level = change.NewLevel,
+                        Active = true,
+                        PassiveBonusesEnabled = true,
+                        Constructing = false,
+                    });
+                }
+
+                nonItemChanges.Add($"hideout[{change.AreaType}].level={change.NewLevel}");
+            }
+        }
+
+        // 同步仓库 _tpl（仓库物品模板升级）
+        if (preview.StashTemplateChange is not null)
+        {
+            var stashItem = pmc.Inventory?.Items?.FirstOrDefault(it => pmc.Inventory.Stash.HasValue && it.Id == pmc.Inventory.Stash.Value);
+            if (stashItem is not null)
+            {
+                var idx = pmc.Inventory!.Items!.IndexOf(stashItem);
+                pmc.Inventory.Items[idx] = stashItem with { Template = preview.StashTemplateChange.NewTemplate };
+                nonItemChanges.Add($"stash _tpl={preview.StashTemplateChange.NewTemplate}");
+            }
+        }
+
+        // 发邮件（仓库物品 + 安全箱）
+        var allMailItems = preview.ItemBundles.SelectMany(b => b.Items).ToList();
+        if (preview.SecureContainerBundle is not null)
+        {
+            allMailItems.AddRange(preview.SecureContainerBundle.Items);
+        }
+
+        if (allMailItems.Count > 0)
+        {
             var config = UpgradeConfig;
             var body = (string.IsNullOrWhiteSpace(config.MailBodyTemplate) ? DefaultMailBody : config.MailBodyTemplate)
                 .Replace("{from}", preview.FromEdition)
                 .Replace("{to}", preview.ToEdition)
-                .Replace("{count}", preview.ItemTotalCount.ToString());
+                .Replace("{count}", allMailItems.Count.ToString());
 
             mailSendService.SendSystemMessageToPlayer(
                 profileId,
                 body,
-                allItems,
+                allMailItems,
                 maxStorageTimeSeconds: Math.Max(1, config.MailExpiryDays) * 24L * 3600L
             );
         }
@@ -611,6 +693,141 @@ public class EditionUpgradeService(
         return result;
     }
 
+    /// <summary>安全箱差：目标版本安全箱 _tpl 与源不同且玩家未持有目标安全箱 → 发送空安全箱。</summary>
+    internal static UpgradeItemBundle? ComputeSecureContainerDiff(TemplateSide source, TemplateSide target, Models.Eft.Common.PmcData playerPmc)
+    {
+        var sourceItems = source.Character?.Inventory?.Items ?? new List<Item>();
+        var targetItems = target.Character?.Inventory?.Items ?? new List<Item>();
+        var playerItems = playerPmc.Inventory?.Items ?? new List<Item>();
+
+        var srcSecContainer = sourceItems.FirstOrDefault(it => it.SlotId == "SecuredContainer");
+        var tgtSecContainer = targetItems.FirstOrDefault(it => it.SlotId == "SecuredContainer");
+
+        if (tgtSecContainer is null)
+        {
+            return null;
+        }
+
+        // 目标与源安全箱 _tpl 相同 → 无需补发
+        if (srcSecContainer is not null && tgtSecContainer.Template == srcSecContainer.Template)
+        {
+            return null;
+        }
+
+        // 玩家已持有目标安全箱 _tpl → 无需补发
+        var playerSecContainer = playerItems.FirstOrDefault(it => it.SlotId == "SecuredContainer");
+        if (playerSecContainer is not null && playerSecContainer.Template == tgtSecContainer.Template)
+        {
+            return null;
+        }
+
+        // 发送空的新安全箱（不含子物品，玩家自行换装）
+        var newId = new MongoId();
+        return new UpgradeItemBundle
+        {
+            RootTemplate = tgtSecContainer.Template.ToString(),
+            Items = [new Item { Id = newId, Template = tgtSecContainer.Template }],
+        };
+    }
+
+    /// <summary>StashSize bonus 差：目标模板中存在但源模板+玩家都没有的 StashSize bonus templateId。</summary>
+    internal static List<StashBonusAddition> ComputeStashBonusDiff(TemplateSide source, TemplateSide target, Models.Eft.Common.PmcData playerPmc)
+    {
+        var srcBonuses = source.Character?.Bonuses ?? new List<Bonus>();
+        var tgtBonuses = target.Character?.Bonuses ?? new List<Bonus>();
+        var ownBonuses = playerPmc.Bonuses ?? new List<Bonus>();
+
+        var srcStashTpls = new HashSet<MongoId>(
+            srcBonuses.Where(b => b.Type == BonusType.StashSize && b.TemplateId.HasValue).Select(b => b.TemplateId!.Value));
+        var ownStashTpls = new HashSet<MongoId>(
+            ownBonuses.Where(b => b.Type == BonusType.StashSize && b.TemplateId.HasValue).Select(b => b.TemplateId!.Value));
+
+        var result = new List<StashBonusAddition>();
+        foreach (var tgtBonus in tgtBonuses.Where(b => b.Type == BonusType.StashSize && b.TemplateId.HasValue))
+        {
+            var tplId = tgtBonus.TemplateId!.Value;
+            // 源已有或玩家已有 → 跳过
+            if (srcStashTpls.Contains(tplId) || ownStashTpls.Contains(tplId))
+            {
+                continue;
+            }
+
+            result.Add(new StashBonusAddition { TemplateId = tplId });
+        }
+
+        return result;
+    }
+
+    /// <summary>藏身处区域等级差：目标模板区域等级高于玩家当前等级时记录升级。</summary>
+    internal static List<HideoutAreaLevelChange> ComputeHideoutAreaLevelDiff(TemplateSide source, TemplateSide target, Models.Eft.Common.PmcData playerPmc)
+    {
+        var tgtAreas = target.Character?.Hideout?.Areas ?? new List<BotHideoutArea>();
+        var ownAreas = playerPmc.Hideout?.Areas ?? new List<BotHideoutArea>();
+
+        var result = new List<HideoutAreaLevelChange>();
+        foreach (var tgtArea in tgtAreas)
+        {
+            var tgtLevel = tgtArea.Level ?? 0;
+            if (tgtLevel <= 0)
+            {
+                continue;
+            }
+
+            var ownArea = ownAreas.FirstOrDefault(a => a.Type == tgtArea.Type);
+            var ownLevel = ownArea?.Level ?? 0;
+            if (tgtLevel > ownLevel)
+            {
+                result.Add(new HideoutAreaLevelChange { AreaType = tgtArea.Type, OldLevel = ownLevel, NewLevel = tgtLevel });
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>仓库 _tpl 差：目标模板仓库物品 _tpl 与玩家当前仓库不同时记录替换。</summary>
+    internal static StashTemplateChange? ComputeStashTemplateDiff(TemplateSide source, TemplateSide target, Models.Eft.Common.PmcData playerPmc)
+    {
+        var srcStashId = source.Character?.Inventory?.Stash;
+        var tgtStashId = target.Character?.Inventory?.Stash;
+        var playerStashId = playerPmc.Inventory?.Stash;
+
+        if (!tgtStashId.HasValue || !playerStashId.HasValue)
+        {
+            return null;
+        }
+
+        var srcItems = source.Character?.Inventory?.Items ?? new List<Item>();
+        var tgtItems = target.Character?.Inventory?.Items ?? new List<Item>();
+        var playerItems = playerPmc.Inventory?.Items ?? new List<Item>();
+
+        var srcStashItem = srcItems.FirstOrDefault(it => it.Id == srcStashId!.Value);
+        var tgtStashItem = tgtItems.FirstOrDefault(it => it.Id == tgtStashId.Value);
+        var playerStashItem = playerItems.FirstOrDefault(it => it.Id == playerStashId.Value);
+
+        if (tgtStashItem is null || playerStashItem is null)
+        {
+            return null;
+        }
+
+        // 目标仓库 _tpl 与源相同 → 无变更
+        if (srcStashItem is not null && tgtStashItem.Template == srcStashItem.Template)
+        {
+            return null;
+        }
+
+        // 玩家仓库 _tpl 已经是目标或更高 → 不降级
+        if (playerStashItem.Template == tgtStashItem.Template)
+        {
+            return null;
+        }
+
+        return new StashTemplateChange
+        {
+            OldTemplate = playerStashItem.Template,
+            NewTemplate = tgtStashItem.Template,
+        };
+    }
+
     // ---- 持久化 ----
 
     protected EditionAliasFile Aliases => aliases ??= LoadJson<EditionAliasFile>(AliasFilePath) ?? new EditionAliasFile();
@@ -691,9 +908,13 @@ public class UpgradePreview
     public int ItemRootCount { get; set; }
     public int ItemTotalCount { get; set; }
     public List<UpgradeItemBundle> ItemBundles { get; set; } = [];
+    public UpgradeItemBundle? SecureContainerBundle { get; set; }
     public Dictionary<string, MongoId> HideoutStashAdditions { get; set; } = new();
     public DogTagChange? DogTagTemplateChange { get; set; }
     public List<TraderInfoUpgrade> TraderInfoUpgrades { get; set; } = [];
+    public List<StashBonusAddition> StashBonusAdditions { get; set; } = [];
+    public List<HideoutAreaLevelChange> HideoutAreaLevelChanges { get; set; } = [];
+    public StashTemplateChange? StashTemplateChange { get; set; }
 
     public static UpgradePreview Failed(string message) => new() { Success = false, Message = message };
 }
@@ -723,4 +944,22 @@ public class UpgradeResult
     public string? Message { get; set; }
     public int ItemCount { get; set; }
     public List<string> NonItemChanges { get; set; } = [];
+}
+
+public class StashBonusAddition
+{
+    public MongoId TemplateId { get; set; }
+}
+
+public class HideoutAreaLevelChange
+{
+    public HideoutAreas AreaType { get; set; }
+    public int OldLevel { get; set; }
+    public int NewLevel { get; set; }
+}
+
+public class StashTemplateChange
+{
+    public MongoId OldTemplate { get; set; }
+    public MongoId NewTemplate { get; set; }
 }
