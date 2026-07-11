@@ -39,6 +39,15 @@ public class ProfileActivityService(TimeUtil timeUtil)
         return _activeProfiles.ContainsKey(sessionId);
     }
 
+    /// <summary>
+    /// Remove a profile from the active client cache after a clean logout.
+    /// </summary>
+    /// <param name="sessionId">Profile id to remove</param>
+    public void RemoveActiveProfile(MongoId sessionId)
+    {
+        _activeProfiles.TryRemove(sessionId, out _);
+    }
+
     /// <summary>记录玩家是否仍处于本地战局；地图转移期间保持为 true。</summary>
     public void SetRaidActive(MongoId sessionId, bool isInRaid)
     {
@@ -101,6 +110,17 @@ public class ProfileActivityService(TimeUtil timeUtil)
         }
 
         return timeUtil.GetTimeStamp() - profileActivity.LastActive < minutes * 60;
+    }
+
+    /// <summary>
+    ///     Was the client recently observed as online. Clean logout removes the record immediately; crashed clients expire by age.
+    /// </summary>
+    /// <param name="sessionId">Profile to check</param>
+    /// <param name="minutes">Recent activity window in minutes</param>
+    /// <returns>True when the profile has recent client activity</returns>
+    public bool IsClientRecentlyActive(MongoId sessionId, int minutes = 30)
+    {
+        return ActiveWithinLastMinutes(sessionId, minutes);
     }
 
     /// <summary>

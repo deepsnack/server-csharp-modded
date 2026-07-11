@@ -67,6 +67,7 @@ public class GameCallbacks(
     public async ValueTask<string> GameLogout(string url, EmptyRequestData _, MongoId sessionID)
     {
         await saveServer.SaveProfileAsync(sessionID);
+        profileActivityService.RemoveActiveProfile(sessionID);
 
         // Backup profiles on exit
         await backupService.Init();
