@@ -3,6 +3,7 @@ using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
+using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Utils.Cloners;
 
 namespace SPTarkov.Server.Core.BattlePass;
@@ -10,7 +11,8 @@ namespace SPTarkov.Server.Core.BattlePass;
 /// <summary>
 ///     从裸 tpl 构建「默认完整形态」物品树，供商人货架（物品管控 add）与网页商店/奖励发货复用：
 ///     枪械 = 全局默认改装预设（完整转播台，而非仅一个枪机）；防弹衣/头盔 = 带默认插板与内衬的预设
-///     （无预设则补必需子槽）；其余物品 = 单件。避免发出空枪、无插板的废甲废盔。
+///     （无预设则补必需子槽）；弹药箱 = 装满对应子弹（避免发出空弹药箱）；其余物品 = 单件。
+///     避免发出空枪、无插板的废甲废盔、无子弹的空弹药箱。
 /// </summary>
 [Injectable(InjectionType.Singleton)]
 public class BattlePassItemBuilder(ItemHelper itemHelper, PresetHelper presetHelper, ICloner cloner)
@@ -34,6 +36,15 @@ public class BattlePassItemBuilder(ItemHelper itemHelper, PresetHelper presetHel
         }
 
         var rootItem = new Item { Id = rootId, Template = tpl, Upd = new Upd { StackObjectsCount = count } };
+
+        // 弹药箱：装满对应口径子弹（否则玩家买到/收到的是空箱）。子弹按模板 MaxCount 与堆叠上限自动拆堆。
+        if (itemHelper.IsOfBaseclass(tpl, BaseClasses.AMMO_BOX)
+            && itemHelper.GetItem(tpl) is { Key: true, Value: { } ammoBoxTpd })
+        {
+            var boxAndCartridges = new List<Item> { rootItem };
+            itemHelper.AddCartridgesToAmmoBox(boxAndCartridges, ammoBoxTpd);
+            return boxAndCartridges;
+        }
 
         // 无预设但可装插板/内衬的甲盔：补必需子槽（与 RewardHelper.GenerateArmorRewardChildSlots 同策略，避免裸甲）
         if (itemHelper.ArmorItemCanHoldMods(tpl)

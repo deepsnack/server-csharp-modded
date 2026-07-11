@@ -3,6 +3,7 @@ using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass;
@@ -16,6 +17,7 @@ public class BattlePassRewardService(
     MailSendService mailSendService,
     DatabaseService databaseService,
     BattlePassItemBuilder itemBuilder,
+    SaveServer saveServer,
     ISptLogger<BattlePassRewardService> logger
 )
 {
@@ -76,10 +78,11 @@ public class BattlePassRewardService(
             return;
         }
 
+        var sessionId = new MongoId(profileId);
         try
         {
             mailSendService.SendUserMessageToPlayer(
-                new MongoId(profileId),
+                sessionId,
                 BattlePassChatBot.Sender,
                 message,
                 items,
@@ -89,6 +92,19 @@ public class BattlePassRewardService(
         catch (Exception ex)
         {
             logger.Error($"[SPT-BattlePass] 发放奖励失败 profile={profileId}: {ex.Message}");
+            return;
+        }
+
+        // 战局任务在 EndLocalRaid Postfix 中结算，原始 EndLocalRaid 已经先保存过一次档案。
+        // 发信后必须再次保存，否则本次新增的 DialogueRecords/附件只停留在内存，重载档案后邮件会丢失。
+        try
+        {
+            saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
+            logger.Info($"[SPT-BattlePass] 奖励邮件已发放并保存 profile={profileId} items={items.Count} message={message}");
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[SPT-BattlePass] 奖励邮件已写入内存但保存档案失败 profile={profileId}: {ex.Message}");
         }
     }
 }
