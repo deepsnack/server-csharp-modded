@@ -4,5 +4,14 @@
   "backendIp": "127.0.0.1",
   "backendPort": 6969,
   "logRequests": true,
+  "forwardedHeaders": {
+    "enabled": true,
+    "forwardLimit": 1,
+    "knownProxies": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "knownNetworks": []
+  },
   "serverImagePathOverride": {}
 }

@@ -143,6 +143,8 @@ public static class Program
 
         var app = builder.Build();
 
+        ConfigureForwardedHeaders(app);
+
         // Configure Kestrel WS options and Handle fallback requests
         ConfigureWebApp(app);
 
@@ -152,16 +154,6 @@ public static class Program
         var loggerFinalizer = app.Services.GetRequiredService<ISptLogger<App>>();
         try
         {
-            // Handle edge cases where reverse proxies might pass X-Forwarded-For, use this as the actual IP address
-            var forwardedHeadersOptions = new ForwardedHeadersOptions
-            {
-                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-                ForwardLimit = null,
-            };
-            forwardedHeadersOptions.KnownNetworks.Clear();
-            forwardedHeadersOptions.KnownProxies.Clear();
-            app.UseForwardedHeaders(forwardedHeadersOptions);
-
             await app.Services.GetRequiredService<SptServerStartupService>().Startup();
 
             await app.RunAsync();
@@ -175,6 +167,35 @@ public static class Program
         {
             loggerFinalizer.DumpAndStop();
         }
+    }
+
+    private static void ConfigureForwardedHeaders(WebApplication app)
+    {
+        var httpConfig = app.Services.GetRequiredService<ConfigServer>().GetConfig<HttpConfig>();
+        if (!httpConfig.ForwardedHeaders.Enabled)
+        {
+            return;
+        }
+
+        var trust = ForwardedHeadersTrustParser.Parse(httpConfig.ForwardedHeaders);
+        var options = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+            ForwardLimit = trust.ForwardLimit,
+        };
+        options.KnownProxies.Clear();
+        options.KnownNetworks.Clear();
+        foreach (var proxy in trust.KnownProxies)
+        {
+            options.KnownProxies.Add(proxy);
+        }
+        foreach (var network in trust.KnownNetworks)
+        {
+            options.KnownNetworks.Add(
+                new Microsoft.AspNetCore.HttpOverrides.IPNetwork(network.BaseAddress, network.PrefixLength)
+            );
+        }
+        app.UseForwardedHeaders(options);
     }
 
     private static void ConfigureWebApp(WebApplication app)

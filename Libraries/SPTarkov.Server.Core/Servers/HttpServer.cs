@@ -12,6 +12,7 @@ public class HttpServer(
     ConfigServer configServer,
     WebSocketServer webSocketServer,
     ProfileActivityService profileActivityService,
+    RequestContextAccessor requestContextAccessor,
     IEnumerable<IHttpListener> httpListeners
 )
 {
@@ -19,6 +20,8 @@ public class HttpServer(
 
     public async Task HandleRequest(HttpContext context, RequestDelegate next)
     {
+        using var requestScope = requestContextAccessor.BeginScope(context);
+
         if (context.WebSockets.IsWebSocketRequest && webSocketServer.CanHandle(context))
         {
             await webSocketServer.OnConnection(context);
