@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Models.Common;
@@ -28,6 +29,10 @@ public class ProfileAutoRepairService(
 )
 {
     protected readonly Models.Spt.Config.CoreConfig CoreConfig = configServer.GetConfig<Models.Spt.Config.CoreConfig>();
+    // 仅剥离真正会损坏存档/客户端的字符：Unicode "Other" 类别（控制符 Cc、格式符 Cf、代理 Cs、私用 Co、未分配 Cn）。
+    // 不再按 ASCII 白名单清洗——EFT 客户端原生支持中/俄/韩/日等多语言标签且输入框已自校验，
+    // 旧正则 [^a-zA-Z0-9 -] 会把全部中文等非 ASCII 字符当非法删除，导致中文标签被整段清空。
+    private static readonly Regex InvalidTagNameCharacters = new(@"\p{C}", RegexOptions.Compiled);
 
     public bool Enabled => CoreConfig.Features.AutoRepairProfiles;
 
@@ -39,7 +44,7 @@ public class ProfileAutoRepairService(
         Action<MongoId, MongoId>? OnIdRemapped = null
     );
 
-    public ProfileRepairSummary RepairProfile(SptProfile? profile, MongoId sessionId, string reason)
+    public ProfileRepairSummary RepairProfile(SptProfile? profile, MongoId sessionId, string reason, bool logSummary = true)
     {
         var summary = new ProfileRepairSummary(sessionId, reason);
         if (!Enabled || profile is null || profile.ProfileInfo?.InvalidOrUnloadableProfile is true)
@@ -54,7 +59,7 @@ public class ProfileAutoRepairService(
         RepairInsurance(profile.InsuranceList, summary);
         RepairBtrDelivery(profile.BtrDeliveryList, summary);
 
-        if (summary.Changed)
+        if (summary.Changed && logSummary)
         {
             logger.Warning(
                 $"[ProfileAutoRepair] repaired profile {sessionId} during {reason}; {summary.Describe()}"
@@ -75,6 +80,7 @@ public class ProfileAutoRepairService(
         var adoptParentId = ToRootId(inventory.Equipment) ?? ToRootId(inventory.Stash);
         RepairItemList(new ItemListContext($"{characterName}.inventory", items, adoptParentId, "hideout"), summary);
         RemoveBrokenCharacterReferences(character!, summary);
+        RestoreInvalidCustomizations(character, summary);
     }
 
     private void RepairUserBuilds(UserBuilds? userBuilds, ProfileRepairSummary summary)
@@ -224,6 +230,7 @@ public class ProfileAutoRepairService(
         RepairDuplicateIds(context, summary);
         RepairOrphanedParents(context, summary);
         RepackCartridgeStackSlots(context, summary);
+        RepairStackCountsAndTags(context, summary);
     }
 
     private void RepairDuplicateIds(ItemListContext context, ProfileRepairSummary summary)
@@ -342,6 +349,29 @@ public class ProfileAutoRepairService(
         }
     }
 
+    private void RepairStackCountsAndTags(ItemListContext context, ProfileRepairSummary summary)
+    {
+        foreach (var item in context.Items)
+        {
+            var stackCountInvalid = item.Upd?.StackObjectsCount is null or <= 0;
+            if (stackCountInvalid)
+            {
+                item.Upd ??= new Upd();
+                item.Upd.StackObjectsCount = 1;
+                summary.StackCountsFixed++;
+            }
+
+            var tagName = item.Upd?.Tag?.Name;
+            if (string.IsNullOrEmpty(tagName) || !InvalidTagNameCharacters.IsMatch(tagName))
+            {
+                continue;
+            }
+
+            item.Upd!.Tag!.Name = InvalidTagNameCharacters.Replace(tagName, string.Empty);
+            summary.TagsSanitized++;
+        }
+    }
+
     private void RemoveBrokenCharacterReferences(PmcData character, ProfileRepairSummary summary)
     {
         var inventory = character.Inventory;
@@ -407,6 +437,95 @@ public class ProfileAutoRepairService(
                 summary.BrokenReferencesRemoved++;
             }
         }
+    }
+
+    private void RestoreInvalidCustomizations(PmcData character, ProfileRepairSummary summary)
+    {
+        if (character.Customization is null)
+        {
+            return;
+        }
+
+        var customizationDb = databaseService.GetTemplates().Customization;
+        if (customizationDb is null || customizationDb.Count == 0)
+        {
+            return;
+        }
+
+        var playerIsUsec = string.Equals(character.Info?.Side, "usec", StringComparison.OrdinalIgnoreCase);
+
+        if (
+            RestoreCustomizationSlot(
+                character.Customization.Head,
+                value => character.Customization.Head = value,
+                customizationDb,
+                playerIsUsec ? "DefaultUsecHead" : "DefaultBearHead"
+            )
+        )
+        {
+            summary.CustomizationsRestored++;
+        }
+
+        if (
+            RestoreCustomizationSlot(
+                character.Customization.Body,
+                value => character.Customization.Body = value,
+                customizationDb,
+                playerIsUsec ? "DefaultUsecBody" : "DefaultBearBody"
+            )
+        )
+        {
+            summary.CustomizationsRestored++;
+        }
+
+        if (
+            RestoreCustomizationSlot(
+                character.Customization.Hands,
+                value => character.Customization.Hands = value,
+                customizationDb,
+                playerIsUsec ? "DefaultUsecHands" : "DefaultBearHands"
+            )
+        )
+        {
+            summary.CustomizationsRestored++;
+        }
+
+        if (
+            RestoreCustomizationSlot(
+                character.Customization.Feet,
+                value => character.Customization.Feet = value,
+                customizationDb,
+                playerIsUsec ? "DefaultUsecFeet" : "DefaultBearFeet",
+                playerIsUsec ? "DefaulUsecFeet" : "DefaultBearFeet"
+            )
+        )
+        {
+            summary.CustomizationsRestored++;
+        }
+    }
+
+    private static bool RestoreCustomizationSlot(
+        MongoId? currentValue,
+        Action<MongoId> setValue,
+        IReadOnlyDictionary<MongoId, CustomizationItem> customizationDb,
+        params string[] defaultNames
+    )
+    {
+        if (currentValue.HasValue && !currentValue.Value.IsEmpty && customizationDb.ContainsKey(currentValue.Value))
+        {
+            return false;
+        }
+
+        var defaultCustomization = defaultNames
+            .Select(name => customizationDb.Values.FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.Ordinal)))
+            .FirstOrDefault(item => item is not null);
+        if (defaultCustomization is null)
+        {
+            return false;
+        }
+
+        setValue(defaultCustomization.Id);
+        return true;
     }
 
     private bool ItemsAreSerializedEqual(Item first, Item second)

@@ -28,10 +28,24 @@ public class ProfileDataService(ISptLogger<ProfileDataService> logger, FileUtil 
         {
             if (ProfileDataExists(profileId, modKey))
             {
-                value = jsonUtil.Deserialize<T>(fileUtil.ReadFile(Path.Combine(ProfileDataFilepath, profileId, $"{modKey}.json")));
+                var filePath = Path.Combine(ProfileDataFilepath, profileId, $"{modKey}.json");
+                try
+                {
+                    value = jsonUtil.Deserialize<T>(fileUtil.ReadFile(filePath));
+                }
+                catch (Exception ex)
+                {
+                    // 文件损坏（如写入中途崩溃留下 0 字节 / NUL 填充，反序列化以 0x00 开头抛异常）。
+                    // 若不处理，异常会一路冒泡把承载它的请求（如 /client/match/local/end 战局结算）打成 Fatal，
+                    // 且坏文件反复被读、反复刷屏。此处将坏文件备份改名移走并降级为 null：
+                    // 下次 ProfileDataExists 返回 false，mod 自然重建默认数据，实现自愈且不再刷屏。
+                    QuarantineCorruptFile(filePath, ex);
+                    return default;
+                }
+
                 if (value != null)
                 {
-                    _profileDataCache[GetCacheKey(profileId, modKey)] = value;
+                    _profileDataCache[profileDataKey] = value;
                 }
             }
             else
@@ -41,6 +55,23 @@ public class ProfileDataService(ISptLogger<ProfileDataService> logger, FileUtil 
         }
 
         return (T?)value;
+    }
+
+    /// <summary>
+    ///     将损坏的 mod 数据文件改名为 .corrupt 备份移走，使后续读取视其为不存在从而停止刷屏并触发 mod 重建。
+    /// </summary>
+    private void QuarantineCorruptFile(string filePath, Exception cause)
+    {
+        try
+        {
+            var backupPath = $"{filePath}.corrupt-{DateTime.Now:yyyyMMddHHmmss}";
+            File.Move(filePath, backupPath, overwrite: true);
+            logger.Warning($"Corrupt mod profile data '{filePath}' quarantined to '{backupPath}' ({cause.Message}); mod will rebuild defaults.");
+        }
+        catch (Exception moveEx)
+        {
+            logger.Error($"Failed to quarantine corrupt mod profile data '{filePath}': {moveEx.Message}");
+        }
     }
 
     public void SaveProfileData<T>(string profileId, string modKey, T profileData)
@@ -53,7 +84,8 @@ public class ProfileDataService(ISptLogger<ProfileDataService> logger, FileUtil 
 
         _profileDataCache[GetCacheKey(profileId, modKey)] = profileData;
 
-        fileUtil.WriteFile(Path.Combine(ProfileDataFilepath, profileId, $"{modKey}.json"), data);
+        // 原子写，防止写入中途崩溃产生 0 字节 / 半截文件，进而在下次读取时抛反序列化异常。
+        fileUtil.WriteFileAtomic(Path.Combine(ProfileDataFilepath, profileId, $"{modKey}.json"), data);
     }
 
     /// <summary>

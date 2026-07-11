@@ -100,6 +100,46 @@ public class FileUtil
         File.WriteAllBytes(filePath, fileContent);
     }
 
+    /// <summary>
+    ///     同步原子写：先写唯一 tmp 文件并 flush 落盘，再原子替换目标。
+    ///     防止写入中途进程崩溃/断电留下 0 字节或 NUL 填充的半截文件（会导致后续反序列化以 0x00 开头而抛异常）。
+    ///     用于 <see cref="Services.Mod.ProfileDataService"/> 等在请求链路上同步保存的场景。
+    /// </summary>
+    public void WriteFileAtomic(string filePath, string fileContent)
+    {
+        var directoryPath = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath))
+        {
+            Directory.CreateDirectory(directoryPath);
+        }
+
+        var tempFilePath = Path.Combine(directoryPath ?? string.Empty, $"{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            using (var fs = new FileStream(tempFilePath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                var bytes = Encoding.UTF8.GetBytes(fileContent);
+                fs.Write(bytes, 0, bytes.Length);
+                fs.Flush(true); // 确保内容真正落盘后再替换
+            }
+
+            File.Move(tempFilePath, filePath, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(tempFilePath))
+            {
+                try
+                {
+                    File.Delete(tempFilePath);
+                }
+                catch { }
+            }
+            throw;
+        }
+    }
+
     public async Task WriteFileAsync(string filePath, string fileContent)
     {
         var bytes = Encoding.UTF8.GetBytes(fileContent);

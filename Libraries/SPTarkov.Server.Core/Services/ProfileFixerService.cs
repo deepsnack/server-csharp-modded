@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Helpers;
@@ -102,106 +101,8 @@ public class ProfileFixerService(
     /// <param name="pmcProfile">Profile to check items of</param>
     public void FixProfileBreakingInventoryItemIssues(PmcData pmcProfile)
     {
-        // Create a mapping of all inventory items, keyed by _id value
-        var itemMapping = pmcProfile.Inventory.Items.GroupBy(item => item.Id).ToDictionary(x => x.Key, x => x.ToList());
-
-        foreach (var mappingKvP in itemMapping)
-        {
-            // Only one item for this id, not a dupe
-            if (mappingKvP.Value.Count == 1)
-            {
-                continue;
-            }
-
-            logger.Warning($"{mappingKvP.Value.Count - 1} duplicate(s) found for item: {mappingKvP.Key}");
-            var itemAJson = jsonUtil.Serialize(mappingKvP.Value[0]);
-            var itemBJson = jsonUtil.Serialize(mappingKvP.Value[1]);
-            if (itemAJson == itemBJson)
-            {
-                // Both items match, we can safely delete one (A)
-                var indexOfItemToRemove = pmcProfile.Inventory.Items.IndexOf(mappingKvP.Value[0]);
-                pmcProfile.Inventory.Items.RemoveAt(indexOfItemToRemove);
-                logger.Warning($"Deleted duplicate item: {mappingKvP.Key}");
-            }
-            else
-            {
-                // Items are different, replace ID with unique value
-                // Only replace ID if items have no children, we don't want orphaned children
-                var itemsHaveChildren = pmcProfile.Inventory.Items.Any(x => x.ParentId == mappingKvP.Key);
-                if (!itemsHaveChildren)
-                {
-                    var itemToAdjust = pmcProfile.Inventory.Items.FirstOrDefault(x => x.Id == mappingKvP.Key);
-                    itemToAdjust.Id = new MongoId();
-                    logger.Warning($"Replace duplicate item Id: {mappingKvP.Key} with {itemToAdjust.Id}");
-                }
-            }
-        }
-
-        // Iterate over all inventory items
-        foreach (var item in pmcProfile.Inventory.Items.Where(x => x.SlotId is not null))
-        {
-            if (item.Upd is null)
-            // Ignore items without a upd object
-            {
-                continue;
-            }
-
-            // Check items with a tags for non-alphanumeric characters and remove
-            var regxp = new Regex("[^a-zA-Z0-9 -]");
-            if (item.Upd.Tag?.Name is not null && !regxp.IsMatch(item.Upd.Tag.Name))
-            {
-                logger.Warning($"Fixed item: {item.Id}s Tag value, removed invalid characters");
-                item.Upd.Tag.Name = regxp.Replace(item.Upd.Tag.Name, "");
-            }
-
-            // Check items with StackObjectsCount (undefined)
-            if (item.Upd.StackObjectsCount is null)
-            {
-                logger.Warning($"Fixed item: {item.Id}s undefined StackObjectsCount value, now set to 1");
-                item.Upd.StackObjectsCount = 1;
-            }
-        }
-
-        // Iterate over clothing
-        var customizationDb = databaseService.GetTemplates().Customization;
-        var customizationDbArray = customizationDb.Values;
-        var playerIsUsec = string.Equals(pmcProfile.Info.Side, "usec", StringComparison.OrdinalIgnoreCase);
-
-        // Check Head
-        if (!customizationDb.ContainsKey(pmcProfile.Customization.Head.Value))
-        {
-            var defaultHead = playerIsUsec
-                ? customizationDbArray.FirstOrDefault(x => x.Name == "DefaultUsecHead")
-                : customizationDbArray.FirstOrDefault(x => x.Name == "DefaultBearHead");
-            pmcProfile.Customization.Head = defaultHead.Id;
-        }
-
-        // check Body
-        if (customizationDb.ContainsKey(pmcProfile.Customization.Body.Value))
-        {
-            var defaultBody = playerIsUsec
-                ? customizationDbArray.FirstOrDefault(x => x.Name == "DefaultUsecBody")
-                : customizationDbArray.FirstOrDefault(x => x.Name == "DefaultBearBody");
-            pmcProfile.Customization.Body = defaultBody.Id;
-        }
-
-        // check Hands
-        if (customizationDb.ContainsKey(pmcProfile.Customization.Hands.Value))
-        {
-            var defaultHands = playerIsUsec
-                ? customizationDbArray.FirstOrDefault(x => x.Name == "DefaultUsecHands")
-                : customizationDbArray.FirstOrDefault(x => x.Name == "DefaultBearHands");
-            pmcProfile.Customization.Hands = defaultHands.Id;
-        }
-
-        // check Feet
-        if (customizationDb.ContainsKey(pmcProfile.Customization.Feet.Value))
-        {
-            var defaultFeet = playerIsUsec
-                ? customizationDbArray.FirstOrDefault(x => x.Name == "DefaulUsecFeet")
-                : customizationDbArray.FirstOrDefault(x => x.Name == "DefaultBearFeet");
-            pmcProfile.Customization.Feet = defaultFeet.Id;
-        }
+        // Kept for public API/mod compatibility. Pure item/profile repair now runs through
+        // ProfileAutoRepairService on startup, profile-list reads, and pre-save with aggregated summaries.
     }
 
     /// <summary>

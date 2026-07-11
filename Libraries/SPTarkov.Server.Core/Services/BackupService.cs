@@ -9,6 +9,8 @@ using LogLevel = SPTarkov.Server.Core.Models.Spt.Logging.LogLevel;
 
 namespace SPTarkov.Server.Core.Services;
 
+public sealed record BackupSnapshotResult(bool Succeeded, string? SnapshotPath, string? FailureReason);
+
 [Injectable(InjectionType.Singleton)]
 public class BackupService
 {
@@ -185,6 +187,62 @@ public class BackupService
     }
 
     /// <summary>
+    ///     Create a repair snapshot immediately, bypassing normal backup cooldown so profile repair can safely write changes.
+    /// </summary>
+    public async Task<BackupSnapshotResult> CreateRepairSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        await BackupLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            List<string> currentProfilePaths;
+            try
+            {
+                currentProfilePaths = FileUtil.GetFiles(ProfileDir);
+            }
+            catch (Exception ex)
+            {
+                return new BackupSnapshotResult(false, null, $"Unable to read profiles directory: {ex.Message}");
+            }
+
+            var targetDir = GenerateRepairSnapshotTargetDir();
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                FileUtil.CreateDirectory(targetDir);
+
+                foreach (var profilePath in currentProfilePaths)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var profileFileName = FileUtil.GetFileNameAndExtension(profilePath);
+                    var relativeSourceFilePath = Path.Combine(ProfileDir, profileFileName);
+                    var absoluteDestinationFilePath = Path.Combine(targetDir, profileFileName);
+                    if (!FileUtil.CopyFile(relativeSourceFilePath, absoluteDestinationFilePath))
+                    {
+                        return new BackupSnapshotResult(false, targetDir, $"Source file not found: {relativeSourceFilePath}");
+                    }
+                }
+
+                await FileUtil.WriteFileAsync(Path.Combine(targetDir, activeModsFilename), JsonUtil.Serialize(ActiveServerMods));
+                Logger.Info($"Repair snapshot created in: {targetDir}");
+                return new BackupSnapshotResult(true, targetDir, null);
+            }
+            catch (OperationCanceledException)
+            {
+                return new BackupSnapshotResult(false, targetDir, "Repair snapshot creation was cancelled");
+            }
+            catch (Exception ex)
+            {
+                return new BackupSnapshotResult(false, targetDir, ex.Message);
+            }
+        }
+        finally
+        {
+            BackupLock.Release();
+        }
+    }
+
+    /// <summary>
     ///     Check to see if the backup service is enabled via the config.
     /// </summary>
     /// <returns> True if enabled, false otherwise. </returns>
@@ -212,6 +270,19 @@ public class BackupService
     {
         var backupDate = GenerateBackupDate();
         return Path.GetFullPath($"{BackupConfig.Directory}/{backupDate}");
+    }
+
+    protected string GenerateRepairSnapshotTargetDir()
+    {
+        var baseDir = Path.GetFullPath($"{BackupConfig.Directory}/{GenerateBackupDate()}_repair");
+        var targetDir = baseDir;
+        var suffix = 1;
+        while (Directory.Exists(targetDir))
+        {
+            targetDir = $"{baseDir}_{suffix++}";
+        }
+
+        return targetDir;
     }
 
     /// <summary>

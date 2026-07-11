@@ -2,6 +2,7 @@ using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
+using SPTarkov.Server.Core.Utils.Cloners;
 
 namespace SPTarkov.Server.Core.Services;
 
@@ -13,6 +14,8 @@ namespace SPTarkov.Server.Core.Services;
 public class ProfileAutoRepairOnLoad(
     SaveServer saveServer,
     ProfileAutoRepairService repairService,
+    BackupService backupService,
+    ICloner cloner,
     ISptLogger<ProfileAutoRepairOnLoad> logger
 ) : IOnLoad
 {
@@ -23,34 +26,54 @@ public class ProfileAutoRepairOnLoad(
             return;
         }
 
-        // 懒加载开启时跳过启动批修复（避免全量物化打破懒加载）；存盘前/拉档前修复仍然生效
-        if (saveServer.LazyEnabled)
-        {
-            logger.Info("[ProfileAutoRepair] 懒加载开启，跳过启动批修复（存盘前/拉档前修复不受影响）");
-            return;
-        }
-
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var scannedProfiles = 0;
+        var modifiedProfiles = 0;
         var repairedProfiles = 0;
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        var skippedWrites = 0;
+        BackupSnapshotResult? repairSnapshot = null;
+        var profiles = saveServer.GetProfiles();
+
+        logger.Info($"[ProfileAutoRepair] startup repair enabled; scanning {profiles.Count} profile(s)");
+        foreach (var (sessionId, profile) in profiles)
         {
+            scannedProfiles++;
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))
             {
                 continue;
             }
 
-            var summary = repairService.RepairProfile(profile, sessionId, "startup");
-            if (!summary.Changed)
+            var probe = cloner.Clone(profile);
+            var probeSummary = repairService.RepairProfile(probe, sessionId, "startup", false);
+            if (!probeSummary.Changed)
             {
                 continue;
             }
 
-            repairedProfiles++;
+            modifiedProfiles++;
+            repairSnapshot ??= await backupService.CreateRepairSnapshotAsync();
+            if (!repairSnapshot.Succeeded)
+            {
+                skippedWrites++;
+                logger.Error(
+                    $"[ProfileAutoRepair] repair snapshot failed; skipping startup write for {sessionId}: {repairSnapshot.FailureReason}"
+                );
+                continue;
+            }
+
+            repairService.RepairProfile(profile, sessionId, "startup");
             await saveServer.SaveProfileAsync(sessionId);
+            repairedProfiles++;
+
+            await Task.Yield();
         }
 
-        if (repairedProfiles > 0)
-        {
-            logger.Success($"[ProfileAutoRepair] auto-repaired and saved {repairedProfiles} profile(s)");
-        }
+        stopwatch.Stop();
+        logger.Success(
+            "[ProfileAutoRepair] startup repair complete; "
+                + $"scanned={scannedProfiles}, modified={modifiedProfiles}, saved={repairedProfiles}, "
+                + $"skippedWrites={skippedWrites}, snapshot={(repairSnapshot?.Succeeded == true ? repairSnapshot.SnapshotPath : "none")}, "
+                + $"elapsedMs={stopwatch.ElapsedMilliseconds}"
+        );
     }
 }
