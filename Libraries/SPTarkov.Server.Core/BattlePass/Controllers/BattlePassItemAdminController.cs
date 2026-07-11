@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.DI.Annotations;
@@ -7,8 +8,8 @@ using SPTarkov.DI.Annotations;
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
 
 /// <summary>
-///     物品管控管理端 API（X-Admin-Token，复用 WebRegister admin 域）：
-///     物品搜索、获取图谱、增删获取途径（写 override 并即时 Sync）。
+///     物品管控管理端 API：物品搜索、获取图谱、增删获取途径（写 override 并即时 Sync）。
+///     鉴权统一走 <see cref="BattlePassAdminSessionService.ValidateToken"/>（兼容原始 token 与会话 token）。
 /// </summary>
 [Injectable]
 [ApiController]
@@ -17,10 +18,12 @@ public class BattlePassItemAdminController(
     ItemSearchService searchService,
     ItemGraphService graphService,
     ItemControlSync controlSync,
-    ItemBanSync itemBanSync
+    ItemBanSync itemBanSync,
+    BattlePassAdminSessionService sessionService
 )
 {
-    private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
+    private bool Auth(string? token) => sessionService.ValidateToken(token)?.IsAdmin == true;
+    private bool CanRead(string? token, string capability) => sessionService.ValidateToken(token)?.HasCapability(capability) == true;
 
     [HttpGet("search")]
     public object Search(
@@ -29,7 +32,7 @@ public class BattlePassItemAdminController(
         [FromHeader(Name = "X-Admin-Token")] string? token = null
     )
     {
-        if (!Auth(token))
+        if (!CanRead(token, "items.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -40,7 +43,7 @@ public class BattlePassItemAdminController(
     [HttpGet("acquisitions/{tpl}")]
     public object Acquisitions(string tpl, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "items.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -85,7 +88,7 @@ public class BattlePassItemAdminController(
     [HttpGet("overrides")]
     public object GetOverrides([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "items.read"))
         {
             return new { success = false, message = "未授权" };
         }

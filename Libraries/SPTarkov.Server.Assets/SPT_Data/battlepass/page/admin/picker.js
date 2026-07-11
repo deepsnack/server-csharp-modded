@@ -29,14 +29,12 @@
         let url = QUERY_API + '/' + kind + '?q=' + encodeURIComponent(q) + '&limit=' + (opts.limit || 8);
         if (kind === 'items' && opts.source) url += '&source=' + encodeURIComponent(opts.source);
         if (kind === 'items' && opts.category) url += '&category=' + encodeURIComponent(opts.category);
-        try {
-            const res = await fetch(url, { headers: { 'X-Admin-Token': token() } });
-            const r = await res.json();
-            if (!r || !r.success) return [];
-            return r[RESULT_KEYS[kind] || 'items'] || [];
-        } catch (e) {
-            return [];
-        }
+        const res = await fetch(url, { headers: { 'X-Admin-Token': token() } });
+        let r;
+        try { r = await res.json(); }
+        catch { throw new Error(`搜索接口返回异常（HTTP ${res.status}）`); }
+        if (!res.ok || !r || !r.success) throw new Error(r?.message || `搜索失败（HTTP ${res.status}）`);
+        return r[RESULT_KEYS[kind] || 'items'] || [];
     }
 
     const queryItems = (q, opts) => query('items', q, opts);
@@ -95,18 +93,25 @@
         const minChars = opts.minChars != null ? opts.minChars : 2;
         input.setAttribute('autocomplete', 'off');
         async function run(q) {
-            const rows = await query(kind, q, opts);
-            if (!rows.length) { results.innerHTML = '<div class="sr-none">无结果</div>'; results.style.display = ''; return; }
-            results.innerHTML = rows.map(rowFn).join('');
-            results.style.display = '';
-            results.querySelectorAll('.sr-item').forEach(item => {
-                item.onmousedown = e => { e.preventDefault(); results.style.display = 'none'; onPick(item.dataset); };
-            });
+            try {
+                const rows = await query(kind, q, opts);
+                if (!rows.length) { results.innerHTML = '<div class="sr-none">无结果</div>'; results.style.display = ''; return; }
+                results.innerHTML = rows.map(rowFn).join('');
+                results.style.display = '';
+                results.querySelectorAll('.sr-item').forEach(item => {
+                    item.onmousedown = e => { e.preventDefault(); results.style.display = 'none'; onPick(item.dataset); };
+                });
+            } catch (error) {
+                results.innerHTML = `<div class="sr-none error">${esc(error.message || '搜索失败')}</div>`;
+                results.style.display = '';
+            }
         }
         input.addEventListener('input', () => {
             clearTimeout(timer);
             const q = input.value.trim();
-            if (q.length < minChars) { results.style.display = 'none'; results.innerHTML = ''; return; }
+            // 中文单字即有明确语义；拉丁字母仍默认至少 2 个字符，避免无意义的大范围查询。
+            const requiredChars = /[\u3400-\u9fff\uf900-\ufaff]/.test(q) ? 1 : minChars;
+            if (q.length < requiredChars) { results.style.display = 'none'; results.innerHTML = ''; return; }
             timer = setTimeout(() => run(q), 250);
         });
         input.addEventListener('focus', () => {

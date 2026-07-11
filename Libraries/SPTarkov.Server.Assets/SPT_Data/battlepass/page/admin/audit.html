@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>审计与回溯 · 通行证</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css?v=20260708-audit-v1" />
+</head>
+<body>
+    <div class="grain"></div>
+    <section id="audit-view" class="view">
+        <header class="topbar">
+            <span class="season-name">审计与回溯</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <a class="tab" href="reviews.html">审核 →</a>
+            </nav>
+            <button class="btn ghost small" onclick="location.href='index.html'">返回</button>
+        </header>
+
+        <main class="admin-content">
+            <div class="audit-heading">
+                <div>
+                    <h2>协管操作审计</h2>
+                    <p class="hint">记录协管提交、管理员批准/驳回与回溯。仅“批准”日志可回溯；目标若已有后续改动，服务端会拒绝覆盖。</p>
+                </div>
+                <div class="audit-retention panel">
+                    <label for="retention-days">日志保留</label>
+                    <input id="retention-days" type="number" min="1" max="3650" />
+                    <span>天</span>
+                    <button id="save-retention" class="btn ghost small">保存</button>
+                </div>
+            </div>
+
+            <div class="audit-filters panel">
+                <select id="audit-module">
+                    <option value="">全部模块</option>
+                    <option value="shop">商店</option><option value="tasks">任务</option>
+                    <option value="tracks">奖励轨</option><option value="lottery">抽奖</option>
+                    <option value="trader">商人</option><option value="recipes">配方</option>
+                    <option value="items">物品管控</option><option value="flea">跳蚤</option>
+                </select>
+                <select id="audit-event">
+                    <option value="">全部操作</option>
+                    <option value="submit">协管提交</option><option value="approve">管理员批准</option>
+                    <option value="reject">管理员驳回</option><option value="rollback">管理员回溯</option>
+                </select>
+                <button id="refresh-audit" class="btn primary small">刷新</button>
+            </div>
+
+            <main id="audit-list" class="audit-list"><div class="empty-msg">加载中…</div></main>
+        </main>
+    </section>
+    <div id="toast" class="toast"></div>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="audit.js?v=20260708-audit-v1"></script>
+</body>
+</html>

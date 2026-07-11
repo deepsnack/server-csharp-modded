@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>审核管理 · 通行证</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css?v=20260706-review-v7" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="review-view" class="view">
+        <header class="topbar">
+            <span class="season-name">审核管理</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <a class="tab" href="access.html">协管 →</a>
+                <a class="tab" href="audit.html">审计 →</a>
+            </nav>
+            <button id="back-btn" class="btn ghost small" onclick="location.href='index.html'">返回</button>
+        </header>
+
+        <main class="admin-content">
+            <h2>待审核变更</h2>
+            <p class="hint">协管员提交的改动会进入此队列。批准后<b>即时生效</b>；驳回需填写理由。切到具体模块可批量处理。</p>
+
+            <nav id="review-tabs" class="review-tabs"></nav>
+
+            <div class="review-workspace">
+                <div class="review-list-pane">
+                    <div id="review-batch" class="review-batch" style="display:none">
+                        <label><input type="checkbox" id="select-all" /> 全选本页</label>
+                        <span id="selected-count" class="review-selected-count">已选 0 条</span>
+                        <button id="batch-approve" class="btn primary small" disabled>批量批准</button>
+                        <button id="batch-reject" class="btn ghost small" disabled>批量驳回</button>
+                    </div>
+
+                    <main id="review-list" class="review-list">
+                        <div class="empty-msg">加载中…</div>
+                    </main>
+                </div>
+
+                <aside id="review-detail-host" class="review-detail-host">
+                    <div id="review-detail" class="review-detail" style="display:none"></div>
+                </aside>
+            </div>
+        </main>
+    </section>
+
+    <script src="reviews.js?v=20260707-review-fix-v1"></script>
+</body>
+</html>

@@ -2,18 +2,21 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.Controllers;
 
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
 
-/// <summary>通行证抽奖后台 API。</summary>
+/// <summary>通行证抽奖后台 API。鉴权统一走
+/// <see cref="BattlePassAdminSessionService.ValidateToken"/>（兼容原始 token 与会话 token）。</summary>
 [Injectable]
 [ApiController]
 [Route("battlepass/api/admin/lottery")]
 public class LotteryAdminController(
     LotteryService lotteryService,
     LotteryWalletService walletService,
-    BattlePassService battlePassService
+    BattlePassService battlePassService,
+    BattlePassAdminSessionService sessionService
 ) : ControllerBase
 {
     private const long MaxUploadBytes = 5 * 1024 * 1024;
@@ -27,12 +30,15 @@ public class LotteryAdminController(
     };
     private static string LotteryUploadDir => Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "battlepass", "page", "uploads", "lottery");
 
-    private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
+    private bool Auth(string? token) => sessionService.ValidateToken(token)?.IsAdmin == true;
+
+    // 读放宽：管理员或持 lottery.read 的协管可读（协管复用抽奖页浏览/编辑，保存改走 /reviews/submit）。
+    private bool CanRead(string? token) => sessionService.ValidateToken(token)?.HasCapability("lottery.read") == true;
 
     [HttpGet("settings")]
     public object GetSettings([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token))
         {
             return new { success = false, message = "未授权" };
         }
@@ -56,7 +62,7 @@ public class LotteryAdminController(
     [HttpGet("pools")]
     public object GetPools([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token))
         {
             return new { success = false, message = "未授权" };
         }
@@ -68,7 +74,7 @@ public class LotteryAdminController(
     [HttpGet("pools/{poolId}")]
     public object GetPool(string poolId, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token))
         {
             return new { success = false, message = "未授权" };
         }
@@ -388,7 +394,7 @@ public class LotteryAdminController(
     [HttpGet("shop")]
     public object GetShopItems([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token))
         {
             return new { success = false, message = "未授权" };
         }

@@ -236,4 +236,16 @@ el('admin-login-btn').onclick = adminLogin;
 el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
 el('admin-logout').onclick = logout;
 
-if (ADMIN_TOKEN) enterConsole();
+// 称号管理仅管理员可用。协管携交换令牌直达此页时，不进控制台，直接引导返回玩家页（不展示密码框）。
+if (sessionStorage.getItem('bp_actor_type') === 'collaborator') {
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    const gate = document.createElement('section');
+    gate.className = 'view';
+    gate.style.cssText = 'max-width:520px;margin:80px auto;text-align:center';
+    gate.innerHTML = '<h1>称号管理仅管理员可用</h1>'
+        + '<p style="opacity:.8;margin:14px 0 22px">你的协管授权不包含称号管理，请从通行证玩家页重新进入。</p>'
+        + '<a class="btn primary" href="/battlepass/index.html">返回通行证玩家页</a>';
+    document.body.appendChild(gate);
+} else if (ADMIN_TOKEN) {
+    enterConsole();
+}

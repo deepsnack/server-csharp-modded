@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>我的提交 · 通行证</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css?v=20260706-review-v7" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="mychanges-view" class="view">
+        <header class="topbar">
+            <span class="season-name">我的提交</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+            </nav>
+            <button class="btn ghost small" onclick="location.href='index.html'">返回</button>
+        </header>
+
+        <main class="admin-content">
+            <h2>提交历史</h2>
+            <p class="hint">这里显示你提交的所有变更及其审核状态。<b>待审核</b>的变更可以返回原模块继续编辑或撤回；被驳回时可查看理由。</p>
+
+            <main id="change-list" class="change-list">
+                <div class="empty-msg">加载中…</div>
+            </main>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="my-changes.js?v=20260707-pending-edit-v1"></script>
+</body>
+</html>

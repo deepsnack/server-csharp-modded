@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../style.css" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20260706-review-v7" />
 </head>
 <body>
     <div class="grain"></div>
@@ -41,6 +41,8 @@
             </nav>
             <button id="admin-logout" class="btn ghost small">登出</button>
         </header>
+
+        <p id="collab-hint" class="hint hidden" style="margin:0 18px 12px">协管模式：配置修改将提交审核后生效，运营操作（发布/暂停/发币等）仅管理员可用。</p>
 
         <main class="admin-content lottery-admin-content">
             <section class="lottery-admin-section" data-section-panel="pools">
@@ -275,8 +277,9 @@
     </section>
 
     <div id="toast" class="toast"></div>
-    <script src="picker.js"></script>
+    <script src="picker.js?v=20260707-picker-v2"></script>
     <script src="price.js"></script>
-    <script src="lottery.js"></script>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="lottery.js?v=20260707-pending-edit-v1"></script>
 </body>
 </html>

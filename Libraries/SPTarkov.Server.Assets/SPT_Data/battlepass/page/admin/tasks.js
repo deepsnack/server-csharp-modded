@@ -4,14 +4,9 @@ const ADMIN_API = '/battlepass/api/admin';
 const LOTTERY_ADMIN_API = '/battlepass/api/admin/lottery';
 const ITEMS_SEARCH = '/battlepass/api/admin/items/search';
 const ICON_API = '/battlepass/api/icons/';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
+// REGISTER_ADMIN_LOGIN / getAdminToken / isCollaborator / ensureAdminSession / submitChange 由 auth.js 提供（勿在此重复声明 const）。
 let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
 let lotteryPoolsForRewards = [];
-
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) { ADMIN_TOKEN = m[1]; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN); history.replaceState(null, '', location.pathname); }
-})();
 
 // ---- 地图映射 ----
 const MAP_NAMES = [
@@ -52,6 +47,7 @@ const ZONE_NAMES = [
 
 const MULTI_ITEM_FIELDS = {
     'f-weapons': 'weapon',
+    'f-weaponmods': 'weaponMod',
 };
 const TAG_FIELDS = ['f-calibers', 'f-savageroles'];
 const multiItemLabels = {};
@@ -66,7 +62,7 @@ function isTpl(s) { return /^[a-fA-F0-9]{24}$/.test((s || '').trim()); }
 function randHex(n) { const a = new Uint8Array(Math.ceil(n / 2)); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join('').slice(0, n); }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(ADMIN_API + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     return res.json();
 }
@@ -85,11 +81,31 @@ function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'
 function enterConsole() {
     el('login-view').classList.add('hidden');
     el('tasks-view').classList.remove('hidden');
-    loadLotteryPoolsForRewards();
-    loadTasks();
-    loadTaskSettings();
-    loadGenSpec();
-    loadGenPool();
+    if (isCollaborator()) applyCollaboratorUi();
+    return Promise.all([loadLotteryPoolsForRewards(), loadTasks(), loadTaskSettings(), loadGenSpec(), loadGenPool()]);
+}
+
+// 协管态：顶部提示条 + 隐藏仅管理员可用的运营/无审核动作。
+// 允许协管提交审核：任务模板保存/删除(task.upsert/task.delete)、保存生成规格(task.genSpec)。
+// 仅管理员：立即生成、刷新任务池、清空生成池、赛季投放设置保存。
+function applyCollaboratorUi() {
+    showCollaboratorBanner();
+    ['gen-now', 'gen-pool-refresh', 'gen-pool-clear', 'refresh-active-tasks', 'save-task-settings'].forEach(id => {
+        const b = el(id); if (b) b.style.display = 'none';
+    });
+}
+
+function showCollaboratorBanner() {
+    if (el('collab-banner')) return;
+    const bar = document.createElement('div');
+    bar.id = 'collab-banner';
+    bar.className = 'hint';
+    bar.style.cssText = 'margin:10px 16px;padding:10px 14px;border-left:4px solid #e0a030;background:rgba(224,160,48,.12);font-weight:600;';
+    bar.textContent = '协管模式：任务模板/生成规格的修改将提交审核后生效，执行生成/刷新等操作仅管理员可用';
+    const view = el('tasks-view');
+    const topbar = view.querySelector('.topbar');
+    if (topbar && topbar.nextSibling) view.insertBefore(bar, topbar.nextSibling);
+    else view.insertBefore(bar, view.firstChild);
 }
 
 // ---- 任务系统全局设置（写入当前赛季）----
@@ -118,6 +134,7 @@ async function loadTaskSettings() {
     tsSet('ts-season-budget', s.seasonDifficultyBudget, 12);
 }
 async function saveTaskSettings() {
+    if (isCollaborator()) return toast('该操作仅管理员可用', false);
     if (!taskSettingsSeason) { const r = await api('/season'); taskSettingsSeason = (r && r.season) || {}; }
     const payload = {
         ...taskSettingsSeason,
@@ -208,12 +225,19 @@ function collectGenSpec() {
 }
 
 async function saveGenSpec() {
-    const r = await api('/tasks/gen-spec', 'POST', collectGenSpec());
+    const spec = collectGenSpec();
+    if (isCollaborator()) {
+        const r = await submitChange('tasks', 'task.genSpec', spec);
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+        return;
+    }
+    const r = await api('/tasks/gen-spec', 'POST', spec);
     el('gen-msg').textContent = r.success ? '已保存 ' + new Date().toLocaleTimeString() : (r.message || '保存失败');
     toast(r.success ? '生成规格已保存' : (r.message || '失败'), r.success);
 }
 
 async function generateNow() {
+    if (isCollaborator()) return toast('该操作仅管理员可用', false);
     // 先保存当前规格，再生成，避免用未保存的设置
     await api('/tasks/gen-spec', 'POST', collectGenSpec());
     const r = await api('/tasks/generate', 'POST', {});
@@ -240,6 +264,7 @@ async function loadGenPool() {
 }
 
 async function clearGenPool() {
+    if (isCollaborator()) return toast('该操作仅管理员可用', false);
     if (!confirm('确定清空生成池？将删除全部 gen_ 自动/手动生成任务（不影响左侧自定义任务）。')) return;
     const r = await api('/tasks/generated', 'DELETE');
     toast(r && r.success ? `已清空 ${r.cleared || 0} 条生成任务` : ((r && r.message) || '清空失败'), r && r.success);
@@ -248,12 +273,20 @@ async function clearGenPool() {
 
 // ---- 类型卡片 ----
 let currentConditionType = 'Kills';
+const ONE_LIFE_TYPES = new Set(['Kills', 'FindItem', 'PlaceItem', 'VisitZone']);
+
+function updateOneLifeVisibility(resetUnsupported = false) {
+    const supported = ONE_LIFE_TYPES.has(currentConditionType);
+    el('one-life-row').style.display = supported ? '' : 'none';
+    if (!supported && resetUnsupported) el('f-one-life').checked = false;
+}
 document.querySelectorAll('.type-card').forEach(card => {
     card.onclick = () => {
         document.querySelectorAll('.type-card').forEach(c => c.classList.remove('active'));
         card.classList.add('active');
         currentConditionType = card.dataset.ct;
         renderTargetSection();
+        updateOneLifeVisibility(true);
         el('kills-fine').style.display = currentConditionType === 'Kills' ? '' : 'none';
         el('f-id').value = el('f-id').value || genTaskId();
     };
@@ -472,8 +505,9 @@ async function loadTasks() {
         const itemInfo = t.itemRequirements?.length ? ` · ${t.itemRequirements[0].name || t.itemRequirements[0].tpl.slice(0,8)+'…'}` : '';
         const zoneInfo = t.zoneId ? ` · 区域 ${t.zoneId}` : '';
         const locInfo = t.location ? ` · ${mapChinese(t.location)}` : '';
+        const oneLifeInfo = t.oneLife ? ' · 一命完成' : '';
         div.innerHTML = `<div><div><strong>${esc(t.title)}</strong> ${scopeBadge}</div>
-            <div class="meta">${esc(t.id)} · ${ctLabel}${itemInfo}${zoneInfo}${locInfo} · 难度${t.difficulty || 1} · +${t.xp}XP</div></div>`;
+            <div class="meta">${esc(t.id)} · ${ctLabel}${itemInfo}${zoneInfo}${locInfo}${oneLifeInfo} · 难度${t.difficulty || 1} · +${t.xp}XP</div></div>`;
         const acts = document.createElement('div'); acts.className = 'acts';
         const del = document.createElement('button'); del.className = 'mini del'; del.textContent = '×';
         del.onclick = e => { e.stopPropagation(); delTask(t.id); };
@@ -496,6 +530,8 @@ function fillForm(t) {
         c.classList.toggle('active', c.dataset.ct === currentConditionType);
     });
     renderTargetSection();
+    updateOneLifeVisibility(false);
+    el('f-one-life').checked = !!t.oneLife;
     el('kills-fine').style.display = currentConditionType === 'Kills' ? '' : 'none';
 
     el('f-id').value = t.id; el('f-title').value = t.title; el('f-desc').value = t.description;
@@ -514,7 +550,7 @@ function fillForm(t) {
         if (el('f-plant-time')) el('f-plant-time').value = t.plantTime ?? '';
         if (el('f-find-in-raid')) el('f-find-in-raid').checked = !!t.findInRaid;
 
-        setCsv('f-weapons', t.weapons); setCsv('f-calibers', t.weaponCalibers);
+        setCsv('f-weapons', t.weapons); setCsv('f-calibers', t.weaponCalibers); setCsv('f-weaponmods', t.weaponMods);
         setChoiceValues('f-bodyparts', t.bodyParts); setCsv('f-savageroles', t.savageRoles);
         el('f-distcompare').value = t.distanceCompare || ''; el('f-distval').value = t.distanceValue ?? '';
         el('f-daytimefrom').value = t.daytimeFrom ?? ''; el('f-daytimeto').value = t.daytimeTo ?? '';
@@ -549,12 +585,13 @@ function clearForm() {
     el('f-scope').value = 'daily'; el('f-rotation').value = 'random'; el('f-xp').value = 500; el('f-weight').value = 1;
     el('f-difficulty').value = 1;
     el('f-rewardmode').value = 'xp'; setRewards([]); updateRewardVisibility();
+    el('f-one-life').checked = false; updateOneLifeVisibility(true);
     el('delete-task').style.display = 'none';
     el('kills-fine').style.display = currentConditionType === 'Kills' ? '' : 'none';
     renderTargetSection();
     setTimeout(() => {
         ['f-distcompare', 'f-distval', 'f-daytimefrom', 'f-daytimeto',
-            'f-weapons', 'f-calibers', 'f-savageroles',
+            'f-weapons', 'f-weaponmods', 'f-calibers', 'f-savageroles',
             'f-zone', 'f-plant-time'].forEach(id => {
                 const e = el(id); if (e) { if (e.type === 'number') e.value = ''; else e.value = ''; }
             });
@@ -587,7 +624,7 @@ function refreshRewardPoolSelects() {
 
 async function loadLotteryPoolsForRewards() {
     try {
-        const res = await fetch(LOTTERY_ADMIN_API + '/pools', { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
+        const res = await fetch(LOTTERY_ADMIN_API + '/pools', { headers: { 'X-Admin-Token': getAdminToken() } });
         const r = await res.json();
         if (!r.success) return;
         lotteryPoolsForRewards = r.pools || [];
@@ -632,6 +669,7 @@ el('save-task').onclick = async () => {
         xp: +el('f-xp').value,
         weight: +el('f-weight').value,
         difficulty: +el('f-difficulty').value || 1,
+        oneLife: ONE_LIFE_TYPES.has(ct) && !!el('f-one-life').checked,
     };
     if (!task.id) return toast('请填写或自动生成任务 ID', false);
 
@@ -639,7 +677,7 @@ el('save-task').onclick = async () => {
         task.target = el('f-target')?.value || 'Any';
         task.count = +(el('f-count')?.value || 3);
         task.location = mapVal('f-location');
-        task.weapons = csv('f-weapons'); task.weaponCalibers = csv('f-calibers');
+        task.weapons = csv('f-weapons'); task.weaponCalibers = csv('f-calibers'); task.weaponMods = csv('f-weaponmods');
         task.bodyParts = choiceValues('f-bodyparts'); task.savageRoles = csv('f-savageroles');
         task.distanceCompare = el('f-distcompare')?.value || null;
         task.distanceValue = numOrNull('f-distval');
@@ -678,6 +716,11 @@ el('save-task').onclick = async () => {
     const rewards = collectRewards();
     if (rewards.length) task.rewards = rewards;
 
+    if (isCollaborator()) {
+        const r = await submitChange('tasks', 'task.upsert', task);
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+        return;
+    }
     const r = await api('/tasks', 'POST', task);
     toast(r.success ? '已保存' : (r.message || '失败'), r.success);
     if (r.success) { loadTasks(); el('delete-task').style.display = ''; }
@@ -688,6 +731,11 @@ el('delete-task').onclick = async () => {
     const id = el('f-id').value.trim();
     if (!id) return;
     if (!confirm('删除任务 ' + id + ' ?')) return;
+    if (isCollaborator()) {
+        const r = await submitChange('tasks', 'task.delete', { id });
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+        return;
+    }
     const r = await api('/tasks', 'DELETE', { id });
     toast(r.success ? '已删除' : (r.message || '失败'), r.success);
     if (r.success) { clearForm(); loadTasks(); }
@@ -695,12 +743,31 @@ el('delete-task').onclick = async () => {
 
 async function delTask(id) {
     if (!confirm('删除任务 ' + id + ' ?')) return;
+    if (isCollaborator()) {
+        const r = await submitChange('tasks', 'task.delete', { id });
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+        return;
+    }
     const r = await api('/tasks', 'DELETE', { id });
     toast(r.success ? '已删除' : '失败', r.success);
     loadTasks();
 }
 
+function applyPendingTaskEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    const payload = change.proposedPayload || {};
+    if (change.commandType === 'task.upsert') fillForm(payload);
+    else if (change.commandType === 'task.genSpec') {
+        el('gen-scopes').innerHTML = GEN_SCOPES.map(([scope, label]) => genBlockHtml(scope, label, payload[scope])).join('');
+        el('gen-scopes').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (change.commandType === 'task.delete') {
+        toast('请选择新的任务并点击删除，以更新原删除审核单', true);
+    }
+}
+
 async function refreshActiveTasks() {
+    if (isCollaborator()) return toast('该操作仅管理员可用', false);
     const profileId = el('refresh-profile').value.trim();
     const body = { scope: el('refresh-scope').value };
     if (profileId) body.profileId = profileId;
@@ -724,4 +791,5 @@ Object.entries(MULTI_ITEM_FIELDS).forEach(([id, category]) => setupMultiItemPick
 TAG_FIELDS.forEach(setupTagPicker);
 setupHourSelects();
 
-if (ADMIN_TOKEN) enterConsole();
+// ---- 入口登录 gate：协管 #bpsso= 免密落地换会话；admin 旧式 #sso= 由文件头兼容处理 ----
+bootstrapAdminPage({ moduleCap: 'tasks.read', onReady: async edit => { ADMIN_TOKEN = getAdminToken(); await enterConsole(); applyPendingTaskEdit(edit); } });

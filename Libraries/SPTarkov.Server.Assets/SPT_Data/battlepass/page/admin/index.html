@@ -4,11 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>通行证管理后台</title>
+    <script>
+        // 尽可能早地接住 Portal SSO，防止外部资源加载失败或旧脚本缓存让页面退回密码框。
+        (function capturePortalAdminToken() {
+            const params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+            const token = params.get('sso');
+            if (!token) return;
+
+            try {
+                sessionStorage.setItem('bp_admin_token', token);
+                sessionStorage.setItem('bp_actor_type', 'admin');
+            } catch (_) {
+                return; // 保留 fragment，交给 auth.js 再尝试消费。
+            }
+
+            params.delete('sso');
+            params.delete('bpsso');
+            const rest = params.toString();
+            history.replaceState(null, '', location.pathname + location.search + (rest ? '#' + rest : ''));
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../style.css" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20260708-track-collapse-v1" />
 </head>
 <body>
     <div class="grain"></div>
@@ -44,7 +64,12 @@
                 <a class="tab" href="recipes.html">配方 →</a>
                 <a class="tab" href="titles.html">称号 →</a>
                 <a class="tab" href="items.html">物品 →</a>
+                <a class="tab" href="quests.html">商人任务 →</a>
                 <a class="tab" href="flea.html">跳蚤 →</a>
+                <a class="tab" href="reviews.html" id="nav-reviews">审核 →</a>
+                <a class="tab" href="audit.html" id="nav-audit">审计 →</a>
+                <a class="tab" href="access.html" id="nav-access">协管 →</a>
+                <a class="tab" href="my-changes.html" id="nav-mychanges">我的提交 →</a>
             </nav>
             <button id="admin-logout" class="btn ghost small">登出</button>
         </header>
@@ -215,8 +240,9 @@
     </section>
 
     <div id="toast" class="toast"></div>
-    <script src="picker.js"></script>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="picker.js?v=20260707-picker-v2"></script>
     <script src="reward-editor.js"></script>
-    <script src="script.js"></script>
+    <script src="script.js?v=20260711-quests-collab-v1"></script>
 </body>
 </html>

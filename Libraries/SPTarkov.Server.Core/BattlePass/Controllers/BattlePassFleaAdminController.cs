@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Common;
@@ -11,8 +12,9 @@ using SPTarkov.DI.Annotations;
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
 
 /// <summary>
-///     跳蚤黑名单接管管理端 API（X-Admin-Token）：读写 flea-control 配置（保存即应用到 RagfairConfig），
-///     物品搜索复用 <see cref="ItemSearchService"/>。
+///     跳蚤黑名单接管管理端 API：读写 flea-control 配置（保存即应用到 RagfairConfig），
+///     物品搜索复用 <see cref="ItemSearchService"/>。鉴权统一走
+///     <see cref="BattlePassAdminSessionService.ValidateToken"/>（兼容原始 token 与会话 token）。
 /// </summary>
 [Injectable]
 [ApiController]
@@ -22,15 +24,17 @@ public class BattlePassFleaAdminController(
     FleaControlSync fleaSync,
     DatabaseService databaseService,
     ConfigServer configServer,
-    ItemBaselineService baseline
+    ItemBaselineService baseline,
+    BattlePassAdminSessionService sessionService
 )
 {
-    private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
+    private bool Auth(string? token) => sessionService.ValidateToken(token)?.IsAdmin == true;
+    private bool CanRead(string? token, string capability) => sessionService.ValidateToken(token)?.HasCapability(capability) == true;
 
     [HttpGet("config")]
     public object GetConfig([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "flea.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -121,7 +125,7 @@ public class BattlePassFleaAdminController(
     [HttpGet("blacklist/effective")]
     public object GetEffectiveBlacklist([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "flea.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -200,7 +204,7 @@ public class BattlePassFleaAdminController(
         [FromHeader(Name = "X-Admin-Token")] string? token = null
     )
     {
-        if (!Auth(token))
+        if (!CanRead(token, "flea.read"))
         {
             return new { success = false, message = "未授权" };
         }

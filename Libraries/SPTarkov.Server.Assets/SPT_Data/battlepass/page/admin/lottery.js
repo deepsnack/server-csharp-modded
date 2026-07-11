@@ -1,18 +1,7 @@
 'use strict';
 
 const ADMIN_API = '/battlepass/api/admin/lottery';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
 const ICON_API = '/battlepass/api/icons/';
-let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
-
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) {
-        ADMIN_TOKEN = m[1];
-        sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
-        history.replaceState(null, '', location.pathname);
-    }
-})();
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -39,7 +28,7 @@ function toast(msg, ok) {
 }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(ADMIN_API + path, {
         method: method || 'GET',
         headers,
@@ -54,7 +43,7 @@ async function uploadAsset(kind, file) {
     form.append('kind', kind);
     const res = await fetch(ADMIN_API + '/assets/upload?kind=' + encodeURIComponent(kind), {
         method: 'POST',
-        headers: { 'X-Admin-Token': ADMIN_TOKEN },
+        headers: { 'X-Admin-Token': getAdminToken() },
         body: form,
     });
     return res.json();
@@ -99,26 +88,19 @@ async function handlePoolAssetUpload(kind) {
     toast(kind === 'cover' ? '展示图已上传' : '图标已上传', true);
 }
 
-async function adminLogin() {
+async function doAdminLogin() {
     const password = el('admin-pass').value;
-    const res = await fetch(REGISTER_ADMIN_LOGIN, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-    });
-    const r = await res.json();
+    const r = await adminLogin(password);
     if (!r.success) {
         el('admin-login-msg').textContent = r.message || '登录失败';
         return;
     }
-    ADMIN_TOKEN = r.token;
-    sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
     enterConsole();
 }
 
 function logout() {
-    ADMIN_TOKEN = '';
-    sessionStorage.removeItem('bp_admin_token');
+    clearAdminToken();
+    clearActorType();
     el('lottery-admin-view').classList.add('hidden');
     el('login-view').classList.remove('hidden');
 }
@@ -132,9 +114,28 @@ let singleStashEditor = null;
 function enterConsole() {
     el('login-view').classList.add('hidden');
     el('lottery-admin-view').classList.remove('hidden');
+    applyCollaboratorUi();
     if (!singleStashEditor) singleStashEditor = BpPrice.createEditor(el('p-stash-cost'));
     newShopItem();
-    loadAll();
+    return loadAll();
+}
+
+// 协管态：仅“配置类”变更走审核提交，运营类动作直接隐藏，避免协管点了报错。
+function applyCollaboratorUi() {
+    const collab = isCollaborator();
+    el('collab-hint')?.classList.toggle('hidden', !collab);
+    if (!collab) return;
+    // 奖池运营动作（暂存/发布/暂停/结束/归档/复制草稿/重置进度）+ 商店运营（发布/暂存）
+    [
+        'save-pool-draft', 'publish-pool', 'pause-pool', 'end-pool', 'archive-pool',
+        'copy-pool', 'reset-one-pool', 'reset-all-pool', 'reset-profile-id',
+        'publish-shop-item', 'save-shop-draft',
+    ].forEach(id => el(id)?.classList.add('hidden'));
+    // 记录 / 运维（发币、审计日志、事务）读端点未对协管放开，隐藏对应 Tab 与面板
+    document.querySelectorAll('.tabs .tab[data-section="records"], .tabs .tab[data-section="ops"]')
+        .forEach(t => t.classList.add('hidden'));
+    document.querySelectorAll('[data-section-panel="records"], [data-section-panel="ops"]')
+        .forEach(p => p.classList.add('hidden'));
 }
 
 function switchSection(section) {
@@ -143,13 +144,19 @@ function switchSection(section) {
 }
 
 async function loadAll() {
-    await Promise.all([loadSettings(), loadPools(), loadShop(), loadRecords(), loadLogs(), loadTransactions()]);
+    const tasks = [loadSettings(), loadPools(), loadShop()];
+    // 记录/审计/事务读端点仅管理员，协管跳过以免 403 噪音
+    if (!isCollaborator()) tasks.push(loadRecords(), loadLogs(), loadTransactions());
+    await Promise.all(tasks);
 }
 
 async function loadSettings() {
     const r = await api('/settings');
     if (!r.success) return toast(r.message || '读取设置失败', false);
-    const s = r.settings || {};
+    fillSettings(r.settings || {});
+}
+
+function fillSettings(s) {
     el('set-enabled').checked = s.enabled !== false;
     el('set-entry').checked = s.playerEntryEnabled !== false;
     el('set-shop').checked = s.exchangeShopEnabled !== false;
@@ -169,8 +176,17 @@ async function saveSettings() {
         broadcastNameMode: el('set-name-mode').value,
         timeZoneId: el('set-timezone').value.trim() || null,
     };
+    if (await submitAsCollaborator('lottery.settings', payload)) return;
     const r = await api('/settings', 'POST', payload);
     toast(r.success ? '设置已保存' : (r.message || '保存失败'), r.success);
+}
+
+// 协管保存分流：白名单配置类改走审核队列。返回 true 表示已处理（调用方应 return）。
+async function submitAsCollaborator(commandType, input) {
+    if (!isCollaborator()) return false;
+    const r = await submitChange('lottery', commandType, input);
+    toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+    return true;
 }
 
 function defaultPool() {
@@ -736,6 +752,7 @@ function collectPool(forceDraft) {
 async function savePool(forceDraft) {
     const collected = collectPool(forceDraft);
     if (collected.invalid) return toast(collected.message, false);
+    if (await submitAsCollaborator('lottery.pool.upsert', collected.pool)) return;
     const r = await api('/pools', 'POST', collected.pool);
     if (!r.success) return toast(r.message || '保存失败', false);
     currentPool = r.pool;
@@ -746,6 +763,7 @@ async function savePool(forceDraft) {
 }
 
 async function poolAction(action, body) {
+    if (isCollaborator()) return toast('奖池发布 / 暂停 / 结束 / 归档仅管理员可用', false);
     if (!currentPool?.id) return toast('请先保存奖池', false);
     const r = await api('/pools/' + encodeURIComponent(currentPool.id) + '/' + action, 'POST', body);
     toast(r.success ? '操作成功' : (r.message || '操作失败'), r.success);
@@ -756,6 +774,11 @@ async function poolAction(action, body) {
 async function deletePool() {
     if (!currentPool?.id) return toast('请先选择奖池', false);
     const name = currentPool.name || currentPool.id;
+    if (isCollaborator()) {
+        if (!confirm(`确定提交删除奖池「${name}」的审核申请？批准后生效。`)) return;
+        await submitAsCollaborator('lottery.pool.delete', { id: currentPool.id });
+        return;
+    }
     if (!confirm(`确定永久删除奖池「${name}」？\n\n该操作会删除奖池配置，并清理该奖池独占的本地上传图标/展示图。抽奖历史记录不会删除。`)) {
         return;
     }
@@ -772,6 +795,7 @@ async function deletePool() {
 }
 
 async function resetPoolProgress(all) {
+    if (isCollaborator()) return toast('抽奖进度重置仅管理员可用', false);
     if (!currentPool?.id) return toast('请先保存奖池', false);
     const body = all ? { all: true } : { profileId: el('reset-profile-id').value.trim() };
     if (!all && !body.profileId) return toast('请填写 profileId', false);
@@ -781,6 +805,7 @@ async function resetPoolProgress(all) {
 }
 
 async function copyPool() {
+    if (isCollaborator()) return toast('复制奖池草稿仅管理员可用', false);
     if (!currentPool?.id) return toast('请先保存奖池', false);
     const r = await api('/pools/' + encodeURIComponent(currentPool.id) + '/copy-draft', 'POST');
     toast(r.success ? '已复制为草稿' : (r.message || '复制失败'), r.success);
@@ -918,6 +943,7 @@ async function saveShopItem(forceDraft) {
         endUtc: toUnixSec(el('s-end').value),
         reward: readRewardMini(el('shop-reward-editor')),
     };
+    if (isCollaborator()) { await submitAsCollaborator('lottery.shop.upsert', item); return null; }
     const r = await api('/shop', 'POST', item);
     toast(r.success ? (forceDraft ? '商品已暂存' : '商品已保存') : (r.message || '保存失败'), r.success);
     if (r.success) {
@@ -929,7 +955,26 @@ async function saveShopItem(forceDraft) {
     return null;
 }
 
+function applyPendingLotteryEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    const payload = change.proposedPayload || {};
+    if (change.commandType === 'lottery.settings') {
+        switchSection('config');
+        fillSettings(payload);
+    } else if (change.commandType === 'lottery.pool.upsert') {
+        switchSection('pools');
+        fillPool(payload);
+    } else if (change.commandType === 'lottery.shop.upsert') {
+        switchSection('shop');
+        fillShopItem(payload);
+    } else if (change.commandType.includes('.delete')) {
+        toast('请选择新的目标并执行删除，以更新原删除审核单', true);
+    }
+}
+
 async function publishShopItem() {
+    if (isCollaborator()) return toast('商品发布仅管理员可用（可提交上架申请待审核）', false);
     const item = await saveShopItem(false);
     if (!item?.id) return;
     const r = await api('/shop/' + encodeURIComponent(item.id) + '/publish', 'POST');
@@ -949,7 +994,7 @@ async function loadRecords() {
 }
 
 async function exportRecords() {
-    const res = await fetch(ADMIN_API + '/records/export', { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
+    const res = await fetch(ADMIN_API + '/records/export', { headers: { 'X-Admin-Token': getAdminToken() } });
     if (!res.ok) return toast('导出失败', false);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -990,7 +1035,7 @@ function renderGrantSelected() {
 
 async function searchGrantPlayers() {
     const q = el('g-search').value.trim();
-    const res = await fetch(ADMIN_API + '/players/search' + (q ? '?q=' + encodeURIComponent(q) : ''), { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
+    const res = await fetch(ADMIN_API + '/players/search' + (q ? '?q=' + encodeURIComponent(q) : ''), { headers: { 'X-Admin-Token': getAdminToken() } });
     const r = await res.json();
     const box = el('g-search-results');
     if (!r.success) { box.innerHTML = `<div class="row-item muted">${esc(r.message || '搜索失败')}</div>`; return; }
@@ -1019,6 +1064,7 @@ function toggleGrantSearch() {
 }
 
 async function grantCurrency() {
+    if (isCollaborator()) return toast('发放抽奖券 / 代币仅管理员可用', false);
     const body = {
         all: el('g-all').checked,
         profileIds: [...grantSelected.keys()],
@@ -1063,8 +1109,8 @@ async function loadTransactions() {
 }
 
 document.querySelectorAll('.tabs .tab[data-section]').forEach(btn => btn.onclick = () => switchSection(btn.dataset.section));
-el('admin-login-btn').onclick = adminLogin;
-el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+el('admin-login-btn').onclick = doAdminLogin;
+el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminLogin(); });
 el('admin-logout').onclick = logout;
 el('save-settings').onclick = saveSettings;
 el('new-pool').onclick = () => fillPool(defaultPool());
@@ -1112,4 +1158,5 @@ el('refresh-logs').onclick = loadLogs;
 el('log-category').onchange = loadLogs;
 el('refresh-transactions').onclick = loadTransactions;
 
-if (ADMIN_TOKEN) enterConsole();
+// ---- 启动：协管 #bpsso= 免密落地换会话，或复用已有管理会话；否则显示登录卡/协管 gate ----
+bootstrapAdminPage({ moduleCap: 'lottery.read', onReady: async edit => { await enterConsole(); applyPendingLotteryEdit(edit); } });

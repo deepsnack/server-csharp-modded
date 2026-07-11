@@ -2,15 +2,9 @@
 
 const ADMIN_API = '/battlepass/api/admin';
 const LOTTERY_ADMIN_API = '/battlepass/api/admin/lottery';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
-let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
+// REGISTER_ADMIN_LOGIN / token 存取 / Portal SSO 统一由 auth.js 提供。
+let ADMIN_TOKEN = getAdminToken();
 let lotteryPoolsForCodes = [];
-
-// 支持 Portal SSO：URL 片段 #sso=token
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) { ADMIN_TOKEN = m[1]; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN); history.replaceState(null, '', location.pathname); }
-})();
 
 function el(id) { return document.getElementById(id); }
 function toast(msg, ok) {
@@ -19,31 +13,104 @@ function toast(msg, ok) {
 }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(ADMIN_API + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     return res.json();
 }
 
-// ---- 登录（复用注册后台的 admin/login 取 token）----
-async function adminLogin() {
+// ---- 登录：密码登录复用 auth.js 的 adminLogin ----
+async function doAdminPasswordLogin() {
     const password = el('admin-pass').value;
-    const res = await fetch(REGISTER_ADMIN_LOGIN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password })
-    });
-    const r = await res.json();
+    const r = await adminLogin(password);
     if (!r.success) { el('admin-login-msg').textContent = r.message || '登录失败'; return; }
-    ADMIN_TOKEN = r.token;
-    sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
+    ADMIN_TOKEN = getAdminToken();
+    setActorType(r.actorType || 'admin');
     enterConsole();
 }
 
-function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('admin-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
+function logout() {
+    clearAdminToken(); clearActorType(); ADMIN_TOKEN = '';
+    el('admin-view').classList.add('hidden'); el('login-view').classList.remove('hidden');
+}
 
-function enterConsole() {
+// 协管态：按 capabilities 动态显示可提交模块入口；隐藏管理员专属功能。
+// 外链模块 tab 与对应 *.read 能力的映射（这些模块页内已做协管分流）。
+const COLLAB_MODULE_TABS = [
+    ['tasks.html', 'tasks.read'],
+    ['trader.html', 'trader.read'],
+    ['shop.html', 'shop.read'],
+    ['lottery.html', 'lottery.read'],
+    ['recipes.html', 'recipes.read'],
+    ['items.html', 'items.read'],
+    ['quests.html', 'quests.read'],
+    ['flea.html', 'flea.read'],
+];
+
+function applyCollaboratorUi() {
+    if (!isCollaborator()) return;
+    // 管理员专属分页标签：赛季 / 激活码 / 玩家 一律隐藏（协管无对应读写能力）。
+    ['season', 'codes', 'players'].forEach(key => {
+        document.querySelectorAll('.tab[data-tab="' + key + '"]').forEach(t => t.style.display = 'none');
+    });
+    // 奖励轨：有 tracks.read 才显示。
+    document.querySelectorAll('.tab[data-tab="tracks"]').forEach(t => {
+        t.style.display = hasCapability('tracks.read') ? '' : 'none';
+    });
+    // 外链业务模块：按各自 *.read 能力显示 / 隐藏。
+    COLLAB_MODULE_TABS.forEach(([href, cap]) => {
+        const a = document.querySelector('.tab[href="' + href + '"]');
+        if (a) a.style.display = hasCapability(cap) ? '' : 'none';
+    });
+    // 管理员专属外链：称号 / 审核 / 协管授权 一律隐藏。
+    ['titles.html'].forEach(href => {
+        const a = document.querySelector('.tab[href="' + href + '"]');
+        if (a) a.style.display = 'none';
+    });
+    const navReviews = el('nav-reviews'); if (navReviews) navReviews.style.display = 'none';
+    const navAudit = el('nav-audit'); if (navAudit) navAudit.style.display = 'none';
+    const navAccess = el('nav-access'); if (navAccess) navAccess.style.display = 'none';
+    // 我的提交（nav-mychanges）保留给协管。
+    // 顶部提示条
+    const topbar = document.querySelector('.topbar');
+    if (topbar && !el('collab-hint-bar')) {
+        const bar = document.createElement('div');
+        bar.id = 'collab-hint-bar';
+        bar.className = 'hint';
+        bar.style.cssText = 'width:100%;margin:0;padding:6px 14px;background:rgba(200,150,40,.12);border-bottom:1px solid rgba(200,150,40,.4);color:#e8c268;font-size:12px';
+        bar.textContent = '协管模式：你的修改将提交管理员审核后生效；赛季 / 激活码 / 玩家 / 称号 / 审核 等操作仅管理员可用。';
+        topbar.parentNode.insertBefore(bar, topbar.nextSibling);
+    }
+    // 默认切到第一个可用分页：优先奖励轨，否则不强制切换（外链模块由用户点击进入）。
+    if (hasCapability('tracks.read')) {
+        const tracksTab = document.querySelector('.tab[data-tab="tracks"]');
+        if (tracksTab) tracksTab.click();
+    }
+}
+
+async function enterConsole() {
     el('login-view').classList.add('hidden');
     el('admin-view').classList.remove('hidden');
-    loadSeason(); loadCodes(); loadPlayers();
-    loadLotteryPoolsForCodes().finally(loadTracks);
+    if (isCollaborator()) {
+        // 协管只加载可提交的奖励轨；季/码/玩家读接口对协管未放行，跳过以免 401 噪音。
+        applyCollaboratorUi();
+        if (hasCapability('tracks.read')) {
+            await loadLotteryPoolsForCodes();
+            await loadTracks();
+        }
+        return;
+    }
+    await Promise.all([loadSeason(), loadCodes(), loadPlayers(), (async () => { await loadLotteryPoolsForCodes(); await loadTracks(); })()]);
+}
+
+function applyPendingTracksEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    if (change.commandType !== 'tracks.save') return;
+    const proposed = deepClone(change.proposedPayload || {});
+    Object.keys(proposed).forEach(level => { allTracks[level] = proposed[level]; });
+    syncTracksJson();
+    resetAndRender();
+    buildRewardOverview();
 }
 
 // ---- 标签 ----
@@ -106,6 +173,7 @@ async function loadSeason() {
     if (r.success) { loadedSeason = r.season || {}; fillSeasonForm(r.season); }
 }
 el('save-season').onclick = async () => {
+    if (isCollaborator()) return toast('赛季设置仅管理员可用', false);
     let payload;
     // 如果 JSON 细节展开，优先用 JSON 直改内容；否则用表单
     if (el('season-json-details').open) {
@@ -121,6 +189,7 @@ el('save-season').onclick = async () => {
 // ---- 奖励轨（全等级滚动 · 分步懒加载 · 满级循环奖励）----
 const ICON_API = '/battlepass/api/icons/';
 let allTracks = {};        // { "1":{free,premium}, ..., "0":{...}=循环奖励（满级后逐轮可领） }
+let tracksBaseline = {};   // 载入时的服务端快照；协管提交差量用（仅提交与此不同的等级）
 const CYCLE_KEY = '0';
 const RENDER_CHUNK = 8;
 let trackMaxLevel = 50;
@@ -149,7 +218,55 @@ el('save-json-tracks').onclick = () => {
     postTracksAndSeason(payload);
 };
 
+// 协管差量：只挑出与载入快照 tracksBaseline 不同的等级（含被清空的等级）。
+// 比较前用与 RewardEditor.collect 一致的规范化，避免字段顺序/空值差异造成的假变更。
+const RW_TOKEN_TYPES = ['lotteryGlobalTickets', 'lotteryPoolTickets', 'lotteryExchangeCoins'];
+function canonReward(rw) {
+    rw = rw || {};
+    const type = rw.type || 'item';
+    const isToken = RW_TOKEN_TYPES.includes(type);
+    const tpl = (rw.tpl || '').trim();
+    return {
+        type,
+        tpl: type === 'item' ? tpl : (tpl || null),
+        count: (type === 'item' || isToken) ? Math.max(1, +rw.count || 1) : 1,
+        name: (rw.name || '').trim() || null,
+        featured: !!rw.featured,
+        foundInRaid: type === 'item' ? !!rw.foundInRaid : false,
+        offerId: type === 'purchaseRight' ? (rw.offerId || null) : null,
+        recipeId: type === 'recipe' ? (rw.recipeId || null) : null,
+        titleId: type === 'title' ? (rw.titleId || null) : null,
+        suitId: type === 'clothing' ? (rw.suitId || null) : null,
+        poolId: type === 'lotteryPoolTickets' ? (rw.poolId || null) : null,
+    };
+}
+function canonLevelStr(lv) {
+    lv = lv || {};
+    return JSON.stringify({
+        free: (lv.free || []).map(canonReward),
+        premium: (lv.premium || []).map(canonReward),
+    });
+}
+// 仅返回内容变化的等级；current 有而 baseline 无=新增，被清空=保留空数组，未动=剔除。
+function diffTracks(current, baseline) {
+    const diff = {};
+    for (const key of Object.keys(current || {})) {
+        if (canonLevelStr(current[key]) !== canonLevelStr((baseline || {})[key])) diff[key] = current[key];
+    }
+    return diff;
+}
+
 async function postTracksAndSeason(tracksPayload) {
+    // 协管：奖励轨改走审核队列（tracks.save），且只提交差量等级——审核后台按等级合并，非全量替换。
+    // 等级上限/循环经验属赛季配置，仅管理员可改，协管提交仅含奖励轨本身。
+    if (isCollaborator()) {
+        const diff = diffTracks(tracksPayload, tracksBaseline);
+        const changed = Object.keys(diff).length;
+        if (changed === 0) { toast('奖励轨没有改动，无需提交', false); return false; }
+        const sr = await submitChange('tracks', 'tracks.save', diff);
+        if (sr.success) { toast(`已提交 ${changed} 个等级的改动，等待管理员批准`, true); return true; }
+        toast(sr.message || '提交失败', false); return false;
+    }
     const r = await api('/tracks', 'POST', tracksPayload);
     if (!r.success) { toast(r.message || '保存失败', false); return false; }
     // 等级上限 + 循环每轮经验同步进赛季配置（单一数据源）
@@ -199,29 +316,40 @@ function updateTracksCountInfo() {
 }
 
 // ---- 等级块渲染 ----
-function levelBlockHtml(level, isCycle) {
+function levelBlockHtml(level, isCycle, data) {
     const title = isCycle ? '♾️ 循环奖励（满级后每轮 · 逐轮可领）' : `Lv ${level}`;
     const copyBtn = (!isCycle && level > 1) ? `<button class="mini ghost copy-prev-btn" title="从上一级复制">⧉ 复制 Lv${level - 1}</button>` : '';
-    return `<div class="level-block${isCycle ? ' cycle-block' : ''}" data-level="${isCycle ? CYCLE_KEY : level}">
-        <div class="level-head"><span class="lv-title">${title}</span>${copyBtn}</div>
-        <div class="track-dual">
-            <div class="panel track-col">
-                <div class="panel-head"><h2>🎁 免费</h2><button class="mini add-rw-btn" data-track="free">＋ 添加</button></div>
-                <div class="reward-cards" data-track="free"></div>
-            </div>
-            <div class="panel track-col">
-                <div class="panel-head"><h2>⭐ 付费</h2><button class="mini add-rw-btn" data-track="premium">＋ 添加</button></div>
-                <div class="reward-cards" data-track="premium"></div>
+    const freeCount = (data?.free || []).length;
+    const premiumCount = (data?.premium || []).length;
+    return `<details class="level-block${isCycle ? ' cycle-block' : ''}" data-level="${isCycle ? CYCLE_KEY : level}">
+        <summary class="level-head" aria-expanded="false">
+            <span class="level-toggle-main">
+                <span class="lv-title">${title}</span>
+                <span class="level-reward-summary">免费 ${freeCount} · 付费 ${premiumCount}</span>
+            </span>
+            ${copyBtn}
+            <span class="level-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <div class="level-details">
+            <div class="track-dual">
+                <div class="panel track-col">
+                    <div class="panel-head"><h2>🎁 免费</h2><button class="mini add-rw-btn" data-track="free">＋ 添加</button></div>
+                    <div class="reward-cards" data-track="free"></div>
+                </div>
+                <div class="panel track-col">
+                    <div class="panel-head"><h2>⭐ 付费</h2><button class="mini add-rw-btn" data-track="premium">＋ 添加</button></div>
+                    <div class="reward-cards" data-track="premium"></div>
+                </div>
             </div>
         </div>
-    </div>`;
+    </details>`;
 }
 
 function renderLevelBlock(level, isCycle) {
     const key = isCycle ? CYCLE_KEY : String(level);
     const data = allTracks[key] || { free: [], premium: [] };
     const wrap = document.createElement('div');
-    wrap.innerHTML = levelBlockHtml(level, isCycle);
+    wrap.innerHTML = levelBlockHtml(level, isCycle, data);
     const block = wrap.firstElementChild;
     el('tracks-list').appendChild(block);
     fillRewardCards(block, 'free', data.free || []);
@@ -236,25 +364,44 @@ function fillRewardCards(block, track, items) {
 }
 
 function wireBlock(block) {
+    const summary = block.querySelector('.level-head');
+    block.addEventListener('toggle', () => {
+        summary?.setAttribute('aria-expanded', String(block.open));
+        if (!block.open) updateLevelSummary(block);
+    });
     block.querySelectorAll('.add-rw-btn').forEach(btn => btn.onclick = () => {
         const track = btn.dataset.track;
         const lvl = block.dataset.level;
         allTracks[lvl] = { free: collectRewardsIn(block, 'free'), premium: collectRewardsIn(block, 'premium') };
         allTracks[lvl][track].push({ tpl: '', count: 1, name: null, featured: false, type: 'item' });
         fillRewardCards(block, track, allTracks[lvl][track]);
+        updateLevelSummary(block);
         syncTracksJson();
     });
     const copyBtn = block.querySelector('.copy-prev-btn');
-    if (copyBtn) copyBtn.onclick = () => {
+    if (copyBtn) copyBtn.onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
         const level = +block.dataset.level;
         const prev = allTracks[String(level - 1)];
         if (!prev) return toast('上一级无数据', false);
         allTracks[String(level)] = { free: deepClone(prev.free || []), premium: deepClone(prev.premium || []) };
         fillRewardCards(block, 'free', allTracks[String(level)].free);
         fillRewardCards(block, 'premium', allTracks[String(level)].premium);
+        updateLevelSummary(block);
         syncTracksJson();
         toast('已从 Lv' + (level - 1) + ' 复制', true);
     };
+    block.addEventListener('click', event => {
+        if (event.target.closest('.rw-del')) requestAnimationFrame(() => updateLevelSummary(block));
+    });
+}
+
+function updateLevelSummary(block) {
+    const freeCount = block.querySelectorAll('.reward-cards[data-track="free"] > .rw-card').length;
+    const premiumCount = block.querySelectorAll('.reward-cards[data-track="premium"] > .rw-card').length;
+    const summary = block.querySelector('.level-reward-summary');
+    if (summary) summary.textContent = `免费 ${freeCount} · 付费 ${premiumCount}`;
 }
 
 // 奖励卡渲染/选择器/类型切换已迁到共享组件 reward-editor.js（RewardEditor）。
@@ -408,6 +555,7 @@ function resetAndRender() {
 async function loadTracks() {
     const r = await api('/tracks');
     allTracks = (r.success && r.tracks) ? r.tracks : {};
+    tracksBaseline = deepClone(allTracks);
     try {
         const sr = await api('/season');
         if (sr.success) {
@@ -469,6 +617,7 @@ async function loadLotteryPoolsForCodes() {
 }
 
 el('gen-codes').onclick = async () => {
+    if (isCollaborator()) return toast('激活码生成仅管理员可用', false);
     const type = el('c-type').value;
     if (type === 'lotteryPoolTickets' && !el('c-pool').value) {
         toast('请选择限定抽奖券绑定的奖池', false);
@@ -596,6 +745,7 @@ function selectedPlayerIds() {
 }
 
 async function resetBattlePassProgress(all) {
+    if (isCollaborator()) return toast('玩家进度重置仅管理员可用', false);
     const preservePremium = el('bp-reset-preserve-premium').checked;
     const ids = all ? [] : selectedPlayerIds();
     if (!all && ids.length === 0) {
@@ -622,8 +772,25 @@ async function resetBattlePassProgress(all) {
 
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-el('admin-login-btn').onclick = adminLogin;
-el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+el('admin-login-btn').onclick = doAdminPasswordLogin;
+el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminPasswordLogin(); });
 el('admin-logout').onclick = logout;
 
-if (ADMIN_TOKEN) enterConsole();
+// 入口：管理员使用已存会话或 Portal #sso=；协管携带交换令牌进入并按能力分流。
+(async function () {
+    const ok = await ensureAdminSession();
+    if (ok) {
+        ADMIN_TOKEN = getAdminToken();
+        let edit = null;
+        try { edit = await loadPendingChangeEdit(); }
+        catch (error) { showCollaboratorGate(error.message || '无法加载待审内容'); return; }
+        await enterConsole();
+        applyPendingTracksEdit(edit);
+        return;
+    }
+    // 会话失败：协管走无密码 gate（铁律：绝不向协管展示管理员密码框），管理员回落密码登录。
+    if (handleSessionFailure()) return;
+    if (getAdminSessionError()) {
+        el('admin-login-msg').textContent = getAdminSessionError();
+    }
+})();

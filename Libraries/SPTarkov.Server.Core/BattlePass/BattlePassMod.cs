@@ -1,4 +1,5 @@
 using SPTarkov.Server.Core.BattlePass.Portal;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.BattlePass.Patches;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
@@ -25,7 +26,17 @@ public class BattlePassMod(
     BattlePassRecipeSync recipeSync,
     QuestSkipTicketService questSkipTicketService,
     BattlePassService battlePassService,
-    BattlePassTraderAccessService traderAccessService
+    BattlePassTraderAccessService traderAccessService,
+    BattlePassReviewService reviewService,
+    ShopChangeHandler shopChangeHandler,
+    TaskChangeHandler taskChangeHandler,
+    TrackChangeHandler trackChangeHandler,
+    LotteryChangeHandler lotteryChangeHandler,
+    TraderChangeHandler traderChangeHandler,
+    RecipeChangeHandler recipeChangeHandler,
+    ItemsChangeHandler itemsChangeHandler,
+    FleaChangeHandler fleaChangeHandler,
+    QuestChangeHandler questChangeHandler
 ) : IOnLoad
 {
     public Task OnLoad()
@@ -35,9 +46,23 @@ public class BattlePassMod(
         battlePassService.InitializeExistingRewardLedgers();
         traderAccessService.Register();
         questSkipTicketService.Register();
+
+        // 注册协管审核模块处理器（管理员即时写入与协管审核放行共用同一业务入口），
+        // 并恢复上次未完成的 applying 变更（重启前批准中途中断的），保证审核链路可用。
+        reviewService.RegisterHandler(shopChangeHandler);
+        reviewService.RegisterHandler(taskChangeHandler);
+        reviewService.RegisterHandler(trackChangeHandler);
+        reviewService.RegisterHandler(lotteryChangeHandler);
+        reviewService.RegisterHandler(traderChangeHandler);
+        reviewService.RegisterHandler(recipeChangeHandler);
+        reviewService.RegisterHandler(itemsChangeHandler);
+        reviewService.RegisterHandler(fleaChangeHandler);
+        reviewService.RegisterHandler(questChangeHandler);
+        reviewService.RecoverOnStartup();
+        reviewService.PurgeExpiredAudit();
         // 页面随 Assets 工程输出到 SPT_Data/battlepass/page/，无需运行期解压；
         // 静态页 /battlepass 由 BattlePassPageController（MVC catch-all）提供。
-        traderSync.Sync(); // 注入「通行证商人」：货架/元信息全后台可配，购买权限逐玩家解锁
+        traderSync.Sync(resetPurchaseState: true); // 注入「通行证商人」并在服务端重启时同步刷新实际库存/限购
         recipeSync.Sync(); // 注入自定义藏身处配方（锁定配方挂通行证虚拟任务锁，经奖励轨 recipe 解锁）
         portalBridge.Start(); // Portal 兼容 sidecar：作为"通行证管理"独立卡片自注册到 SptManagerPortal，支持 SSO 免密进管理页
 
@@ -69,6 +94,7 @@ public class BattlePassMod(
             logger.Success($"  称号页: https://{host}:{httpConfig.Port}/battlepass/titles.html");
             logger.Success($"  管理页: https://{host}:{httpConfig.Port}/battlepass/admin/index.html");
             logger.Success($"  任务页: https://{host}:{httpConfig.Port}/battlepass/admin/tasks.html");
+            logger.Success($"  商人任务管理: https://{host}:{httpConfig.Port}/battlepass/admin/quests.html");
             logger.Success("=========================================================");
         }
         catch (Exception ex)

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>协管授权 · 管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="style.css?v=20260706-review-v7" />
+</head>
+<body>
+    <div class="grain"></div>
+
+    <section id="access-view" class="view">
+        <header class="topbar">
+            <span class="season-name">协管授权</span>
+            <nav class="tabs">
+                <a class="tab" href="index.html">← 通行证后台</a>
+                <a class="tab" href="reviews.html">审核 →</a>
+                <a class="tab" href="audit.html">审计 →</a>
+            </nav>
+            <button class="btn ghost small" onclick="location.href='index.html'">返回</button>
+        </header>
+
+        <main class="admin-content">
+            <h2>协管授权</h2>
+            <p class="hint">授权玩家成为<b>协管</b>后，其在通行证后台的改动会进入<b>审核队列</b>，需管理员批准后生效。
+                “撤销权限”会保留记录以便恢复；“删除”会永久移除记录。两种操作都会立即使现有协管会话失效。</p>
+
+            <div class="admin-cols">
+                <div class="panel">
+                    <div class="panel-head"><h2>授权新协管</h2></div>
+                    <div class="form-body">
+                        <label>搜索玩家（账号名 / 游戏昵称）</label>
+                        <div class="player-picker">
+                            <input id="player-search" placeholder="输入账号名或游戏昵称搜索…" autocomplete="off" />
+                            <div id="player-results" class="picker-results" style="display:none"></div>
+                        </div>
+                        <div id="picked-player" class="picked-player" style="display:none">
+                            <span class="pp-label">已选玩家</span>
+                            <span id="picked-name" class="pp-name"></span>
+                            <span id="picked-id" class="pp-id"></span>
+                            <button class="btn ghost small" onclick="clearPicked()">清除</button>
+                        </div>
+                        <button id="add-btn" class="btn primary small" disabled>授权为协管</button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head"><h2>现有协管</h2><button class="btn ghost small" onclick="load()">刷新</button></div>
+                    <div class="form-body">
+                        <main id="grant-list" class="grant-list">
+                            <div class="empty-msg">加载中…</div>
+                        </main>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </section>
+
+    <div id="toast" class="toast"></div>
+    <script src="auth.js?v=20260707-pending-edit-v1"></script>
+    <script src="access.js?v=20260706-collab-access-v3"></script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Common;
@@ -19,9 +20,12 @@ namespace SPTarkov.Server.Core.BattlePass.Controllers;
 [Injectable]
 [ApiController]
 [Route("battlepass/api/admin/query")]
-public class BattlePassQueryController(ItemSearchService itemSearch, Services.DatabaseService databaseService, Services.LocaleService localeService)
+public class BattlePassQueryController(ItemSearchService itemSearch, Services.DatabaseService databaseService, Services.LocaleService localeService, BattlePassAdminSessionService sessionService)
 {
-    private static bool Auth(string? token) => WebRegisterController.IsAdminAuthorized(token);
+    // 只读的游戏数据目录检索（物品/任务/货架/配方/服装/称号），供奖励轨、任务、商人等各模块
+    // 图形化填表所需。管理员与「在册协管」均可检索——协管为填奖励/配置表单必须能搜；
+    // 不涉及写操作或敏感数据。ValidateToken 对失效/被撤权的协管会返回 null，从而被拒。
+    private bool Auth(string? token) => sessionService.ValidateToken(token) is not null;
 
     /// <summary>检索物品（按名称/简称/tpl）。source = all | mod | vanilla；category = all | weapon | equipment | weaponMod。</summary>
     [HttpGet("items")]

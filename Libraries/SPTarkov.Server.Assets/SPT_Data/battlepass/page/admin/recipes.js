@@ -1,15 +1,10 @@
 'use strict';
 
 // 自定义藏身处配方管理页：登录/Token 与通行证后台一致（X-Admin-Token / Portal SSO）。
+// REGISTER_ADMIN_LOGIN / token 存取 / adminLogin / ensureAdminSession / submitChange 均由 auth.js 提供。
 const ADMIN_API = '/battlepass/api/admin';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
 const ICON_API = '/battlepass/api/icons/';
-let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
-
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) { ADMIN_TOKEN = m[1]; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN); history.replaceState(null, '', location.pathname); }
-})();
+let ADMIN_TOKEN = getAdminToken();
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -19,28 +14,38 @@ function toast(msg, ok) {
 }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(ADMIN_API + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     return res.json();
 }
 
 // ---- 登录 ----
-async function adminLogin() {
+async function doAdminLogin() {
     const password = el('admin-pass').value;
-    const res = await fetch(REGISTER_ADMIN_LOGIN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password })
-    });
-    const r = await res.json();
+    const r = await adminLogin(password);
     if (!r.success) { el('admin-login-msg').textContent = r.message || '登录失败'; return; }
-    ADMIN_TOKEN = r.token;
-    sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
+    setActorType(r.actorType || 'admin');
+    ADMIN_TOKEN = getAdminToken();
     enterConsole();
 }
-function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('recipes-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
+function logout() { clearAdminToken(); clearActorType(); el('recipes-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
 function enterConsole() {
     el('login-view').classList.add('hidden');
     el('recipes-view').classList.remove('hidden');
-    loadRecipes();
+    if (isCollaborator()) applyCollaboratorUi();
+    return loadRecipes();
+}
+
+// ---- 协管 UI 适配：顶部提示条 ----
+function applyCollaboratorUi() {
+    if (el('collab-banner')) return;
+    const bar = document.createElement('p');
+    bar.id = 'collab-banner';
+    bar.className = 'hint';
+    bar.style.cssText = 'border-left:4px solid #e0a030;margin:0 0 10px';
+    bar.textContent = '协管模式：保存配方将提交审核，等待管理员批准后生效。';
+    const content = document.querySelector('.admin-content .tab-pane') || document.querySelector('.admin-content');
+    if (content) content.insertBefore(bar, content.firstChild);
 }
 
 // ---- 建筑（HideoutAreas 枚举值 → 中文名；仅列常用制造区域在前，其余折叠在后）----
@@ -153,6 +158,12 @@ async function saveRecipe() {
         locked: el('r-locked').checked,
         note: el('r-note').value.trim() || null,
     };
+    if (isCollaborator()) {
+        const sr = await submitChange('recipes', 'recipe.upsert', body);
+        toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+        if (sr.success) { clearForm(); }
+        return;
+    }
     const r = await api('/custom-recipes', 'POST', body);
     if (r.success) {
         toast('配方已保存并注入（id: ' + r.id.slice(0, 8) + '…）', true);
@@ -186,6 +197,12 @@ async function loadRecipes() {
         copyBtn.onclick = () => { navigator.clipboard.writeText(rc.id); toast('已复制 ' + rc.id, true); };
         const delBtn = document.createElement('button'); delBtn.className = 'btn ghost small'; delBtn.textContent = '删除';
         delBtn.onclick = async () => {
+            if (isCollaborator()) {
+                if (!confirm('提交删除该配方的审核申请？')) return;
+                const sr = await submitChange('recipes', 'recipe.delete', { id: rc.id });
+                toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+                return;
+            }
             if (!confirm('删除该配方？（已领取解锁的玩家会失去此制造项）')) return;
             const res = await api('/custom-recipes/' + encodeURIComponent(rc.id), 'DELETE');
             if (res.success) { toast('已删除', true); loadRecipes(); } else toast('删除失败', false);
@@ -196,9 +213,16 @@ async function loadRecipes() {
     });
 }
 
+function applyPendingRecipeEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    if (change.commandType === 'recipe.upsert') loadIntoForm(change.proposedPayload || {});
+    else if (change.commandType === 'recipe.delete') toast('请选择新的配方并点击删除，以更新原删除审核单', true);
+}
+
 // ---- 绑定 ----
-el('admin-login-btn').onclick = adminLogin;
-el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+el('admin-login-btn').onclick = doAdminLogin;
+el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminLogin(); });
 el('admin-logout').onclick = logout;
 el('r-add-ing').onclick = () => addIngredientRow();
 el('save-recipe').onclick = saveRecipe;
@@ -214,4 +238,4 @@ BpPicker.attachItem(el('r-product'), el('r-product-results'), ds => {
 
 fillAreaSelect();
 clearForm();
-if (ADMIN_TOKEN) enterConsole();
+bootstrapAdminPage({ moduleCap: 'recipes.read', onReady: async edit => { ADMIN_TOKEN = getAdminToken(); await enterConsole(); applyPendingRecipeEdit(edit); } });

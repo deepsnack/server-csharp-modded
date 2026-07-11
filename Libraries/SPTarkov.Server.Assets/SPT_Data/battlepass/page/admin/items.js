@@ -1,17 +1,12 @@
 'use strict';
 
 // 物品管控管理页：复用通行证后台 admin token / SSO（同 trader.js / titles.js）。
+// REGISTER_ADMIN_LOGIN / token 存取 / adminLogin / ensureAdminSession / submitChange 均由 auth.js 提供。
 const ADMIN_API = '/battlepass/api/admin/items';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
 const ICON_API = '/battlepass/api/icons/';
-let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
+let ADMIN_TOKEN = getAdminToken();
 let SELECTED = null; // 当前选中的 tpl
 let costEd = null;   // 当前新增表单的统一价格编辑器（BpPrice），无价格字段时为 null
-
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) { ADMIN_TOKEN = m[1]; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN); history.replaceState(null, '', location.pathname); }
-})();
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -22,22 +17,37 @@ function toast(msg, ok) {
 function isTpl(s) { return /^[a-fA-F0-9]{24}$/.test((s || '').trim()); }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(ADMIN_API + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     return res.json();
 }
 
 // ---- 登录 ----
-async function adminLogin() {
+async function doAdminLogin() {
     const password = el('admin-pass').value;
-    const res = await fetch(REGISTER_ADMIN_LOGIN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-    const r = await res.json();
+    const r = await adminLogin(password);
     if (!r.success) { el('admin-login-msg').textContent = r.message || '登录失败'; return; }
-    ADMIN_TOKEN = r.token; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
+    setActorType(r.actorType || 'admin');
+    ADMIN_TOKEN = getAdminToken();
     enterConsole();
 }
-function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('items-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
-function enterConsole() { el('login-view').classList.add('hidden'); el('items-view').classList.remove('hidden'); }
+function logout() { clearAdminToken(); clearActorType(); el('items-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
+function enterConsole() {
+    el('login-view').classList.add('hidden'); el('items-view').classList.remove('hidden');
+    if (isCollaborator()) applyCollaboratorUi();
+}
+
+// ---- 协管 UI 适配：顶部提示条 ----
+function applyCollaboratorUi() {
+    if (el('collab-banner')) return;
+    const bar = document.createElement('p');
+    bar.id = 'collab-banner';
+    bar.className = 'hint';
+    bar.style.cssText = 'border-left:4px solid #e0a030;margin:0 0 10px';
+    bar.textContent = '协管模式：增删获取途径 / 跳蚤黑名单将提交审核，等待管理员批准后生效。';
+    const view = el('items-view');
+    if (view) view.insertBefore(bar, view.firstChild);
+}
 
 // ---- 搜索 ----
 async function doSearch() {
@@ -129,9 +139,14 @@ function renderGraph(g) {
 
 // ---- 快捷跳蚤黑名单（增量端点，复用 flea 控制器）----
 async function toggleFleaBlacklist(tpl, add) {
+    if (isCollaborator()) {
+        const sr = await submitChange('flea', 'flea.blacklist.toggle', { tpl, add });
+        toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+        return;
+    }
     const r = await fetch('/battlepass/api/admin/flea/blacklist/toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() },
         body: JSON.stringify({ tpl, add })
     }).then(x => x.json()).catch(() => ({ success: false }));
     toast(r.success ? (add ? '已加入跳蚤黑名单' : '已移出跳蚤黑名单') : (r.message || '操作失败'), r.success);
@@ -143,6 +158,11 @@ async function removeEntry(source, ref) {
     if (!confirm('移除该获取途径？管控会持久保存（重启后依然生效），可随时在「已应用编辑」中撤销恢复（即时生效）。')) return;
     const ov = { op: 'remove', source, tpl: SELECTED };
     Object.assign(ov, ref || {});
+    if (isCollaborator()) {
+        const sr = await submitChange('items', 'item.edit', ov);
+        toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+        return;
+    }
     const r = await api('/edit', 'POST', ov);
     toast(r.success ? '已移除' : (r.message || '失败'), r.success);
     if (r.success) selectItem(SELECTED);
@@ -223,6 +243,11 @@ async function submitAdd(tpl) {
         ov.weight = +el('f-weight').value || 1;
         if (!ov.locationId) return toast('请填地图', false);
     }
+    if (isCollaborator()) {
+        const sr = await submitChange('items', 'item.edit', ov);
+        toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+        return;
+    }
     const r = await api('/edit', 'POST', ov);
     toast(r.success ? '已新增' : (r.message || '失败'), r.success);
     if (r.success) selectItem(tpl);
@@ -242,16 +267,62 @@ async function renderOverrides(body, tpl) {
         lbl.textContent = `${o.op === 'add' ? '增' : '删'} · ${SOURCE_LABEL[o.source] || o.source} · ${o.traderId || o.questId || o.recipeId || o.locationId || o.side || ''}`;
         row.appendChild(lbl);
         const undo = document.createElement('button'); undo.className = 'mini'; undo.textContent = '撤销';
-        undo.onclick = async () => { const x = await api('/overrides', 'DELETE', { id: o.id }); toast(x.success ? '已撤销' : '失败', x.success); if (x.success) selectItem(tpl); };
+        undo.onclick = async () => {
+            if (isCollaborator()) {
+                const sr = await submitChange('items', 'item.override.delete', { id: o.id });
+                toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+                return;
+            }
+            const x = await api('/overrides', 'DELETE', { id: o.id }); toast(x.success ? '已撤销' : '失败', x.success); if (x.success) selectItem(tpl);
+        };
         row.appendChild(undo); sec.appendChild(row);
     });
     body.appendChild(sec);
 }
 
-el('admin-login-btn').onclick = adminLogin;
-el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+async function applyPendingItemsEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    const payload = change.proposedPayload || {};
+    if (change.commandType === 'item.override.delete') {
+        toast('请选择新的已应用编辑并点击撤销，以更新原删除审核单', true);
+        return;
+    }
+    if (change.commandType !== 'item.edit' || !payload.tpl) return;
+
+    await selectItem(payload.tpl);
+    if (payload.op !== 'add') {
+        toast('请选择新的获取途径操作，以更新原审核单', true);
+        return;
+    }
+
+    el('add-source').value = payload.source || 'trader';
+    renderAddFields();
+    if (payload.source === 'trader') {
+        el('f-traderId').value = payload.traderId || '';
+        el('f-loyalty').value = payload.loyalty || 1;
+        costEd?.setCost(payload.cost || []);
+    } else if (payload.source === 'quest') {
+        el('f-questId').value = payload.questId || '';
+        el('f-group').value = payload.rewardGroup || 'Success';
+        el('f-count').value = payload.count || 1;
+    } else if (payload.source === 'hideout') {
+        el('f-role').value = payload.role || 'output';
+        el('f-recipeId').value = payload.recipeId || '';
+        el('f-count').value = payload.count || 1;
+        costEd?.setCost(payload.cost || []);
+    } else if (payload.source === 'loot') {
+        el('f-locationId').value = payload.locationId || '';
+        el('f-kind').value = payload.lootKind || 'static';
+        el('f-container').value = payload.containerOrSpawn || '';
+        el('f-weight').value = payload.weight || 1;
+    }
+}
+
+el('admin-login-btn').onclick = doAdminLogin;
+el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminLogin(); });
 el('admin-logout').onclick = logout;
 el('search-btn').onclick = doSearch;
 el('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
-if (ADMIN_TOKEN) enterConsole();
+bootstrapAdminPage({ moduleCap: 'items.read', onReady: async edit => { ADMIN_TOKEN = getAdminToken(); enterConsole(); await applyPendingItemsEdit(edit); } });

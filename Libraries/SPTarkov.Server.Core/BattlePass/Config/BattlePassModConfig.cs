@@ -35,7 +35,12 @@ public record BattlePassModConfig
     [JsonPropertyName("portalBridge")]
     public BattlePassPortalBridgeConfig? PortalBridge { get; set; }
 
+    /// <summary>协管审计日志保留天数，允许 1-3650 天，默认 180 天。</summary>
+    [JsonPropertyName("auditLogRetentionDays")]
+    public int AuditLogRetentionDays { get; set; } = 180;
+
     private static BattlePassModConfig? CurrentConfig;
+    private static readonly object ConfigLock = new();
 
     private static string ConfigPath =>
         Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "battlepass", "config.json");
@@ -54,6 +59,7 @@ public record BattlePassModConfig
                 var template = new BattlePassModConfig
                 {
                     PortalBridge = new BattlePassPortalBridgeConfig(),
+                    AuditLogRetentionDays = 180,
                 };
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllText(
@@ -73,5 +79,28 @@ public record BattlePassModConfig
             CurrentConfig = new BattlePassModConfig();
             return CurrentConfig;
         }
+    }
+
+    public static int GetAuditLogRetentionDays()
+    {
+        var config = CurrentConfig ?? Load();
+        return Math.Clamp(config.AuditLogRetentionDays, 1, 3650);
+    }
+
+    public static int SaveAuditLogRetentionDays(int days)
+    {
+        days = Math.Clamp(days, 1, 3650);
+        lock (ConfigLock)
+        {
+            var config = Load();
+            config.AuditLogRetentionDays = days;
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+            var tempPath = ConfigPath + ".tmp";
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tempPath, ConfigPath, true);
+            CurrentConfig = config;
+        }
+
+        return days;
     }
 }

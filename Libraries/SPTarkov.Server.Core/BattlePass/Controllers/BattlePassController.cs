@@ -24,6 +24,7 @@ public class BattlePassController(
     ItemControl.ItemSearchService itemSearchService,
     BattlePassHandoverService handoverService,
     BattlePassShopService shopService,
+    Administration.BattlePassChangeStore changeStore,
     ISptLogger<BattlePassController> logger
 ) : ControllerBase
 {
@@ -45,6 +46,17 @@ public class BattlePassController(
         }
 
         var items = databaseService.GetItems();
+
+        // 批量解析本批奖励引用的所有 item tpl → 展示名（三张 locale 表只物化一次后复用）。
+        // 勿在下面的 .Select 里逐奖励单发 ResolveItemName——那样每个奖励都触发整张 locale 表反序列化，
+        // 既慢又拉长与其它请求并发读 DB 的时间窗（曾放大裸共享集合并发写隐患、导致玩家页任务/奖励轨崩溃）。
+        var nameMap = itemSearchService.ResolveItemNames(
+            rewards
+                .Where(r => string.Equals((r.Type ?? "item").Trim(), "item", StringComparison.OrdinalIgnoreCase))
+                .Select(r => r.Tpl?.Trim() ?? "")
+                .Where(Models.Common.MongoId.IsValidMongoId)
+                .Select(t => new Models.Common.MongoId(t)));
+
         return rewards
             .Where(r =>
             {
@@ -72,7 +84,7 @@ public class BattlePassController(
                         || Models.Common.MongoId.IsValidMongoId(displayName);
                     if (nameLooksLikeId)
                     {
-                        var resolved = itemSearchService.ResolveItemName(new Models.Common.MongoId(tpl));
+                        var resolved = nameMap.GetValueOrDefault(tpl);
                         return r with { Name = string.IsNullOrWhiteSpace(resolved) ? null : resolved };
                     }
                 }
@@ -80,6 +92,19 @@ public class BattlePassController(
                 return r;
             })
             .ToList();
+    }
+
+    /// <summary>返回该玩家的管理权限信息（是否可进入后台）。</summary>
+    private object? GetManagementInfo(string profileId)
+    {
+        var grant = Administration.BattlePassCollaboratorGrantPolicy.Find(
+            changeStore.GetGrants(), profileId, requireEnabled: true);
+        if (grant is null) return null;
+        return new
+        {
+            canEnterAdmin = true,
+            capabilities = Administration.BattlePassCollaboratorGrantPolicy.NormalizeCapabilities(grant.Capabilities),
+        };
     }
 
     /// <summary>从 SPT 客户端请求的 PHPSESSID cookie 解析会话 id（= profileId）。客户端插件经 RequestHandler 自动携带。</summary>
@@ -170,6 +195,10 @@ public class BattlePassController(
         try
         {
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
 
             // 进度由客户端 /track 上报结算；此处只按周期滚动刷新活跃任务
@@ -233,6 +262,7 @@ public class BattlePassController(
                     claimedFree = prog.ClaimedCycleFree,
                     claimedPremium = prog.ClaimedCyclePremium,
                 },
+                management = GetManagementInfo(profileId),
             };
         }
         catch (Exception ex)
@@ -254,6 +284,10 @@ public class BattlePassController(
         try
         {
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
 
             // 进度来自客户端 /track 上报；任务页只按周期滚动刷新活跃任务
@@ -267,6 +301,12 @@ public class BattlePassController(
                 .Select(a =>
                 {
                     templates.TryGetValue(a.TaskId, out var tpl);
+                    var rewardMode = (tpl?.RewardMode ?? "xp").Trim().ToLowerInvariant();
+                    if (rewardMode is not ("xp" or "items" or "both"))
+                    {
+                        rewardMode = "xp";
+                    }
+
                     return new
                     {
                         a.TaskId,
@@ -274,6 +314,8 @@ public class BattlePassController(
                         title = tpl?.Title ?? a.TaskId,
                         description = tpl?.Description ?? "",
                         xp = tpl?.Xp ?? 0,
+                        rewardMode,
+                        rewards = rewardMode is "items" or "both" ? SanitizeRewards(tpl?.Rewards) : [],
                         target = tpl?.Count ?? 0,
                         progress = a.Progress,
                         completed = a.CreditedXp,
@@ -411,6 +453,10 @@ public class BattlePassController(
             }
 
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
             // 先按周期自动滚动（可能重置对应 scope 的刷新预算），再判定主动刷新额度
             trackService.RefreshActiveTasks(profileId, prog);
@@ -509,6 +555,10 @@ public class BattlePassController(
             }
 
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
             trackService.RefreshActiveTasks(profileId, prog);
 
@@ -564,6 +614,10 @@ public class BattlePassController(
         try
         {
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
             if (trackService.RefreshActiveTasks(profileId, prog))
             {
@@ -586,6 +640,7 @@ public class BattlePassController(
                         zoneId = tpl?.ZoneId,
                         itemRequirements = tpl?.ItemRequirements ?? new List<BpTaskItemRequirement>(),
                         singleRaid = tpl?.SingleRaid ?? false,
+                        oneLife = tpl?.OneLife ?? false,
                         progress = a.Progress,
                         done = a.CreditedXp,
                     };
@@ -625,6 +680,10 @@ public class BattlePassController(
             }
 
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
             trackService.RefreshActiveTasks(profileId, prog); // 确保活跃任务为当期
             var result = trackService.ApplyRaidTrack(profileId, prog, season, payload);
@@ -679,6 +738,10 @@ public class BattlePassController(
             var track = request.TryGetProperty("track", out var tr) ? tr.GetString() ?? "free" : "free";
 
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
             var (ok, message) = battlePassService.Claim(profileId, prog, season, level, track);
             return new { success = ok, message };
@@ -705,6 +768,10 @@ public class BattlePassController(
             var track = request.TryGetProperty("track", out var tr) ? tr.GetString() ?? "free" : "free";
 
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
             var (ok, message) = battlePassService.ClaimCycle(profileId, prog, season, cycle, track);
             return new { success = ok, message };
@@ -801,6 +868,10 @@ public class BattlePassController(
         {
             var code = request.TryGetProperty("code", out var c) ? c.GetString() : null;
             var season = BattlePassStore.GetSeason();
+            // 同一 profile 的进度对象在 ProgressCache 中是共享单实例；浏览器打开页面会并行发多个请求，
+            // 多线程同时读写 prog.ActiveTasks 等非并发集合会抛 "concurrent update...non-concurrent collections"。
+            // 按 profile 串行化访问（不同 profile 仍并行），守卫随方法/try 作用域结束自动释放（含异常路径）。
+            using var progGate = BattlePassStore.LockProfile(profileId);
             var prog = battlePassService.GetOrResetProgress(profileId, season);
 
             var (ok, message) = activationCodeService.Redeem(profileId, prog, season, code);

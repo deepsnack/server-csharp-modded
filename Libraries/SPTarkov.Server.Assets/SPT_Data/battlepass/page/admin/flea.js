@@ -1,17 +1,12 @@
 'use strict';
 
 // 跳蚤黑名单接管管理页。复用通行证后台 admin token / SSO。
+// REGISTER_ADMIN_LOGIN / token 存取 / adminLogin / ensureAdminSession / submitChange 均由 auth.js 提供。
 const FLEA_API = '/battlepass/api/admin/flea';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
 const ICON_API = '/battlepass/api/icons/';
-let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
+let ADMIN_TOKEN = getAdminToken();
 let CFG = null;
 const NAME_CACHE = {}; // tpl -> 物品名（黑/白名单 chip 同显 ID + 名称）
-
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) { ADMIN_TOKEN = m[1]; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN); history.replaceState(null, '', location.pathname); }
-})();
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -19,21 +14,37 @@ function toast(msg, ok) { const t = el('toast'); t.textContent = msg; t.classNam
 function isTpl(s) { return /^[a-fA-F0-9]{24}$/.test((s || '').trim()); }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(FLEA_API + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     return res.json();
 }
 
-async function adminLogin() {
+async function doAdminLogin() {
     const password = el('admin-pass').value;
-    const res = await fetch(REGISTER_ADMIN_LOGIN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-    const r = await res.json();
+    const r = await adminLogin(password);
     if (!r.success) { el('admin-login-msg').textContent = r.message || '登录失败'; return; }
-    ADMIN_TOKEN = r.token; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
+    setActorType(r.actorType || 'admin');
+    ADMIN_TOKEN = getAdminToken();
     enterConsole();
 }
-function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('flea-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
-function enterConsole() { el('login-view').classList.add('hidden'); el('flea-view').classList.remove('hidden'); loadConfig(); loadEffective(); }
+function logout() { clearAdminToken(); clearActorType(); el('flea-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
+function enterConsole() {
+    el('login-view').classList.add('hidden'); el('flea-view').classList.remove('hidden');
+    if (isCollaborator()) applyCollaboratorUi();
+    return Promise.all([loadConfig(), loadEffective()]);
+}
+
+// ---- 协管 UI 适配：顶部提示条 ----
+function applyCollaboratorUi() {
+    if (el('collab-banner')) return;
+    const bar = document.createElement('p');
+    bar.id = 'collab-banner';
+    bar.className = 'hint';
+    bar.style.cssText = 'border-left:4px solid #e0a030;margin:0 0 10px';
+    bar.textContent = '协管模式：保存配置 / 放开物品将提交审核，等待管理员批准后生效。';
+    const view = el('flea-view');
+    if (view) view.insertBefore(bar, view.firstChild);
+}
 
 // 三态下拉：不接管 / 开 / 关
 function fillToggle(sel, val) {
@@ -142,6 +153,13 @@ function renderEffective() {
     if (shown === 0) box.innerHTML = '<div class="meta">（无匹配项）</div>';
 }
 async function releaseEffective(it) {
+    if (isCollaborator()) {
+        const sr = it.reason === 'managed'
+            ? await submitChange('flea', 'flea.blacklist.toggle', { tpl: it.tpl, add: false })
+            : await submitChange('flea', 'flea.whitelist.toggle', { tpl: it.tpl, add: true });
+        toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+        return;
+    }
     let r;
     if (it.reason === 'managed') {
         r = await api('/blacklist/toggle', 'POST', { tpl: it.tpl, add: false });
@@ -160,6 +178,11 @@ el('save-flea').onclick = async () => {
     document.querySelectorAll('select[data-k]').forEach(sel => {
         const v = sel.value; CFG[sel.dataset.k] = v === '' ? null : (v === 'true');
     });
+    if (isCollaborator()) {
+        const sr = await submitChange('flea', 'flea.config.save', CFG);
+        toast(sr.success ? '已提交审核，等待管理员批准' : (sr.message || '提交失败'), sr.success);
+        return;
+    }
     const r = await api('/config', 'POST', CFG);
     toast(r.success ? '已保存并应用' : (r.message || '失败'), r.success);
 };
@@ -175,8 +198,28 @@ el('cat-add').onclick = () => {
     el('cat-input').value = ''; renderChips();
 };
 
-el('admin-login-btn').onclick = adminLogin;
-el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+function applyPendingFleaEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    const payload = change.proposedPayload || {};
+    if (change.commandType === 'flea.config.save') {
+        CFG = payload;
+        CFG.blacklistTpls ||= [];
+        CFG.whitelistTpls ||= [];
+        CFG.blacklistCategories ||= [];
+        document.querySelectorAll('select[data-k]').forEach(sel => fillToggle(sel, CFG[sel.dataset.k]));
+        renderChips();
+    } else if (change.commandType === 'flea.blacklist.toggle') {
+        el('bl-q').value = payload.tpl || '';
+        toast('调整黑名单后再次执行对应操作，即可更新原审核单', true);
+    } else if (change.commandType === 'flea.whitelist.toggle') {
+        el('wl-q').value = payload.tpl || '';
+        toast('调整白名单后再次执行对应操作，即可更新原审核单', true);
+    }
+}
+
+el('admin-login-btn').onclick = doAdminLogin;
+el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminLogin(); });
 el('admin-logout').onclick = logout;
 
-if (ADMIN_TOKEN) enterConsole();
+bootstrapAdminPage({ moduleCap: 'flea.read', onReady: async edit => { ADMIN_TOKEN = getAdminToken(); await enterConsole(); applyPendingFleaEdit(edit); } });
