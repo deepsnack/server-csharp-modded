@@ -10,12 +10,12 @@ namespace SPTarkov.Server.Core.BattlePass.Controllers;
 public class QuestSkipController(QuestSkipService questSkipService) : ControllerBase
 {
     [HttpGet("state")]
-    public QuestSkipStateResult State([FromHeader(Name = "X-BP-Token")] string? token = null)
+    public async Task<QuestSkipStateResult> State([FromHeader(Name = "X-BP-Token")] string? token = null)
     {
         var profileId = BattlePassSession.Resolve(token);
         return profileId is null
             ? new QuestSkipStateResult { Success = false, Message = "未登录或会话已过期" }
-            : questSkipService.GetState(profileId);
+            : await questSkipService.GetStateAsync(profileId);
     }
 
     [HttpPost("objectives/skip")]

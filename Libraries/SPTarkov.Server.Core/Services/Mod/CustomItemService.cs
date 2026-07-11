@@ -10,6 +10,12 @@ using SPTarkov.Server.Core.Utils.Cloners;
 
 namespace SPTarkov.Server.Core.Services.Mod;
 
+public enum CustomItemOwnershipMode
+{
+    RegisterCallingMod,
+    CoreOwned,
+}
+
 [Injectable]
 public class CustomItemService(
     ISptLogger<CustomItemService> logger,
@@ -31,6 +37,20 @@ public class CustomItemService(
     /// <param name="newItemDetails"> Item details for the new item to be created </param>
     /// <returns> tplId of the new item created </returns>
     public CreateItemResult CreateItemFromClone(NewItemFromCloneDetails newItemDetails)
+    {
+        return CreateItemFromClone(newItemDetails, CustomItemOwnershipMode.RegisterCallingMod, Assembly.GetCallingAssembly());
+    }
+
+    public CreateItemResult CreateItemFromClone(NewItemFromCloneDetails newItemDetails, CustomItemOwnershipMode ownershipMode)
+    {
+        return CreateItemFromClone(newItemDetails, ownershipMode, Assembly.GetCallingAssembly());
+    }
+
+    private CreateItemResult CreateItemFromClone(
+        NewItemFromCloneDetails newItemDetails,
+        CustomItemOwnershipMode ownershipMode,
+        Assembly callingAssembly
+    )
     {
         var result = new CreateItemResult();
         var tables = databaseService.GetTables();
@@ -73,7 +93,10 @@ public class CustomItemService(
             AddToWeaponShelf(newItemId);
         }
 
-        modItemCacheService.AddModItem(Assembly.GetCallingAssembly(), newItemId);
+        if (ownershipMode == CustomItemOwnershipMode.RegisterCallingMod)
+        {
+            modItemCacheService.AddModItem(callingAssembly, newItemId);
+        }
 
         result.Success = true;
         result.ItemId = newItemId;

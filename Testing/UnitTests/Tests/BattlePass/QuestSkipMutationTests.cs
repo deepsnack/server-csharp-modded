@@ -37,6 +37,34 @@ public class QuestSkipMutationTests
             Assert.That(_stashService.CountTpl(pmc, QuestSkipTicketService.TicketTpl.ToString(), false), Is.EqualTo(1));
             Assert.That(status.CompletedConditions, Is.EqualTo(new[] { first.Id.ToString() }));
             Assert.That(status.Status, Is.EqualTo(QuestStatusEnum.Started));
+            Assert.That(pmc.TaskConditionCounters, Does.ContainKey(first.Id));
+            Assert.That(pmc.TaskConditionCounters![first.Id].Value, Is.EqualTo(first.Value));
+            Assert.That(pmc.TaskConditionCounters[first.Id].SourceId, Is.EqualTo(status.QId));
+        });
+    }
+
+    [Test]
+    public void EnsureCompletedCounter_RepairsMissingAndStaleClientProgress()
+    {
+        var condition = Condition(5);
+        var status = Status(condition.Id.ToString());
+        var pmc = Profile(status, ticketCount: 0);
+
+        var created = QuestSkipService.EnsureCompletedCounter(pmc, status.QId, condition);
+        var counter = pmc.TaskConditionCounters![condition.Id];
+        counter.Value = 2;
+        var repaired = QuestSkipService.EnsureCompletedCounter(pmc, status.QId, condition);
+        var unchanged = QuestSkipService.EnsureCompletedCounter(pmc, status.QId, condition);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(created, Is.True);
+            Assert.That(repaired, Is.True);
+            Assert.That(unchanged, Is.False);
+            Assert.That(counter.Id, Is.EqualTo(condition.Id));
+            Assert.That(counter.SourceId, Is.EqualTo(status.QId));
+            Assert.That(counter.Type, Is.EqualTo(condition.ConditionType));
+            Assert.That(counter.Value, Is.EqualTo(condition.Value));
         });
     }
 

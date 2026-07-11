@@ -16,6 +16,9 @@ public record QuestSkipStateResult
     [JsonPropertyName("inRaid")]
     public bool InRaid { get; init; }
 
+    [JsonPropertyName("clientOnline")]
+    public bool ClientOnline { get; init; }
+
     [JsonPropertyName("tasks")]
     public List<QuestSkipTaskView> Tasks { get; init; } = [];
 }

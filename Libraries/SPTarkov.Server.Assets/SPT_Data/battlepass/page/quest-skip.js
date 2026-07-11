@@ -151,7 +151,7 @@ function renderObjective(task, objective) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'btn primary small quest-skip-button';
-        button.textContent = STATE.inRaid ? '战局中不可跳过' : (STATE.ticketCount > 0 ? '跳过目标' : '缺少跳过券');
+        button.textContent = skipButtonText();
         button.disabled = !objective.canSkip || !objective.actionId;
         button.onclick = () => openConfirm(task, objective);
         action.appendChild(button);
@@ -159,6 +159,13 @@ function renderObjective(task, objective) {
 
     row.append(copy, action);
     return row;
+}
+
+function skipButtonText() {
+    if (STATE.inRaid) return '战局中不可跳过';
+    if (STATE.clientOnline) return '游戏在线不可跳过';
+    if ((STATE.ticketCount || 0) <= 0) return '缺少跳过券';
+    return '跳过目标';
 }
 
 function openConfirm(task, objective) {
