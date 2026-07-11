@@ -34,6 +34,7 @@ public class QuestHelper(
     SeasonalEventService seasonalEventService,
     MailSendService mailSendService,
     ConfigServer configServer,
+    BattlePass.QuestClientMaskService questMaskService,
     ICloner cloner
 )
 {
@@ -329,6 +330,12 @@ public class QuestHelper(
         var eligibleQuests = GetQuestsFromDb()
             .Where(quest =>
             {
+                // SPT-BattlePass: 后台禁用的原版任务不因前置解锁而下发（与 GetClientQuests 同步屏蔽）
+                if (questMaskService.IsQuestDisabled(quest.Id))
+                {
+                    return false;
+                }
+
                 // Quest is accessible to player when the accepted quest passed into param is started
                 // e.g. Quest A passed in, quest B is looped over and has requirement of A to be started, include it
                 var matchingQuestCondition = quest.Conditions.AvailableForStart.FirstOrDefault(condition =>
@@ -1119,6 +1126,12 @@ public class QuestHelper(
         var allQuests = GetQuestsFromDb();
         foreach (var quest in allQuests)
         {
+            // SPT-BattlePass: 后台禁用的原版任务从下发列表软屏蔽（不改 DB）
+            if (questMaskService.IsQuestDisabled(quest.Id))
+            {
+                continue;
+            }
+
             // Player already accepted the quest, show it regardless of status
             var questInProfile = profile.Quests.FirstOrDefault(x => x.QId == quest.Id);
             if (questInProfile is not null)

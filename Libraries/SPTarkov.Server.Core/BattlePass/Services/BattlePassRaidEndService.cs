@@ -36,6 +36,8 @@ public class BattlePassRaidEndService(
         }
 
         var season = BattlePassStore.GetSeason();
+        // 与玩家页 state/tasks 等请求共享同一个缓存的 prog 实例，按 profile 串行化，避免并发写 ActiveTasks 崩溃。
+        using var progGate = BattlePassStore.LockProfile(profileId);
         var prog = battlePassService.GetOrResetProgress(profileId, season);
         trackService.RefreshActiveTasks(profileId, prog);
 

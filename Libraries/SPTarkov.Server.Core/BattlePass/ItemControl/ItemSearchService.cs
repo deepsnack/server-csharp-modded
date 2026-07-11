@@ -49,6 +49,97 @@ public class ItemSearchService(
     }
 
     /// <summary>
+    ///     批量解析展示名（中文优先，语义与 <see cref="ResolveItemNameZh"/> 完全一致）。
+    ///     <b>关键：三张 locale 表只物化一次</b>再循环复用——而 <see cref="ResolveItemNameZh"/> 单发版每次都
+    ///     <c>GetLocaleDb</c>→<c>LazyLoad.Value</c> 重新反序列化整张（约两万条）locale 表；在数十个 tpl 的循环里
+    ///     逐个调用会重复物化数十次，既慢又拉长与其它请求（如玩家页任务/奖励轨渲染）并发反序列化 DB 的时间窗，
+    ///     放大既有的裸共享集合并发隐患。凡"一次请求解析多个 tpl"的场景（审核详情等）都应走本方法而非在外部循环单发。
+    ///     返回 tpl→展示名字典；仅收录解析出非空且不等于 tpl 本身的名称，无效/未解析的 tpl 不入表。
+    /// </summary>
+    public Dictionary<string, string> ResolveItemNamesZh(IEnumerable<MongoId> tpls)
+    {
+        // 三表一次性取出（与 Search 同款复用策略），循环内不再触发任何整表物化
+        var localeDb = localeService.GetLocaleDb();
+        var chDb = localeService.GetLocaleDb("ch");
+        var enDb = localeService.GetLocaleDb("en");
+
+        // 内联三表链，等价于 ResolveItemNameZh(tpl)：ch Name→ch ShortName→(主/ch/en Name)→(主/ch/en ShortName)
+        string Resolve(MongoId tpl)
+        {
+            var nameKey = $"{tpl} Name";
+            var shortKey = $"{tpl} ShortName";
+            if (chDb.TryGetValue(nameKey, out var cn) && cn.Length > 0) return cn;
+            if (chDb.TryGetValue(shortKey, out var cs) && cs.Length > 0) return cs;
+            if (localeDb.TryGetValue(nameKey, out var n) && n.Length > 0) return n;
+            if (enDb.TryGetValue(nameKey, out var en) && en.Length > 0) return en;
+            if (localeDb.TryGetValue(shortKey, out var s) && s.Length > 0) return s;
+            return enDb.TryGetValue(shortKey, out var es) ? es : "";
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tpl in tpls)
+        {
+            var key = tpl.ToString();
+            if (result.ContainsKey(key))
+            {
+                continue;
+            }
+
+            var name = Resolve(tpl);
+            if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name, key, StringComparison.OrdinalIgnoreCase))
+            {
+                result[key] = name;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     批量解析展示名（主表→ch→en，语义与 <see cref="ResolveItemName"/> 完全一致）。
+    ///     同 <see cref="ResolveItemNamesZh"/>：<b>三张 locale 表只物化一次</b>再循环复用，供"一次请求解析多个 tpl"
+    ///     的场景（如玩家页任务/奖励轨渲染）使用，避免逐 tpl 单发触发整表反序列化。
+    ///     返回 tpl→展示名字典；仅收录解析出非空且不等于 tpl 本身的名称，无效/未解析的 tpl 不入表。
+    /// </summary>
+    public Dictionary<string, string> ResolveItemNames(IEnumerable<MongoId> tpls)
+    {
+        var localeDb = localeService.GetLocaleDb();
+        var chDb = localeService.GetLocaleDb("ch");
+        var enDb = localeService.GetLocaleDb("en");
+
+        // 内联三表链，等价于 ResolveItemName(tpl)：(主/ch/en Name)→(主/ch/en ShortName)
+        string Resolve(MongoId tpl)
+        {
+            var nameKey = $"{tpl} Name";
+            if (localeDb.TryGetValue(nameKey, out var n) && n.Length > 0) return n;
+            if (chDb.TryGetValue(nameKey, out var cn) && cn.Length > 0) return cn;
+            if (enDb.TryGetValue(nameKey, out var en) && en.Length > 0) return en;
+            var shortKey = $"{tpl} ShortName";
+            if (localeDb.TryGetValue(shortKey, out var s) && s.Length > 0) return s;
+            if (chDb.TryGetValue(shortKey, out var cs) && cs.Length > 0) return cs;
+            return enDb.TryGetValue(shortKey, out var es) ? es : "";
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tpl in tpls)
+        {
+            var key = tpl.ToString();
+            if (result.ContainsKey(key))
+            {
+                continue;
+            }
+
+            var name = Resolve(tpl);
+            if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name, key, StringComparison.OrdinalIgnoreCase))
+            {
+                result[key] = name;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     ///     判断物品名是否命中查询（主表/ch/en 三表任一 Name/ShortName 包含即命中，与 <see cref="Search"/> 同语义）。
     ///     供配方等"按引用物品名检索"的查询接口复用，保证中英文查询行为与物品搜索一致。
     /// </summary>

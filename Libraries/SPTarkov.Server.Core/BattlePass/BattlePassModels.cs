@@ -357,6 +357,13 @@ public record BpTaskTemplate
     public bool SingleRaid { get; set; }
 
     /// <summary>
+    ///     是否要求「一命完成」：所有进度必须来自同一战局，且只有最终状态为 Survived 才能结算。
+    ///     与旧 <see cref="SingleRaid"/> 分离，保证旧单局任务仍保持原有结算语义。
+    /// </summary>
+    [JsonPropertyName("oneLife")]
+    public bool OneLife { get; set; }
+
+    /// <summary>
     ///     难度（1=易 / 2=中 / 3=难）。用于「难度预算」随机投放：每周期从池中抽一组任务，其难度之和=该 scope 的预算
     ///     （见 <see cref="BpSeason.DailyDifficultyBudget"/> 等）。手写任务与生成任务都带此值；预算模式关闭时仅作展示。
     /// </summary>
@@ -461,6 +468,25 @@ public record BpShopState
     public long PeriodStartUtc { get; set; }
 
     /// <summary>刷新代次：每滚动一个周期 +1。玩家进度 <see cref="BpProgress.ShopEpoch"/> 落后时清零其限购计数。</summary>
+    [JsonPropertyName("epoch")]
+    public int Epoch { get; set; }
+
+    /// <summary>
+    ///     设置了独立刷新周期（<see cref="BpTraderOffer.RefreshSeconds"/> &gt; 0）的商品各自的周期状态。
+    ///     key = 来源化 offer key（custom:id）。未设独立周期的商品不入此表，走全局 <see cref="Epoch"/>。
+    /// </summary>
+    [JsonPropertyName("offerPeriods")]
+    public Dictionary<string, BpShopOfferPeriod> OfferPeriods { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>单个商品的独立刷新周期状态（仅当该 offer 配置了 &gt;0 的独立刷新周期时使用）。</summary>
+public record BpShopOfferPeriod
+{
+    /// <summary>本商品当前刷新周期的起始 Unix 秒。</summary>
+    [JsonPropertyName("periodStartUtc")]
+    public long PeriodStartUtc { get; set; }
+
+    /// <summary>本商品的刷新代次：每滚动一个周期 +1。玩家 <see cref="BpProgress.ShopOfferEpochs"/> 落后时清零该商品限购计数。</summary>
     [JsonPropertyName("epoch")]
     public int Epoch { get; set; }
 }
@@ -649,9 +675,16 @@ public record BpProgress
     [JsonPropertyName("shopPurchases")]
     public Dictionary<string, int> ShopPurchases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>本玩家限购计数所属的商店刷新代次。落后于 <see cref="BpShopState.Epoch"/> 时清空 <see cref="ShopPurchases"/>。</summary>
+    /// <summary>本玩家限购计数所属的商店刷新代次。落后于 <see cref="BpShopState.Epoch"/> 时清空 <see cref="ShopPurchases"/>（仅影响走全局周期的商品）。</summary>
     [JsonPropertyName("shopEpoch")]
     public int ShopEpoch { get; set; }
+
+    /// <summary>
+    ///     设置了独立刷新周期的商品：本玩家该商品限购计数所属的刷新代次（offerKey → epoch）。
+    ///     落后于 <see cref="BpShopState.OfferPeriods"/> 中对应 offer 的 epoch 时，清空该商品在 <see cref="ShopPurchases"/> 里的限购计数。
+    /// </summary>
+    [JsonPropertyName("shopOfferEpochs")]
+    public Dictionary<string, int> ShopOfferEpochs { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 // ============================================================================
@@ -670,6 +703,13 @@ public record BpKillEvent
 
     [JsonPropertyName("weapon")]
     public string? Weapon { get; set; }
+
+    /// <summary>
+    ///     击杀所用武器上安装的配件 tpl 列表（含枪身各槽位所有 mod）。仅客户端上报链路（<see cref="BpTaskTemplate.WeaponMods"/>
+    ///     条件任务）填充；服务端 Victim 战绩无此信息，故这类任务只走客户端 supplemental 结算。
+    /// </summary>
+    [JsonPropertyName("weaponMods")]
+    public List<string>? WeaponMods { get; set; }
 
     [JsonPropertyName("bodyPart")]
     public string? BodyPart { get; set; }
@@ -771,6 +811,25 @@ public record BpTraderOffer
     /// <summary>网页商店单次购买发放的数量（堆叠物品如 GP 币/卢布 &gt;1 才有意义）。&lt;=0 视为 1。游戏内商人货架不读此字段。</summary>
     [JsonPropertyName("sellCount")]
     public int SellCount { get; set; } = 1;
+
+    /// <summary>
+    ///     网页商店发放方式：<c>item</c>（默认，邮寄实物 <see cref="Tpl"/>）/ <c>lotteryGlobalTickets</c>（通用抽奖券）/
+    ///     <c>lotteryPoolTickets</c>（奖池限定抽奖券，见 <see cref="PoolId"/>）/ <c>lotteryExchangeCoins</c>（抽奖兑换币）。
+    ///     虚拟商品（抽奖券/兑换币）不邮寄，直接入抽奖钱包，数量取 <see cref="SellCount"/> × 购买份数。游戏内商人货架不读此字段。
+    /// </summary>
+    [JsonPropertyName("rewardType")]
+    public string RewardType { get; set; } = "item";
+
+    /// <summary>rewardType=lotteryPoolTickets 时绑定的奖池 id。</summary>
+    [JsonPropertyName("poolId")]
+    public string? PoolId { get; set; }
+
+    /// <summary>
+    ///     本商品独立刷新周期（秒）。<c>null</c> = 继承全局刷新周期；<c>0</c> = 本商品永不刷新（库存/限购终身累计，即使全局有周期）；
+    ///     &gt;0 = 本商品按此周期独立滚动库存与限购。游戏内商人货架不读此字段。
+    /// </summary>
+    [JsonPropertyName("refreshSeconds")]
+    public int? RefreshSeconds { get; set; }
 }
 
 /// <summary>商人自身可配置元信息（名称/昵称/介绍/货币/头像等）。</summary>
@@ -974,4 +1033,179 @@ public record BpCustomRecipe
     /// <summary>备注（仅后台展示）。</summary>
     [JsonPropertyName("note")]
     public string? Note { get; set; }
+}
+
+// ============================================================================
+//  商人任务管理模块（trader quest）数据模型
+//  持久化用 mod 本地 record（遵守本文件顶部解耦约定），由 QuestSync 编译成
+//  core 的 Quest/QuestCondition/Reward 后重放进内存 DB。落盘：
+//    quest-overrides.json  —— 对原版任务的覆盖（禁用 / 奖励替换）
+//    custom-quests.json    —— 从零新建的自定义商人任务
+// ============================================================================
+
+/// <summary>
+///     任务奖励项（mod 本地）。编译成 core <c>Reward</c> 时按 <see cref="Type"/> 分流。
+///     首版支持：item / experience / traderStanding / traderUnlock。
+/// </summary>
+public record BpQuestReward
+{
+    /// <summary>
+    ///     奖励类型：<c>item</c>（默认，发实物）/ <c>experience</c>（人物经验）/
+    ///     <c>traderStanding</c>（商人声望）/ <c>traderUnlock</c>（解锁商人）。
+    /// </summary>
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "item";
+
+    /// <summary>type=item 时的物品模板 tpl。可空——避免 [ApiController] 隐式 Required 误伤（见 BpReward.Tpl 注释）。</summary>
+    [JsonPropertyName("tpl")]
+    public string? Tpl { get; set; }
+
+    /// <summary>type=item 时的数量（可堆叠为堆叠数）；type=experience 时为经验值。</summary>
+    [JsonPropertyName("count")]
+    public int Count { get; set; } = 1;
+
+    /// <summary>type=traderStanding 的声望增量（可为小数，如 0.02）；type=experience 时可用 Count。</summary>
+    [JsonPropertyName("value")]
+    public double Value { get; set; }
+
+    /// <summary>type=traderStanding / traderUnlock 时的目标商人 id。</summary>
+    [JsonPropertyName("traderId")]
+    public string? TraderId { get; set; }
+
+    /// <summary>type=item 时是否标记「战局内找到」（FIR）。</summary>
+    [JsonPropertyName("foundInRaid")]
+    public bool FoundInRaid { get; set; }
+
+    /// <summary>展示名（仅后台/邮件 UI，可空）。</summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+}
+
+/// <summary>
+///     自定义任务的完成目标（mod 本地）。编译成 core <c>QuestCondition</c>（进 AvailableForFinish）。
+///     首版支持：<c>handoverItem</c>（上交物品）/ <c>kills</c>（击杀计数，编成 CounterCreator）。
+/// </summary>
+public record BpQuestObjective
+{
+    /// <summary>目标类型：<c>handoverItem</c> / <c>kills</c>。</summary>
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "handoverItem";
+
+    /// <summary>type=handoverItem 时要上交的物品 tpl。</summary>
+    [JsonPropertyName("tpl")]
+    public string? Tpl { get; set; }
+
+    /// <summary>数量（上交件数 / 击杀数）。</summary>
+    [JsonPropertyName("count")]
+    public int Count { get; set; } = 1;
+
+    /// <summary>type=handoverItem 时是否要求 FIR。</summary>
+    [JsonPropertyName("onlyFoundInRaid")]
+    public bool OnlyFoundInRaid { get; set; }
+
+    /// <summary>type=kills 时的目标阵营：<c>Any</c> / <c>Savage</c>（Scav）/ <c>AnyPmc</c> / <c>Usec</c> / <c>Bear</c>。</summary>
+    [JsonPropertyName("target")]
+    public string Target { get; set; } = "Any";
+
+    /// <summary>目标描述（仅后台展示，可空；本地化名由任务名/描述承载）。</summary>
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
+}
+
+/// <summary>自定义任务的前置要求（mod 本地）。编译成 AvailableForStart 的 conditionType==Quest 条件。</summary>
+public record BpQuestPrereq
+{
+    /// <summary>前置任务 id（可指原版任务或另一自定义任务）。</summary>
+    [JsonPropertyName("questId")]
+    public string QuestId { get; set; } = "";
+
+    /// <summary>需满足的状态（QuestStatusEnum 数值：4=Success/5=Fail/2=Started 等）。默认 [4]。</summary>
+    [JsonPropertyName("status")]
+    public List<int> Status { get; set; } = new() { 4 };
+
+    /// <summary>前置达标后再延迟多少秒才可接（默认 0）。</summary>
+    [JsonPropertyName("availableAfter")]
+    public int AvailableAfter { get; set; }
+}
+
+/// <summary>
+///     对原版任务的覆盖层。以 QuestId 唯一；<see cref="Disabled"/>=false 且 <see cref="Rewards"/>=null
+///     视为空覆盖（QuestSync 对账时移除该条、还原原版）。
+/// </summary>
+public record BpQuestOverride
+{
+    /// <summary>目标原版任务 id（MongoId）。</summary>
+    [JsonPropertyName("questId")]
+    public string QuestId { get; set; } = "";
+
+    /// <summary>true=从下发给客户端的任务表软禁用（不改 DB，服务期屏蔽）。</summary>
+    [JsonPropertyName("disabled")]
+    public bool Disabled { get; set; }
+
+    /// <summary>
+    ///     非 null 时整桶替换任务奖励。键仅 <c>Started</c>/<c>Success</c>/<c>Fail</c>；
+    ///     缺省键表示不改该桶。null = 不改奖励。
+    /// </summary>
+    [JsonPropertyName("rewards")]
+    public Dictionary<string, List<BpQuestReward>>? Rewards { get; set; }
+
+    /// <summary>最后修改 Unix 秒（仅审计展示）。</summary>
+    [JsonPropertyName("updatedUtc")]
+    public long UpdatedUtc { get; set; }
+}
+
+/// <summary>从零新建的自定义商人任务。以 Id 唯一（约定 <c>cq_</c> 前缀便于识别与清理）。</summary>
+public record BpCustomQuest
+{
+    /// <summary>任务 id（MongoId 24hex；建议 cq_ 语义前缀由后台生成时保证唯一）。</summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    /// <summary>挂靠商人 id（Traders 枚举校验）。</summary>
+    [JsonPropertyName("traderId")]
+    public string TraderId { get; set; } = "";
+
+    /// <summary>SPT 内部可读名（非本地化，仅日志/调试）。</summary>
+    [JsonPropertyName("questName")]
+    public string QuestName { get; set; } = "";
+
+    /// <summary>中文任务名 → 注入本地化键 "&lt;id&gt; name"（ch 表）。</summary>
+    [JsonPropertyName("nameZh")]
+    public string NameZh { get; set; } = "";
+
+    /// <summary>英文任务名 → 注入 en 表；空则回退中文。</summary>
+    [JsonPropertyName("nameEn")]
+    public string? NameEn { get; set; }
+
+    /// <summary>中文任务描述 → 注入本地化键 "&lt;id&gt; description"。</summary>
+    [JsonPropertyName("descriptionZh")]
+    public string DescriptionZh { get; set; } = "";
+
+    /// <summary>英文任务描述。</summary>
+    [JsonPropertyName("descriptionEn")]
+    public string? DescriptionEn { get; set; }
+
+    /// <summary>阵营：<c>Pmc</c>（默认，两派可见）/ <c>Usec</c> / <c>Bear</c>（走 QuestConfig 限制）。</summary>
+    [JsonPropertyName("side")]
+    public string Side { get; set; } = "Pmc";
+
+    /// <summary>地图限制（默认 any）。</summary>
+    [JsonPropertyName("location")]
+    public string Location { get; set; } = "any";
+
+    /// <summary>前置任务链（编成 AvailableForStart）。</summary>
+    [JsonPropertyName("prerequisites")]
+    public List<BpQuestPrereq> Prerequisites { get; set; } = new();
+
+    /// <summary>完成目标（编成 AvailableForFinish）。</summary>
+    [JsonPropertyName("objectives")]
+    public List<BpQuestObjective> Objectives { get; set; } = new();
+
+    /// <summary>完成奖励（编成 Rewards["Success"]）。</summary>
+    [JsonPropertyName("rewards")]
+    public List<BpQuestReward> Rewards { get; set; } = new();
+
+    /// <summary>最后修改 Unix 秒。</summary>
+    [JsonPropertyName("updatedUtc")]
+    public long UpdatedUtc { get; set; }
 }

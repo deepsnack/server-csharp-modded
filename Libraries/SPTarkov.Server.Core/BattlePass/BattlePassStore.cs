@@ -43,6 +43,8 @@ public static class BattlePassStore
     private static string FleaControlPath => Path.Combine(BaseDir, "flea-control.json");
     private static string ItemBansPath => Path.Combine(BaseDir, "item-bans.json");
     private static string CustomRecipesPath => Path.Combine(BaseDir, "custom-recipes.json");
+    private static string QuestOverridesPath => Path.Combine(BaseDir, "quest-overrides.json");
+    private static string CustomQuestsPath => Path.Combine(BaseDir, "custom-quests.json");
     private static string LotteryDir => Path.Combine(BaseDir, "lottery");
     private static string LotterySettingsPath => Path.Combine(LotteryDir, "settings.json");
     private static string LotteryPoolsPath => Path.Combine(LotteryDir, "pools.json");
@@ -62,6 +64,49 @@ public static class BattlePassStore
     }
 
     private static readonly ConcurrentDictionary<string, BpProgress> ProgressCache = new();
+
+    /// <summary>
+    ///     每个 profile 一把互斥锁。<see cref="ProgressCache"/> 缓存的是<b>同一个</b> <c>BpProgress</c> 实例，
+    ///     而浏览器打开通行证页会<b>并行</b>发起 state/tasks 等多个请求 → 多线程同时读写同一进度对象里的
+    ///     <c>ActiveTasks</c>/<c>ClaimedFree</c> 等非并发集合，抛
+    ///     "Operations that change non-concurrent collections must have exclusive access"。
+    ///     用本锁把同一 profile 的进度访问串行化（不同 profile 仍并行）；配 <see cref="LockProfile"/> 使用。
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, object> ProfileGates = new();
+
+    /// <summary>
+    ///     取得并进入指定 profile 的互斥区，返回的守卫在 <c>Dispose</c> 时退出。
+    ///     用法：<c>using (BattlePassStore.LockProfile(profileId)) { GetProgress→Refresh→SaveProgress }</c>。
+    /// </summary>
+    public static IDisposable LockProfile(string profileId)
+    {
+        var gate = ProfileGates.GetOrAdd(profileId ?? string.Empty, _ => new object());
+        return new ProfileLock(gate);
+    }
+
+    private sealed class ProfileLock : IDisposable
+    {
+        private readonly object _gate;
+        private bool _released;
+
+        public ProfileLock(object gate)
+        {
+            _gate = gate;
+            Monitor.Enter(_gate);
+        }
+
+        public void Dispose()
+        {
+            if (_released)
+            {
+                return;
+            }
+
+            _released = true;
+            Monitor.Exit(_gate);
+        }
+    }
+
     private static readonly ConcurrentDictionary<string, BpPlayerTitles> PlayerTitlesCache = new();
     private static readonly ConcurrentDictionary<string, BpLotteryWallet> LotteryWalletCache = new();
     private static readonly ConcurrentDictionary<string, Dictionary<string, BpLotteryPoolProgress>> LotteryProgressCache = new();
@@ -127,6 +172,16 @@ public static class BattlePassStore
         if (!File.Exists(ItemBansPath))
         {
             WriteJson(ItemBansPath, new BpItemBans());
+        }
+
+        if (!File.Exists(QuestOverridesPath))
+        {
+            WriteJson(QuestOverridesPath, new List<BpQuestOverride>());
+        }
+
+        if (!File.Exists(CustomQuestsPath))
+        {
+            WriteJson(CustomQuestsPath, new List<BpCustomQuest>());
         }
 
         if (!File.Exists(LotterySettingsPath))
@@ -275,6 +330,7 @@ public static class BattlePassStore
     {
         var state = ReadJson<BpShopState>(ShopStatePath) ?? new BpShopState();
         state.Sales ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        state.OfferPeriods ??= new Dictionary<string, BpShopOfferPeriod>(StringComparer.OrdinalIgnoreCase);
         return state;
     }
 
@@ -489,6 +545,28 @@ public static class BattlePassStore
     public static void SaveItemOverrides(List<BpItemOverride> overrides)
     {
         WriteJson(ItemOverridesPath, overrides);
+    }
+
+    // ---- 商人任务：原版覆盖 ----
+    public static List<BpQuestOverride> GetQuestOverrides()
+    {
+        return ReadJson<List<BpQuestOverride>>(QuestOverridesPath) ?? new List<BpQuestOverride>();
+    }
+
+    public static void SaveQuestOverrides(List<BpQuestOverride> overrides)
+    {
+        WriteJson(QuestOverridesPath, overrides);
+    }
+
+    // ---- 商人任务：自定义任务 ----
+    public static List<BpCustomQuest> GetCustomQuests()
+    {
+        return ReadJson<List<BpCustomQuest>>(CustomQuestsPath) ?? new List<BpCustomQuest>();
+    }
+
+    public static void SaveCustomQuests(List<BpCustomQuest> quests)
+    {
+        WriteJson(CustomQuestsPath, quests);
     }
 
     // ---- 跳蚤黑名单接管配置 ----
