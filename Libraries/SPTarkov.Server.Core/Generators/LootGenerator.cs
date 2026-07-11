@@ -30,6 +30,9 @@ public class LootGenerator(
     ICloner cloner
 )
 {
+    private readonly Dictionary<string, int> _emptyPoolWarnings = new(StringComparer.Ordinal);
+    private int _suppressedEmptyPoolWarnings;
+
     /// <summary>
     ///     Generate a list of items based on configuration options parameter
     /// </summary>
@@ -377,7 +380,7 @@ public class LootGenerator(
     {
         if (!presetPool.Any())
         {
-            logger.Warning(serverLocalisationService.GetText("loot-preset_pool_is_empty"));
+            WarnEmptyPoolOnce("preset", serverLocalisationService.GetText("loot-preset_pool_is_empty"));
 
             return false;
         }
@@ -704,6 +707,29 @@ public class LootGenerator(
         public IEnumerable<TemplateItem> ItemPool { get; set; }
 
         public HashSet<MongoId> Blacklist { get; set; }
+    }
+
+    private void WarnEmptyPoolOnce(string key, string message)
+    {
+        lock (_emptyPoolWarnings)
+        {
+            if (!_emptyPoolWarnings.TryGetValue(key, out var count))
+            {
+                _emptyPoolWarnings[key] = 1;
+                logger.Warning(message);
+                return;
+            }
+
+            _emptyPoolWarnings[key] = count + 1;
+            _suppressedEmptyPoolWarnings++;
+            if (_suppressedEmptyPoolWarnings % 100 == 0)
+            {
+                var samples = string.Join(", ", _emptyPoolWarnings.OrderByDescending(item => item.Value).Take(10).Select(item => $"{item.Key}:{item.Value}"));
+                logger.Warning(
+                    $"[LootGenerator] empty pool summary: suppressed={_suppressedEmptyPoolWarnings}, unique={_emptyPoolWarnings.Count}, samples=[{samples}]"
+                );
+            }
+        }
     }
 }
 

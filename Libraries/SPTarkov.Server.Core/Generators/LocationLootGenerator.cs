@@ -33,6 +33,8 @@ public class LocationLootGenerator(
 {
     protected readonly LocationConfig LocationConfig = configServer.GetConfig<LocationConfig>();
     protected readonly SeasonalEventConfig SeasonalEventConfig = configServer.GetConfig<SeasonalEventConfig>();
+    private readonly Dictionary<string, int> _emptyLootPoolWarnings = new(StringComparer.Ordinal);
+    private int _suppressedEmptyLootPoolWarnings;
 
     /// <summary>
     /// Generate Loot for provided location ()
@@ -475,7 +477,7 @@ public class LocationLootGenerator(
         var tplsToAddToContainer = tplsForced.Concat(chosenTpls);
         if (!tplsToAddToContainer.Any())
         {
-            logger.Warning($"Added no items to container: {containerTpl}");
+            WarnEmptyLootPoolOnce($"static:{containerTpl}", $"Added no items to container: {containerTpl}");
         }
 
         foreach (var tplToAdd in tplsToAddToContainer)
@@ -810,7 +812,10 @@ public class LocationLootGenerator(
 
             if (itemArray.Count == 0)
             {
-                logger.Warning(serverLocalisationService.GetText("location-loot_pool_is_empty_skipping", spawnPoint.Template.Id));
+                WarnEmptyLootPoolOnce(
+                    $"dynamic:{spawnPoint.Template.Id}",
+                    serverLocalisationService.GetText("location-loot_pool_is_empty_skipping", spawnPoint.Template.Id)
+                );
 
                 continue;
             }
@@ -1259,6 +1264,29 @@ public class LocationLootGenerator(
         // Replace existing magazine with above array
         items.Remove(rootItem);
         items.AddRange(magazineWithCartridges);
+    }
+
+    private void WarnEmptyLootPoolOnce(string key, string message)
+    {
+        lock (_emptyLootPoolWarnings)
+        {
+            if (!_emptyLootPoolWarnings.TryGetValue(key, out var count))
+            {
+                _emptyLootPoolWarnings[key] = 1;
+                logger.Warning(message);
+                return;
+            }
+
+            _emptyLootPoolWarnings[key] = count + 1;
+            _suppressedEmptyLootPoolWarnings++;
+            if (_suppressedEmptyLootPoolWarnings % 100 == 0)
+            {
+                var samples = string.Join(", ", _emptyLootPoolWarnings.OrderByDescending(item => item.Value).Take(10).Select(item => $"{item.Key}:{item.Value}"));
+                logger.Warning(
+                    $"[LocationLoot] empty loot pool summary: suppressed={_suppressedEmptyLootPoolWarnings}, unique={_emptyLootPoolWarnings.Count}, samples=[{samples}]"
+                );
+            }
+        }
     }
 }
 

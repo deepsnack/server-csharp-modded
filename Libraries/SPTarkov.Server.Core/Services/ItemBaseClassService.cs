@@ -22,6 +22,9 @@ public class ItemBaseClassService(
     private Dictionary<MongoId, HashSet<MongoId>> _itemBaseClassesCache = [];
     private readonly Lock _itemBaseClassesLock = new();
     private readonly HashSet<MongoId> _rootNodeIds = [];
+    private readonly HashSet<MongoId> _missingItemTemplates = [];
+    private readonly Dictionary<MongoId, int> _missingItemTemplateQueries = [];
+    private int _suppressedMissingTemplateQueries;
 
     /// <summary>
     ///     Create cache and store inside ItemBaseClassService <br />
@@ -31,6 +34,10 @@ public class ItemBaseClassService(
     {
         // Clear existing cache
         _itemBaseClassesCache = [];
+        _rootNodeIds.Clear();
+        _missingItemTemplates.Clear();
+        _missingItemTemplateQueries.Clear();
+        _suppressedMissingTemplateQueries = 0;
 
         var items = databaseService.GetItems();
         foreach (var item in items)
@@ -45,12 +52,15 @@ public class ItemBaseClassService(
 
         if (!itemDb.TryGetValue(itemTpl, out var item))
         {
-            logger.Error($"Could not add {itemTpl} to cache, it does not exist in the item database!");
+            RecordMissingItemTemplate(itemTpl);
             return;
         }
 
         lock (_itemBaseClassesLock)
         {
+            _missingItemTemplates.Remove(itemTpl);
+            _missingItemTemplateQueries.Remove(itemTpl);
+
             if (string.Equals(item.Type, "Item", StringComparison.OrdinalIgnoreCase))
             {
                 _itemBaseClassesCache.TryAdd(item.Id, []);
@@ -101,6 +111,11 @@ public class ItemBaseClassService(
             return false;
         }
 
+        if (IsKnownMissingTemplate(itemTpl))
+        {
+            return false;
+        }
+
         var existsInCache = _itemBaseClassesCache.TryGetValue(itemTpl, out var baseClassList);
         if (!existsInCache)
         {
@@ -110,12 +125,17 @@ public class ItemBaseClassService(
             existsInCache = _itemBaseClassesCache.TryGetValue(itemTpl, out baseClassList);
         }
 
+        if (IsKnownMissingTemplate(itemTpl))
+        {
+            return false;
+        }
+
         if (existsInCache)
         {
             return baseClassList.Overlaps(baseClasses);
         }
 
-        logger.Warning(serverLocalisationService.GetText("baseclass-item_not_found_failed", itemTpl.ToString()));
+        RecordMissingItemTemplate(itemTpl);
 
         return false;
     }
@@ -142,6 +162,11 @@ public class ItemBaseClassService(
             return false;
         }
 
+        if (IsKnownMissingTemplate(itemTpl))
+        {
+            return false;
+        }
+
         var existsInCache = _itemBaseClassesCache.TryGetValue(itemTpl, out var baseClassList);
         if (!existsInCache)
         {
@@ -151,12 +176,17 @@ public class ItemBaseClassService(
             existsInCache = _itemBaseClassesCache.TryGetValue(itemTpl, out baseClassList);
         }
 
+        if (IsKnownMissingTemplate(itemTpl))
+        {
+            return false;
+        }
+
         if (existsInCache)
         {
             return baseClassList.Contains(baseClasses);
         }
 
-        logger.Warning(serverLocalisationService.GetText("baseclass-item_not_found_failed", itemTpl.ToString()));
+        RecordMissingItemTemplate(itemTpl);
 
         return false;
     }
@@ -174,5 +204,53 @@ public class ItemBaseClassService(
         }
 
         return value;
+    }
+
+    private bool IsKnownMissingTemplate(MongoId itemTpl)
+    {
+        lock (_itemBaseClassesLock)
+        {
+            if (!_missingItemTemplates.Contains(itemTpl))
+            {
+                return false;
+            }
+
+            _missingItemTemplateQueries[itemTpl] = _missingItemTemplateQueries.GetValueOrDefault(itemTpl) + 1;
+            _suppressedMissingTemplateQueries++;
+            LogMissingTemplateSummaryIfNeeded();
+            return true;
+        }
+    }
+
+    private void RecordMissingItemTemplate(MongoId itemTpl)
+    {
+        lock (_itemBaseClassesLock)
+        {
+            var firstSeen = _missingItemTemplates.Add(itemTpl);
+            _missingItemTemplateQueries[itemTpl] = _missingItemTemplateQueries.GetValueOrDefault(itemTpl) + 1;
+            if (firstSeen)
+            {
+                logger.Warning(
+                    $"{serverLocalisationService.GetText("baseclass-item_not_found_failed", itemTpl.ToString())}; repeated queries will be suppressed"
+                );
+                return;
+            }
+
+            _suppressedMissingTemplateQueries++;
+            LogMissingTemplateSummaryIfNeeded();
+        }
+    }
+
+    private void LogMissingTemplateSummaryIfNeeded()
+    {
+        if (_suppressedMissingTemplateQueries == 0 || _suppressedMissingTemplateQueries % 100 != 0)
+        {
+            return;
+        }
+
+        var samples = string.Join(", ", _missingItemTemplateQueries.OrderByDescending(item => item.Value).Take(10).Select(item => $"{item.Key}:{item.Value}"));
+        logger.Warning(
+            $"[ItemBaseClass] missing template summary: unique={_missingItemTemplates.Count}, suppressedQueries={_suppressedMissingTemplateQueries}, samples=[{samples}]"
+        );
     }
 }
