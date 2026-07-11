@@ -42,6 +42,12 @@ public record WebRegisterConfig
 {
     [JsonPropertyName("adminPassword")]
     public string AdminPassword { get; set; } = "";
+
+    /// <summary>
+    ///     接收后台审核提醒的管理员邮箱。为空时，通行证审核提醒回退发送到 smtpConfig.senderEmail。
+    /// </summary>
+    [JsonPropertyName("adminNotificationEmails")]
+    public List<string> AdminNotificationEmails { get; set; } = [];
 }
 
 /// <summary>
