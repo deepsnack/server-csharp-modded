@@ -197,15 +197,17 @@ public class RagfairOfferHelper(
         foreach (
             var offer in offerIDsForItem
                 .Select(tieredFlea.Enabled ? cloner.Clone(ragfairOfferService.GetOfferByOfferId) : ragfairOfferService.GetOfferByOfferId) // Clone offer when tiered flea enabled as we may modify offer data
-                .Where(offer => PassesSearchFilterCriteria(searchRequest, offer, offer.Items.FirstOrDefault(), pmcData))
+                // required-items 索引可能残留已过期/被移除报价的 id，GetOfferByOfferId 对其返回 null。
+                // 不先剔除会在 offer.Items 处抛 NRE，把 /client/ragfair/find 打成 Fatal。
+                .Where(offer => offer is not null && PassesSearchFilterCriteria(searchRequest, offer, offer.Items.FirstOrDefault(), pmcData))
         )
         {
-            if (tieredFlea.Enabled && !offer.IsTraderOffer())
+            if (tieredFlea.Enabled && !offer!.IsTraderOffer())
             {
                 CheckAndLockOfferFromPlayerTieredFlea(tieredFlea, offer, tieredFleaKeys, pmcData.Info.Level.Value);
             }
 
-            result.Add(offer);
+            result.Add(offer!);
         }
 
         return result;

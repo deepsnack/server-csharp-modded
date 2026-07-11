@@ -43,16 +43,34 @@ public class BundleLoader(ISptLogger<BundleLoader> logger, JsonUtil jsonUtil, Bu
         await bundleHashCacheService.HydrateCache();
 
         var modPath = mod.GetModPath();
-        var modBundles = await jsonUtil.DeserializeFromFileAsync<BundleManifest>(
-            Path.Join(Directory.GetCurrentDirectory(), modPath, "bundles.json")
-        );
-
         var relativeModPath = modPath.Replace('\\', '/');
         var bundlesPath = Path.Join(relativeModPath, "bundles");
+        var manifestPath = Path.Join(Directory.GetCurrentDirectory(), modPath, "bundles.json");
+        var hasBundleFiles = Directory.Exists(bundlesPath) && Directory.EnumerateFiles(bundlesPath, "*", SearchOption.AllDirectories).Any();
+
+        if (!File.Exists(manifestPath))
+        {
+            if (!hasBundleFiles)
+            {
+                logger.Debug($"Mod {mod.ModMetadata.Name} has no bundles, skipping bundle load");
+                return;
+            }
+
+            logger.Error($"Mod {mod.ModMetadata.Name} has bundle files but no bundles.json manifest, skipping!");
+            return;
+        }
+
+        var modBundles = await jsonUtil.DeserializeFromFileAsync<BundleManifest>(manifestPath);
 
         if (modBundles?.Manifest is null)
         {
-            logger.Warning($"Could not find manifest for mod {mod.ModMetadata.Name}, skipping!");
+            if (!hasBundleFiles)
+            {
+                logger.Debug($"Mod {mod.ModMetadata.Name} has an empty bundle manifest and no bundle files, skipping bundle load");
+                return;
+            }
+
+            logger.Error($"Could not find manifest entries for mod {mod.ModMetadata.Name} despite bundle files being present, skipping!");
             return;
         }
 
