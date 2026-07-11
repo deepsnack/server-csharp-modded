@@ -7,6 +7,7 @@ using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Routers;
+using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Services;
 using Path = System.IO.Path; // 消歧义：Tables 命名空间也有 Path 类型
 
@@ -29,6 +30,7 @@ public class BattlePassTraderSync(
     TraderAssortHelper traderAssortHelper,
     TraderHelper traderHelper,
     BattlePassItemBuilder itemBuilder,
+    SaveServer saveServer,
     ISptLogger<BattlePassTraderSync> logger
 )
 {
@@ -49,7 +51,7 @@ public class BattlePassTraderSync(
     public static MongoId OfferRootItemId(string offerId) => DeterministicId(offerId, "bp-offer-root");
 
     /// <summary>构建并注入（或重注入）通行证商人到 DB。OnLoad 及后台保存后调用。</summary>
-    public void Sync()
+    public void Sync(bool resetPurchaseState = false)
     {
         try
         {
@@ -74,6 +76,10 @@ public class BattlePassTraderSync(
 
             RegisterAvatar(cfg);
             HookLocale(cfg);
+            if (resetPurchaseState)
+            {
+                ResetPurchaseState(offers);
+            }
 
             logger.Success(
                 $"[SPT-BattlePass] 通行证商人已注入 (id={TraderIdHex}, 配置 {offers.Count} 项，实际注入 {assort.Items.Count} 项)。"
@@ -82,6 +88,25 @@ public class BattlePassTraderSync(
         catch (Exception ex)
         {
             logger.Error($"[SPT-BattlePass] 通行证商人注入失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>原生商人补货到期时，从通行证配置重新构建货架，避免沿用已被购买扣减后的 DB 状态。</summary>
+    public void RefreshExpiredTrader(Trader trader)
+    {
+        try
+        {
+            var offers = BattlePassStore.GetOffers();
+            trader.Assort = BuildAssort(offers);
+            trader.Base.NextResupply = (int)traderHelper.GetNextUpdateTimestamp(TraderId);
+            trader.Base.RefreshTraderRagfairOffers = true;
+            traderAssortHelper.InvalidateQuestAssortCache();
+            ResetPurchaseState(offers);
+            logger.Info($"[SPT-BattlePass] 通行证商人补货完成，实际库存/限购已重置 (offers={offers.Count})");
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"[SPT-BattlePass] 通行证商人补货失败: {ex.Message}");
         }
     }
 
@@ -166,6 +191,7 @@ public class BattlePassTraderSync(
         var items = new List<Item>();
         var barter = new Dictionary<MongoId, List<List<BarterScheme>>>();
         var loyal = new Dictionary<MongoId, int>();
+        var missingProducts = new List<string>();
 
         foreach (var offer in offers)
         {
@@ -188,7 +214,10 @@ public class BattlePassTraderSync(
             // mod 物品兜底：商品 tpl 不在物品库（mod 被删除）→ 跳过该货架项的注入，配置保留，mod 装回自动恢复
             if (!databaseService.GetItems().ContainsKey(tpl))
             {
-                logger.Warning($"[SPT-BattlePass] 货架项 {offer.Id} 的商品 {offer.Tpl} 不在物品库（mod 已删除？），本次未注入");
+                if (missingProducts.Count < 10)
+                {
+                    missingProducts.Add($"{offer.Id}:{offer.Tpl}");
+                }
                 continue;
             }
 
@@ -231,6 +260,18 @@ public class BattlePassTraderSync(
             barter[rootId] = new List<List<BarterScheme>> { scheme };
             // 仍需出现在 loyal_level_items，供原生忠诚度与购买流程识别。
             loyal[rootId] = 1;
+        }
+
+        if (missingProducts.Count > 0)
+        {
+            var skipped = offers.Count(offer =>
+                !string.IsNullOrWhiteSpace(offer.Tpl)
+                && MongoId.IsValidMongoId(offer.Tpl.Trim())
+                && !databaseService.GetItems().ContainsKey(new MongoId(offer.Tpl.Trim()))
+            );
+            logger.Warning(
+                $"[SPT-BattlePass] 货架缺失商品汇总 skipped={skipped}, samples=[{string.Join(", ", missingProducts)}]；配置保留，模板恢复后下次构建自动重新启用"
+            );
         }
 
         return new TraderAssort
@@ -288,6 +329,108 @@ public class BattlePassTraderSync(
         }
 
         _localeHooked = true;
+    }
+
+    private void ResetPurchaseState(List<BpTraderOffer> offers)
+    {
+        var nativeProfiles = ResetNativeTraderPurchasesForAllProfiles();
+        var shopStateKeys = ResetLegacyTraderShopState(offers);
+        var progressProfiles = ResetLegacyTraderPurchaseProgress();
+
+        if (nativeProfiles > 0 || shopStateKeys > 0 || progressProfiles > 0)
+        {
+            logger.Info(
+                $"[SPT-BattlePass] 通行证商人购买状态已重置 nativeProfiles={nativeProfiles}, shopStateKeys={shopStateKeys}, progressProfiles={progressProfiles}"
+            );
+        }
+    }
+
+    private int ResetNativeTraderPurchasesForAllProfiles()
+    {
+        var resetProfiles = 0;
+        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        {
+            if (profile.TraderPurchases?.Remove(TraderId) != true)
+            {
+                continue;
+            }
+
+            try
+            {
+                saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
+                resetProfiles++;
+            }
+            catch (Exception ex)
+            {
+                logger.Warning($"[SPT-BattlePass] 清理通行证商人限购记录后保存档案失败 profile={sessionId}: {ex.Message}");
+            }
+        }
+
+        return resetProfiles;
+    }
+
+    private static int ResetLegacyTraderShopState(List<BpTraderOffer> offers)
+    {
+        var state = BattlePassStore.GetShopState();
+        var removed = 0;
+        foreach (var key in TraderOfferKeys(offers))
+        {
+            if (state.Sales.Remove(key))
+            {
+                removed++;
+            }
+
+            if (state.OfferPeriods.Remove(key))
+            {
+                removed++;
+            }
+        }
+
+        if (removed > 0)
+        {
+            BattlePassStore.SaveShopState(state);
+        }
+
+        return removed;
+    }
+
+    private static int ResetLegacyTraderPurchaseProgress()
+    {
+        var resetProfiles = 0;
+        foreach (var profileId in BattlePassStore.ListProgressProfileIds())
+        {
+            using var _ = BattlePassStore.LockProfile(profileId);
+            var progress = BattlePassStore.GetProgress(profileId);
+            progress.ShopPurchases ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            progress.ShopOfferEpochs ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var beforePurchases = progress.ShopPurchases.Count;
+            var beforeEpochs = progress.ShopOfferEpochs.Count;
+            foreach (var key in progress.ShopPurchases.Keys.Where(key => key.StartsWith("trader:", StringComparison.OrdinalIgnoreCase)).ToList())
+            {
+                progress.ShopPurchases.Remove(key);
+            }
+
+            foreach (var key in progress.ShopOfferEpochs.Keys.Where(key => key.StartsWith("trader:", StringComparison.OrdinalIgnoreCase)).ToList())
+            {
+                progress.ShopOfferEpochs.Remove(key);
+            }
+
+            if (progress.ShopPurchases.Count != beforePurchases || progress.ShopOfferEpochs.Count != beforeEpochs)
+            {
+                BattlePassStore.SaveProgress(profileId, progress);
+                resetProfiles++;
+            }
+        }
+
+        return resetProfiles;
+    }
+
+    private static IEnumerable<string> TraderOfferKeys(IEnumerable<BpTraderOffer> offers)
+    {
+        return offers
+            .Select(offer => offer.Id?.Trim())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => $"trader:{id}");
     }
 
     private static MongoId DeterministicId(string seed, string salt)
