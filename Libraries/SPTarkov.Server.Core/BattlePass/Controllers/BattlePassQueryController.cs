@@ -3,7 +3,6 @@ using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Common;
-using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.DI.Annotations;
 
 namespace SPTarkov.Server.Core.BattlePass.Controllers;
@@ -20,7 +19,11 @@ namespace SPTarkov.Server.Core.BattlePass.Controllers;
 [Injectable]
 [ApiController]
 [Route("battlepass/api/admin/query")]
-public class BattlePassQueryController(ItemSearchService itemSearch, Services.DatabaseService databaseService, Services.LocaleService localeService, BattlePassAdminSessionService sessionService)
+public class BattlePassQueryController(
+    ItemSearchService itemSearch,
+    Services.DatabaseService databaseService,
+    BattlePassClothingSearchService clothingSearch,
+    BattlePassAdminSessionService sessionService)
 {
     // 只读的游戏数据目录检索（物品/任务/货架/配方/服装/称号），供奖励轨、任务、商人等各模块
     // 图形化填表所需。管理员与「在册协管」均可检索——协管为填奖励/配置表单必须能搜；
@@ -132,6 +135,7 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
     public object Recipes(
         [FromQuery] string? q,
         [FromQuery] int? limit,
+        [FromQuery] bool? questUnlockOnly,
         [FromHeader(Name = "X-Admin-Token")] string? token = null
     )
     {
@@ -147,6 +151,12 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
         var hits = new List<object>();
         foreach (var recipe in databaseService.GetHideout().Production.Recipes ?? [])
         {
+            if (questUnlockOnly == true
+                && (recipe.Locked != true || recipe.Requirements?.Any(req => req.Type == "QuestComplete") != true))
+            {
+                continue;
+            }
+
             // 产物名匹配走三表（主/ch/en），保证中英文查询与物品搜索行为一致
             if (query.Length > 0
                 && !recipe.Id.ToString().Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -165,6 +175,8 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
                 name,
                 count = recipe.Count ?? 1,
                 areaType = recipe.AreaType?.ToString() ?? "",
+                locked = recipe.Locked == true,
+                questUnlock = recipe.Requirements?.Any(req => req.Type == "QuestComplete") == true,
                 isCustom = customIds.Contains(recipe.Id.ToString()),
             });
 
@@ -194,69 +206,7 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
         }
 
         var capped = limit is > 0 and <= 100 ? limit.Value : 30;
-        var query = (q ?? "").Trim();
-        var customization = databaseService.GetCustomization();
-        var traderSuitOffers = databaseService
-            .GetTraders()
-            .Where(trader => trader.Value.Base.CustomizationSeller.GetValueOrDefault(false))
-            .SelectMany(trader => (trader.Value.Suits ?? [])
-                .Select(suit => new
-                {
-                    SuitId = suit.SuiteId.ToString(),
-                    OfferId = suit.Id.ToString(),
-                    TraderId = trader.Key.ToString(),
-                    IsActive = suit.IsActive ?? true,
-                }))
-            .ToList();
-
-        var offerBySuit = traderSuitOffers
-            .GroupBy(offer => offer.SuitId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.FirstOrDefault(offer => offer.IsActive) ?? group.First(), StringComparer.OrdinalIgnoreCase);
-
-        var hits = new List<object>();
-        foreach (var (suitId, item) in customization)
-        {
-            var suitIdText = suitId.ToString();
-            var isTraderSuit = offerBySuit.TryGetValue(suitIdText, out var offer);
-            if (!isTraderSuit && item.Parent != CustomisationTypeId.SUITS)
-            {
-                continue;
-            }
-
-            var name = ResolveCustomizationName(suitId, item);
-            var shortName = ResolveCustomizationShortName(suitId, item);
-            if (query.Length > 0
-                && !suitIdText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                && !(name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                && !(shortName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                && !(offer?.OfferId.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                && !(offer?.TraderId.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
-            {
-                continue;
-            }
-
-            hits.Add(new
-            {
-                id = suitIdText,
-                suitId = suitIdText,
-                name = string.IsNullOrWhiteSpace(name) ? suitIdText : name,
-                shortName,
-                parent = item.Parent,
-                bodyPart = item.Properties?.BodyPart,
-                side = item.Properties?.Side ?? [],
-                offerId = offer?.OfferId,
-                traderId = offer?.TraderId,
-                isTraderSuit,
-                isActive = offer?.IsActive ?? false,
-            });
-
-            if (hits.Count >= capped)
-            {
-                break;
-            }
-        }
-
-        return new { success = true, clothing = hits };
+        return new { success = true, clothing = clothingSearch.Search(q, capped) };
     }
 
     /// <summary>检索称号（按 id / 名称 / 文本）。供奖励轨 title 图形化选择。</summary>
@@ -293,43 +243,4 @@ public class BattlePassQueryController(ItemSearchService itemSearch, Services.Da
         return new { success = true, titles };
     }
 
-    private string ResolveCustomizationName(MongoId id, CustomizationItem item)
-    {
-        var name = ResolveCustomizationLocaleValue(id, item, "Name", item.Properties?.Name);
-        if (!string.IsNullOrWhiteSpace(name))
-        {
-            return name;
-        }
-
-        return ResolveCustomizationShortName(id, item);
-    }
-
-    private string ResolveCustomizationShortName(MongoId id, CustomizationItem item)
-    {
-        return ResolveCustomizationLocaleValue(id, item, "ShortName", item.Properties?.ShortName);
-    }
-
-    private string ResolveCustomizationLocaleValue(MongoId id, CustomizationItem item, string suffix, string? fallback)
-    {
-        var localeDb = localeService.GetLocaleDb();
-        var chDb = localeService.GetLocaleDb("ch");
-        var enDb = localeService.GetLocaleDb("en");
-        foreach (var key in new[] { $"{id} {suffix}", fallback, item.Name })
-        {
-            if (string.IsNullOrWhiteSpace(key))
-            {
-                continue;
-            }
-
-            foreach (var db in (Dictionary<string, string>[])[localeDb, chDb, enDb])
-            {
-                if (db.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
-                {
-                    return value;
-                }
-            }
-        }
-
-        return fallback ?? item.Name ?? id.ToString();
-    }
 }

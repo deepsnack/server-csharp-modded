@@ -29,6 +29,7 @@
         let url = QUERY_API + '/' + kind + '?q=' + encodeURIComponent(q) + '&limit=' + (opts.limit || 8);
         if (kind === 'items' && opts.source) url += '&source=' + encodeURIComponent(opts.source);
         if (kind === 'items' && opts.category) url += '&category=' + encodeURIComponent(opts.category);
+        if (kind === 'recipes' && opts.questUnlockOnly) url += '&questUnlockOnly=true';
         const res = await fetch(url, { headers: { 'X-Admin-Token': token() } });
         let r;
         try { r = await res.json(); }

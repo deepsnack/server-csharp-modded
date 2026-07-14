@@ -36,13 +36,13 @@ function logout() {
 // 协管态：按 capabilities 动态显示可提交模块入口；隐藏管理员专属功能。
 // 外链模块 tab 与对应 *.read 能力的映射（这些模块页内已做协管分流）。
 const COLLAB_MODULE_TABS = [
-    ['tasks.html', 'tasks.read'],
+    ['tasks.html', ['tasks.read', 'quests.read']],
     ['trader.html', 'trader.read'],
     ['shop.html', 'shop.read'],
     ['lottery.html', 'lottery.read'],
     ['recipes.html', 'recipes.read'],
     ['items.html', 'items.read'],
-    ['quests.html', 'quests.read'],
+    ['titles.html', 'titles.read'],
     ['flea.html', 'flea.read'],
 ];
 
@@ -59,13 +59,10 @@ function applyCollaboratorUi() {
     // 外链业务模块：按各自 *.read 能力显示 / 隐藏。
     COLLAB_MODULE_TABS.forEach(([href, cap]) => {
         const a = document.querySelector('.tab[href="' + href + '"]');
-        if (a) a.style.display = hasCapability(cap) ? '' : 'none';
+        const visible = Array.isArray(cap) ? cap.some(hasCapability) : hasCapability(cap);
+        if (a) a.style.display = visible ? '' : 'none';
     });
-    // 管理员专属外链：称号 / 审核 / 协管授权 一律隐藏。
-    ['titles.html'].forEach(href => {
-        const a = document.querySelector('.tab[href="' + href + '"]');
-        if (a) a.style.display = 'none';
-    });
+    // 管理员专属外链：审核 / 协管授权 一律隐藏。
     const navReviews = el('nav-reviews'); if (navReviews) navReviews.style.display = 'none';
     const navAudit = el('nav-audit'); if (navAudit) navAudit.style.display = 'none';
     const navAccess = el('nav-access'); if (navAccess) navAccess.style.display = 'none';
@@ -77,7 +74,7 @@ function applyCollaboratorUi() {
         bar.id = 'collab-hint-bar';
         bar.className = 'hint';
         bar.style.cssText = 'width:100%;margin:0;padding:6px 14px;background:rgba(200,150,40,.12);border-bottom:1px solid rgba(200,150,40,.4);color:#e8c268;font-size:12px';
-        bar.textContent = '协管模式：你的修改将提交管理员审核后生效；赛季 / 激活码 / 玩家 / 称号 / 审核 等操作仅管理员可用。';
+        bar.textContent = '协管模式：你的修改将提交管理员审核后生效；赛季 / 激活码 / 玩家 / 审核 等操作仅管理员可用。';
         topbar.parentNode.insertBefore(bar, topbar.nextSibling);
     }
     // 默认切到第一个可用分页：优先奖励轨，否则不强制切换（外链模块由用户点击进入）。

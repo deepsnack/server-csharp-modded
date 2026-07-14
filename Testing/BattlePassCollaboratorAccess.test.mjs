@@ -30,7 +30,7 @@ test('server DELETE removes records instead of retaining a disabled grant', () =
 });
 
 test('collaborator entry assets are cache-busted and the retired workspace redirects safely', () => {
-    assert.match(playerHtml, /script\.js\?v=20260706-collab-reuse-v4/);
+    assert.match(playerHtml, /script\.js\?v=20260711-shop-icon-fallback/);
     assert.match(accessHtml, /auth\.js\?v=20260707-pending-edit-v1/);
     assert.match(accessHtml, /access\.js\?v=20260706-collab-access-v3/);
     assert.match(collaboratorHtml, /location\.replace\('\/battlepass\/index\.html'\)/);

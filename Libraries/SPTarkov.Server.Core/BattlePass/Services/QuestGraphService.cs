@@ -36,6 +36,104 @@ public class QuestGraphService(
         return result.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>原版/Mod 地图目录；Value 使用任务 Location 条件实际需要的 LocationBase.Id。</summary>
+    public List<BpQuestLocationInfo> GetLocations()
+    {
+        return databaseService.GetLocations().GetDictionary()
+            .Values
+            .Where(location => location?.Base is not null
+                               && !string.IsNullOrWhiteSpace(location.Base.Id)
+                               && !string.Equals(location.Base.Id, "hideout", StringComparison.OrdinalIgnoreCase)
+                               && !string.Equals(location.Base.Id, "develop", StringComparison.OrdinalIgnoreCase))
+            .Select(location => new BpQuestLocationInfo
+            {
+                Value = location.Base.Id,
+                Name = string.IsNullOrWhiteSpace(location.Base.Name) ? location.Base.Id : location.Base.Name,
+            })
+            .GroupBy(location => location.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(location => location.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>击杀目标目录：基础阵营 + 数据库内全部 bot role，兼容 Mod 敌人。</summary>
+    public List<BpQuestKillTargetInfo> GetKillTargets()
+    {
+        var result = new List<BpQuestKillTargetInfo>
+        {
+            new() { Value = "Any", Name = "任意敌人", Kind = "side" },
+            new() { Value = "Savage", Name = "任意 Scav/Boss", Kind = "side" },
+            new() { Value = "AnyPmc", Name = "任意 PMC", Kind = "side" },
+            new() { Value = "Usec", Name = "USEC", Kind = "side" },
+            new() { Value = "Bear", Name = "BEAR", Kind = "side" },
+        };
+        result.AddRange(databaseService.GetBots().Types.Keys
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+            .Select(role => new BpQuestKillTargetInfo { Value = role, Name = role, Kind = "savageRole" }));
+        return result;
+    }
+
+    /// <summary>检索某商人的真实 assort 根商品，供 AssortmentUnlock 选择。</summary>
+    public List<BpQuestAssortInfo> SearchAssorts(string? traderId, string? query, int limit)
+    {
+        if (!MongoIdEx.TryParse(traderId, out var parsedTrader)
+            || !databaseService.GetTables().Traders.TryGetValue(parsedTrader, out var trader)
+            || trader.Assort is null)
+        {
+            return [];
+        }
+
+        var q = (query ?? "").Trim();
+        var result = new List<BpQuestAssortInfo>();
+        foreach (var (offerId, loyalty) in trader.Assort.LoyalLevelItems)
+        {
+            var root = trader.Assort.Items.FirstOrDefault(item => item.Id == offerId);
+            if (root is null)
+            {
+                continue;
+            }
+
+            var name = itemSearch.ResolveItemNameZh(root.Template);
+            if (q.Length > 0
+                && !name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !offerId.ToString().Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !root.Template.ToString().Contains(q, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string? unlockQuestId = null;
+            string? unlockBucket = null;
+            foreach (var (bucket, mappings) in trader.QuestAssort ?? [])
+            {
+                if (mappings.TryGetValue(offerId, out var mappedQuest))
+                {
+                    unlockQuestId = mappedQuest.ToString();
+                    unlockBucket = bucket;
+                    break;
+                }
+            }
+
+            result.Add(new BpQuestAssortInfo
+            {
+                OfferId = offerId.ToString(),
+                TraderId = parsedTrader.ToString(),
+                Tpl = root.Template.ToString(),
+                Name = name,
+                LoyaltyLevel = loyalty,
+                UnlockQuestId = unlockQuestId,
+                UnlockBucket = unlockBucket,
+            });
+            if (result.Count >= Math.Clamp(limit, 1, 100))
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
     // ---- 任务清单 ----
     /// <summary>列出任务（可按商人/关键字过滤）。附带禁用/自定义/奖励覆盖状态标记。</summary>
     public List<BpQuestListItem> ListQuests(string? traderId, string? query)
@@ -246,6 +344,8 @@ public class QuestGraphService(
                 Value = cond.Value,
                 Targets = ExtractTargets(cond.Target),
                 OnlyFoundInRaid = cond.OnlyFoundInRaid ?? false,
+                OneSessionOnly = cond.OneSessionOnly ?? false,
+                Details = DescribeObjective(cond),
             });
         }
 
@@ -298,8 +398,107 @@ public class QuestGraphService(
                 ? ResolveTraderName(tid)
                 : r.Target;
         }
+        else if (r.Type == RewardType.AssortmentUnlock)
+        {
+            view.OfferId = r.Target;
+            view.TraderId = r.TraderId?.ToString();
+            if (r.Items is { Count: > 0 })
+            {
+                view.Tpl = r.Items[0].Template.ToString();
+                view.Name = itemSearch.ResolveItemNameZh(r.Items[0].Template);
+            }
+        }
+        else if (r.Type == RewardType.ProductionScheme)
+        {
+            if (r.Items is { Count: > 0 })
+            {
+                view.Tpl = r.Items[0].Template.ToString();
+                view.Name = itemSearch.ResolveItemNameZh(r.Items[0].Template);
+                view.Count = (int)(r.Items[0].Upd?.StackObjectsCount ?? 1);
+                view.RecipeId = ResolveProductionRecipeId(r);
+            }
+        }
 
         return view;
+    }
+
+    private List<string> DescribeObjective(QuestCondition condition)
+    {
+        var details = new List<string>();
+        if (condition.OneSessionOnly == true)
+        {
+            details.Add("一命/单局完成");
+        }
+
+        if (string.Equals(condition.ConditionType, "WeaponAssembly", StringComparison.OrdinalIgnoreCase))
+        {
+            details.AddRange(ExtractTargets(condition.Target).Select(target => $"枪械 {ResolveItemName(target)}"));
+            if (condition.ContainsItems is { Count: > 0 })
+            {
+                details.Add($"必装 {string.Join("、", condition.ContainsItems.Select(ResolveItemName))}");
+            }
+            AddCompareDetail(details, "耐久", condition.Durability);
+            AddCompareDetail(details, "人机", condition.Ergonomics);
+            AddCompareDetail(details, "后坐", condition.Recoil);
+            AddCompareDetail(details, "重量", condition.Weight);
+        }
+
+        foreach (var nested in condition.Counter?.Conditions ?? [])
+        {
+            if (string.Equals(nested.ConditionType, "Kills", StringComparison.OrdinalIgnoreCase))
+            {
+                details.Add($"目标 {string.Join("/", ExtractTargets(nested.Target))}");
+                if (nested.SavageRole is { Count: > 0 }) details.Add($"角色 {string.Join("/", nested.SavageRole)}");
+                if (nested.Weapon is { Count: > 0 }) details.Add($"武器 {string.Join("、", nested.Weapon.Select(ResolveItemName))}");
+                var mods = nested.WeaponModsInclusive?.SelectMany(group => group).Distinct().ToList() ?? [];
+                if (mods.Count > 0) details.Add($"配件 {string.Join("、", mods.Select(ResolveItemName))}");
+                if (nested.BodyPart is { Count: > 0 }) details.Add($"部位 {string.Join("/", nested.BodyPart)}");
+                if (nested.Distance?.Value > 0) details.Add($"距离 {nested.Distance.CompareMethod}{nested.Distance.Value:0.#}m");
+                if (nested.Daytime is not null && (nested.Daytime.From != 0 || nested.Daytime.To != 0))
+                {
+                    details.Add($"时段 {nested.Daytime.From:00}:00-{nested.Daytime.To:00}:00");
+                }
+            }
+            else if (string.Equals(nested.ConditionType, "Location", StringComparison.OrdinalIgnoreCase))
+            {
+                details.Add($"地图 {string.Join("/", ExtractTargets(nested.Target))}");
+            }
+            else if (string.Equals(nested.ConditionType, "ExitStatus", StringComparison.OrdinalIgnoreCase))
+            {
+                details.Add($"离局状态 {string.Join("/", nested.Status ?? [])}");
+            }
+        }
+
+        return details;
+    }
+
+    private static void AddCompareDetail(ICollection<string> details, string label, ValueCompare? compare)
+    {
+        if (compare?.Value is not null)
+        {
+            details.Add($"{label} {compare.CompareMethod}{compare.Value:0.##}");
+        }
+    }
+
+    private string ResolveItemName(string tpl)
+    {
+        return MongoIdEx.TryParse(tpl, out var parsed) ? itemSearch.ResolveItemNameZh(parsed) : tpl;
+    }
+
+    private string? ResolveProductionRecipeId(Reward reward)
+    {
+        if (reward.Items is not { Count: > 0 }
+            || !int.TryParse(reward.TraderId?.ToString(), out var areaType))
+        {
+            return null;
+        }
+
+        var matches = (databaseService.GetHideout().Production.Recipes ?? [])
+            .Where(recipe => (int?)recipe.AreaType == areaType
+                             && recipe.EndProduct == reward.Items[0].Template
+                             && recipe.Requirements?.Any(req => req.RequiredLevel == reward.LoyaltyLevel) == true)
+            .ToList();
+        return matches.Count == 1 ? matches[0].Id.ToString() : null;
     }
 
     // ---- 名称/本地化解析 ----
@@ -364,6 +563,51 @@ public sealed record BpQuestTraderInfo
 
     [JsonPropertyName("name")]
     public string Name { get; set; } = "";
+}
+
+public sealed record BpQuestLocationInfo
+{
+    [JsonPropertyName("value")]
+    public string Value { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+}
+
+public sealed record BpQuestKillTargetInfo
+{
+    [JsonPropertyName("value")]
+    public string Value { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "side";
+}
+
+public sealed record BpQuestAssortInfo
+{
+    [JsonPropertyName("offerId")]
+    public string OfferId { get; set; } = "";
+
+    [JsonPropertyName("traderId")]
+    public string TraderId { get; set; } = "";
+
+    [JsonPropertyName("tpl")]
+    public string Tpl { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("loyaltyLevel")]
+    public int LoyaltyLevel { get; set; }
+
+    [JsonPropertyName("unlockQuestId")]
+    public string? UnlockQuestId { get; set; }
+
+    [JsonPropertyName("unlockBucket")]
+    public string? UnlockBucket { get; set; }
 }
 
 public sealed record BpQuestListItem
@@ -476,6 +720,12 @@ public sealed record BpQuestObjectiveView
 
     [JsonPropertyName("onlyFoundInRaid")]
     public bool OnlyFoundInRaid { get; set; }
+
+    [JsonPropertyName("oneSessionOnly")]
+    public bool OneSessionOnly { get; set; }
+
+    [JsonPropertyName("details")]
+    public List<string> Details { get; set; } = new();
 }
 
 public sealed record BpQuestRewardView
@@ -497,6 +747,12 @@ public sealed record BpQuestRewardView
 
     [JsonPropertyName("traderId")]
     public string? TraderId { get; set; }
+
+    [JsonPropertyName("offerId")]
+    public string? OfferId { get; set; }
+
+    [JsonPropertyName("recipeId")]
+    public string? RecipeId { get; set; }
 }
 
 public sealed record BpQuestDetail

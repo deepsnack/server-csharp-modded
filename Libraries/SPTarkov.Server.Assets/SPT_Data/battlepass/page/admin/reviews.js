@@ -3,7 +3,7 @@
 
 const ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
 const API_BASE = '/battlepass/api/admin/reviews';
-const MODULE_NAMES = { shop: '商店', tasks: '任务', tracks: '奖励轨', lottery: '抽奖', trader: '商人', recipes: '配方', items: '物品管控', quests: '商人任务', flea: '跳蚤黑名单' };
+const MODULE_NAMES = { shop: '商店', tasks: '通行证任务', tracks: '奖励轨', lottery: '抽奖', trader: '商人', recipes: '配方', items: '物品管控', quests: '商人任务', titles: '称号', flea: '跳蚤黑名单' };
 
 let currentModule = '';  // 空=全部
 let reviewItems = [];
@@ -175,6 +175,10 @@ function rewardChip(rw) {
 }
 
 function renderValue(key, v) {
+    if (isImagePayloadKey(key) && typeof v === 'string' && v.length > 80) {
+        return esc(imageSummary(v));
+    }
+
     // 物品/货币模板字段：显示中文名而非裸 MongoId（解析不到回退「未知物品」，原始值见底部调试区）
     if ((key === 'tpl' || key === 'currencyTpl') && typeof v === 'string' && v) {
         return esc(itemNameMap[v] || '未知物品');
@@ -241,10 +245,32 @@ function renderReadable(c) {
 }
 
 function rawDump(c) {
-    const part = (label, v) => v ? `<div class="raw-block"><div class="raw-h">${label}</div><pre>${esc(JSON.stringify(v, null, 2))}</pre></div>` : '';
+    const part = (label, v) => v ? `<div class="raw-block"><div class="raw-h">${label}</div><pre>${esc(JSON.stringify(redactLargeImages(v), null, 2))}</pre></div>` : '';
     const body = part('变更前', c.beforePayload) + part('提交内容', c.proposedPayload) + part('管理员编辑后', c.finalPayload);
     if (!body) return '';
     return `<details class="raw-details"><summary>原始数据（调试用）</summary>${body}</details>`;
+}
+
+function isImagePayloadKey(key) {
+    return ['image', 'imageBase64', 'pngBase64'].includes(String(key || ''));
+}
+
+function imageSummary(value) {
+    const raw = String(value || '');
+    const b64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw;
+    return `PNG 图片数据（base64 ${b64.length} 字符）`;
+}
+
+function redactLargeImages(value) {
+    if (Array.isArray(value)) return value.map(redactLargeImages);
+    if (!value || typeof value !== 'object') return value;
+    const out = {};
+    Object.entries(value).forEach(([key, val]) => {
+        out[key] = isImagePayloadKey(key) && typeof val === 'string' && val.length > 80
+            ? imageSummary(val)
+            : redactLargeImages(val);
+    });
+    return out;
 }
 
 async function showDetail(id) {

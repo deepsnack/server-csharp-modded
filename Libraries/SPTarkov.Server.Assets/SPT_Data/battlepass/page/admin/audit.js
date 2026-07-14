@@ -1,7 +1,7 @@
 'use strict';
 
 const AUDIT_API = '/battlepass/api/admin/audit';
-const MODULE_NAMES = { shop: '商店', tasks: '任务', tracks: '奖励轨', lottery: '抽奖', trader: '商人', recipes: '配方', items: '物品管控', quests: '商人任务', flea: '跳蚤' };
+const MODULE_NAMES = { shop: '商店', tasks: '通行证任务', tracks: '奖励轨', lottery: '抽奖', trader: '商人', recipes: '配方', items: '物品管控', quests: '商人任务', titles: '称号', flea: '跳蚤' };
 const EVENT_NAMES = { submit: '协管提交', approve: '管理员批准', reject: '管理员驳回', rollback: '管理员回溯' };
 
 function el(id) { return document.getElementById(id); }

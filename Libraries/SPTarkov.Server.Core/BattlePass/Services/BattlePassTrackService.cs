@@ -4,8 +4,8 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass;
 
 /// <summary>
-///     通行证任务追踪：服务端战后档案是 Kills/FindItem/HandoverItem/Exploration 的权威来源；
-///     客户端插件上报（POST /battlepass/api/track）只作为 VisitZone/PlaceItem 等服务端档案缺失维度的补充。
+///     通行证任务追踪：服务端战后档案是普通 Kills/FindItem/HandoverItem/Exploration 的权威来源；
+///     客户端插件上报（POST /battlepass/api/track）负责带武器/口径/配件条件的 Kills，以及 VisitZone/PlaceItem 等服务端档案缺失维度。
 ///     两条路径共用同一套 <see cref="BpTaskTemplate"/> 条件判定与进度结算。
 ///     <para><b>零档案副作用</b>：不注入任何原生 quest、不写 <c>pmcData.Quests</c>/<c>TaskConditionCounters</c>，加载链路完全不受影响。</para>
 ///     <para><b>跨局累计</b>：默认任务进度跨局累加，仅在 daily/weekly/season 轮换时清零；
@@ -259,10 +259,10 @@ public class BattlePassTrackService(
     // ============================ 战后上报 → 进度累计 / 结算 ============================
 
     /// <summary>
-    ///     应用客户端实时上报的「本场累计快照」。客户端只负责服务端战后档案缺失的补充维度：
-    ///     <c>VisitZone</c> / <c>PlaceItem</c>；Kills/FindItem/HandoverItem/Exploration 由
-    ///     <see cref="ApplyAuthoritativeRaidTrack"/> 在战后从服务端档案权威结算，避免客户端随机 raidId 与
-    ///     服务端 ServerId 不一致时重复入账。
+    ///     应用客户端实时上报的「本场累计快照」。客户端负责带武器上下文条件的 <c>Kills</c>，以及
+    ///     <c>VisitZone</c> / <c>PlaceItem</c>；其余 Kills/FindItem/HandoverItem/Exploration 由
+    ///     <see cref="ApplyAuthoritativeRaidTrack"/> 在战后从服务端档案权威结算。每种任务只选择一个来源，
+    ///     避免客户端随机 raidId 与服务端 ServerId 不一致时重复入账。
     /// </summary>
     public RaidTrackResult ApplyRaidTrack(string profileId, BpProgress prog, BpSeason season, RaidTrackPayload? payload)
     {
@@ -295,8 +295,12 @@ public class BattlePassTrackService(
 
         var raidId = payload.RaidId ?? "";
         var previousRaidId = prog.CurrentRaidId;
-        var previousRaidHadAppliedProgress = prog.CurrentRaidApplied.Any(kv => kv.Value > 0);
+        var previousRaidApplied = new Dictionary<string, int>(prog.CurrentRaidApplied, StringComparer.OrdinalIgnoreCase);
+        var previousRaidHadAppliedProgress = previousRaidApplied.Any(kv => kv.Value > 0);
         var authoritative = source == RaidTrackSource.ServerAuthoritative;
+        var resumesPendingSupplemental = !authoritative
+            && !string.IsNullOrWhiteSpace(raidId)
+            && string.Equals(raidId, prog.PendingSupplementalRaidId, StringComparison.Ordinal);
 
         // 战局切换 / 乱序迟到判定
         if (!string.Equals(raidId, prog.CurrentRaidId, StringComparison.Ordinal))
@@ -308,15 +312,26 @@ public class BattlePassTrackService(
                 return result;
             }
 
+            if (resumesPendingSupplemental)
+            {
+                prog.CurrentRaidId = raidId;
+                prog.CurrentRaidApplied = new Dictionary<string, int>(
+                    prog.PendingSupplementalRaidApplied ?? new Dictionary<string, int>(),
+                    StringComparer.OrdinalIgnoreCase);
+            }
+            else
+            {
             // 客户端补充上报切到新战局：归档旧局 id，重置本场已应用计数。
             // 服务端权威收尾即便 raidId 不同，也先保留当前基准，兼容旧版客户端已预先入账的同类进度。
-            if (!authoritative)
-            {
-                ArchiveRaid(prog, prog.CurrentRaidId);
-                prog.CurrentRaidApplied.Clear();
-            }
+                if (!authoritative)
+                {
+                    ArchiveRaid(prog, prog.CurrentRaidId);
+                    prog.CurrentRaidApplied.Clear();
+                    ClearPendingSupplemental(prog);
+                }
 
-            prog.CurrentRaidId = string.IsNullOrWhiteSpace(raidId) ? null : raidId;
+                prog.CurrentRaidId = string.IsNullOrWhiteSpace(raidId) ? null : raidId;
+            }
         }
 
         var templates = BattlePassStore.GetAllTasks().ToDictionary(t => t.Id);
@@ -400,9 +415,17 @@ public class BattlePassTrackService(
         if (!string.IsNullOrWhiteSpace(payload.ExitStatus))
         {
             ArchiveRaid(prog, prog.CurrentRaidId);
-            if (authoritative && previousRaidHadAppliedProgress)
+            if (authoritative
+                && previousRaidHadAppliedProgress
+                && !string.IsNullOrWhiteSpace(previousRaidId)
+                && !string.Equals(previousRaidId, prog.CurrentRaidId, StringComparison.Ordinal))
             {
-                ArchiveRaid(prog, previousRaidId);
+                prog.PendingSupplementalRaidId = previousRaidId;
+                prog.PendingSupplementalRaidApplied = previousRaidApplied;
+            }
+            else if (!authoritative)
+            {
+                ClearPendingSupplemental(prog);
             }
 
             prog.CurrentRaidId = null;
@@ -452,12 +475,14 @@ public class BattlePassTrackService(
     {
         var ct = tpl.ConditionType?.Trim() ?? "Kills";
 
-        // 配件条件的击杀任务：服务端 Victim 战绩不含武器配件，只有客户端击杀瞬间能抓到整枪搭配，
-        // 故这类 Kills 改由客户端 supplemental 链路结算（普通击杀仍走服务端权威，防作弊不退化）。
-        var killWithMods = string.Equals(ct, "Kills", StringComparison.OrdinalIgnoreCase)
-            && (tpl.WeaponMods?.Count ?? 0) > 0;
+        // 武器条件击杀统一使用客户端击杀瞬间抓到的枪身 tpl/整枪搭配：
+        // 服务端 Victim.Weapon 的表示不保证是 tpl，且完全不含配件。每项任务只走一个来源，避免双计数。
+        var killWithWeaponContext = string.Equals(ct, "Kills", StringComparison.OrdinalIgnoreCase)
+            && ((tpl.Weapons?.Any(value => !string.IsNullOrWhiteSpace(value)) ?? false)
+                || (tpl.WeaponCalibers?.Any(value => !string.IsNullOrWhiteSpace(value)) ?? false)
+                || (tpl.WeaponMods?.Any(value => !string.IsNullOrWhiteSpace(value)) ?? false));
 
-        var supplemental = killWithMods
+        var supplemental = killWithWeaponContext
             || string.Equals(ct, "VisitZone", StringComparison.OrdinalIgnoreCase)
             || string.Equals(ct, "PlaceItem", StringComparison.OrdinalIgnoreCase);
 
@@ -477,6 +502,12 @@ public class BattlePassTrackService(
         {
             prog.ProcessedRaidIds.RemoveRange(0, prog.ProcessedRaidIds.Count - MaxProcessedRaidIds);
         }
+    }
+
+    private static void ClearPendingSupplemental(BpProgress prog)
+    {
+        prog.PendingSupplementalRaidId = null;
+        prog.PendingSupplementalRaidApplied.Clear();
     }
 
     /// <summary>把一场上报对某任务模板换算成进度增量（条件判定全在服务端）。</summary>

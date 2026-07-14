@@ -36,7 +36,8 @@ public class BattlePassMod(
     RecipeChangeHandler recipeChangeHandler,
     ItemsChangeHandler itemsChangeHandler,
     FleaChangeHandler fleaChangeHandler,
-    QuestChangeHandler questChangeHandler
+    QuestChangeHandler questChangeHandler,
+    TitleChangeHandler titleChangeHandler
 ) : IOnLoad
 {
     public Task OnLoad()
@@ -58,6 +59,7 @@ public class BattlePassMod(
         reviewService.RegisterHandler(itemsChangeHandler);
         reviewService.RegisterHandler(fleaChangeHandler);
         reviewService.RegisterHandler(questChangeHandler);
+        reviewService.RegisterHandler(titleChangeHandler);
         reviewService.RecoverOnStartup();
         reviewService.PurgeExpiredAudit();
         // 页面随 Assets 工程输出到 SPT_Data/battlepass/page/，无需运行期解压；
@@ -75,7 +77,7 @@ public class BattlePassMod(
             logger.Warning($"[SPT-BattlePass] EndLocalRaid 任务追踪补丁启用失败，服务端权威追踪不可用: {ex.Message}");
         }
 
-        // 任务进度由服务端 EndLocalRaid 战后档案权威结算；客户端插件只补 VisitZone/PlaceItem 与实时反馈。
+        // 普通任务由服务端 EndLocalRaid 战后档案权威结算；客户端插件补充武器条件击杀、VisitZone/PlaceItem 与实时反馈。
         // 服务端不注入任何原生 quest，加载链路零副作用。
         logger.Success("[SPT-BattlePass] loaded; player API /battlepass/api/*, admin API /battlepass/api/admin/*");
         PrintAddress();
@@ -94,7 +96,7 @@ public class BattlePassMod(
             logger.Success($"  称号页: https://{host}:{httpConfig.Port}/battlepass/titles.html");
             logger.Success($"  管理页: https://{host}:{httpConfig.Port}/battlepass/admin/index.html");
             logger.Success($"  任务页: https://{host}:{httpConfig.Port}/battlepass/admin/tasks.html");
-            logger.Success($"  商人任务管理: https://{host}:{httpConfig.Port}/battlepass/admin/quests.html");
+            logger.Success($"  商人任务管理: https://{host}:{httpConfig.Port}/battlepass/admin/tasks.html?tab=trader");
             logger.Success("=========================================================");
         }
         catch (Exception ex)

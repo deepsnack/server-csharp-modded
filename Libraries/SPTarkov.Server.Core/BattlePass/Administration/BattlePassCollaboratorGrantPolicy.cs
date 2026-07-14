@@ -3,7 +3,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 /// <summary>协管授权记录的统一 profileId 匹配与删除规则。</summary>
 public static class BattlePassCollaboratorGrantPolicy
 {
-    private static readonly string[] BaseDefaultCapabilities =
+    private static readonly string[] LegacyDefaultCapabilities =
     [
         "shop.read", "shop.submit",
         "tasks.read", "tasks.submit",
@@ -14,6 +14,12 @@ public static class BattlePassCollaboratorGrantPolicy
         "items.read", "items.submit",
         "flea.read", "flea.submit",
         "quests.read", "quests.submit",
+    ];
+
+    private static readonly string[] BaseDefaultCapabilities =
+    [
+        ..LegacyDefaultCapabilities,
+        "titles.read", "titles.submit",
     ];
 
     public static string NormalizeProfileId(string? profileId) => (profileId ?? "").Trim();
@@ -50,6 +56,14 @@ public static class BattlePassCollaboratorGrantPolicy
         if (set.Contains("tasks.submit") && set.Contains("trader.submit"))
         {
             set.Add("quests.submit");
+        }
+
+        // 2026-07:称号管理纳入协管默认全模块授权。仅旧版“完整默认授权”补齐，
+        // 手工裁剪的受限授权不自动扩权。
+        if (LegacyDefaultCapabilities.All(cap => set.Contains(cap)))
+        {
+            set.Add("titles.read");
+            set.Add("titles.submit");
         }
 
         return set

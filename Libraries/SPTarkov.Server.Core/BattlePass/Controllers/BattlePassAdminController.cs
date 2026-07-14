@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.Controllers;
@@ -23,7 +22,8 @@ public class BattlePassAdminController(
     BattlePassTrackService trackService,
     BattlePassRecipeSync recipeSync,
     TaskGeneratorService taskGenerator,
-    BattlePassAdminSessionService sessionService
+    BattlePassAdminSessionService sessionService,
+    TitleChangeHandler titleChangeHandler
 ) : ControllerBase
 {
     // 统一鉴权：任意合法管理员 token（原始或会话）均放行；协管被 IsAdmin 挡下（写操作）。
@@ -33,9 +33,6 @@ public class BattlePassAdminController(
     // 保存时前端改走 /reviews/submit 进审核队列，而非本控制器的即时写端点）。
     private bool CanRead(string? token, string capability)
         => sessionService.ValidateToken(token)?.HasCapability(capability) == true;
-
-    // 称号 id 安全 slug（同时是图片文件名约束，杜绝路径穿越）。
-    private static readonly Regex TitleIdRegex = new("^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);
 
     private static string? NormalizeRefreshScope(string? scope)
     {
@@ -915,7 +912,7 @@ public class BattlePassAdminController(
     [HttpGet("titles")]
     public object GetTitles([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "titles.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -925,63 +922,15 @@ public class BattlePassAdminController(
 
     /// <summary>新增或更新单个称号目录项（按 id upsert）。</summary>
     [HttpPost("titles")]
-    public object UpsertTitle([FromBody] BpTitle title, [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    public object UpsertTitle([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
-        {
-            return new { success = false, message = "未授权" };
-        }
-
-        if (string.IsNullOrWhiteSpace(title.Id))
-        {
-            return new { success = false, message = "称号 id 不能为空" };
-        }
-
-        if (!TitleIdRegex.IsMatch(title.Id))
-        {
-            return new { success = false, message = "称号 id 仅允许字母/数字/下划线/连字符（≤64 位）" };
-        }
-
-        var titles = BattlePassStore.GetTitleCatalog();
-        titles.RemoveAll(t => t.Id == title.Id);
-        titles.Add(title);
-        BattlePassStore.SaveTitleCatalog(titles);
-        return new { success = true };
+        return TitleCommandResponse(ApplyTitleCommand("title.upsert", request, token, "已保存"));
     }
 
     [HttpDelete("titles")]
     public object DeleteTitle([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
-        {
-            return new { success = false, message = "未授权" };
-        }
-
-        var id = request.TryGetProperty("id", out var i) ? i.GetString() : null;
-        if (string.IsNullOrEmpty(id))
-        {
-            return new { success = false, message = "缺少 id" };
-        }
-
-        var titles = BattlePassStore.GetTitleCatalog();
-        var removed = titles.RemoveAll(t => t.Id == id);
-        BattlePassStore.SaveTitleCatalog(titles);
-
-        // 一并清理图片文件（若有）
-        try
-        {
-            var p = BattlePassStore.TitleImagePath(id);
-            if (System.IO.File.Exists(p))
-            {
-                System.IO.File.Delete(p);
-            }
-        }
-        catch
-        {
-            // 忽略
-        }
-
-        return new { success = removed > 0 };
+        return TitleCommandResponse(ApplyTitleCommand("title.delete", request, token, "已删除"));
     }
 
     /// <summary>上传图片称号的 PNG：body { id, image: "data:image/png;base64,..." 或裸 base64 }。仅 PNG、约定 128×32、≤512KB。</summary>
@@ -991,126 +940,28 @@ public class BattlePassAdminController(
         [FromHeader(Name = "X-Admin-Token")] string? token = null
     )
     {
-        if (!Auth(token))
-        {
-            return new { success = false, message = "未授权" };
-        }
-
+        var result = ApplyTitleCommand("title.image", request, token, "图片已上传");
         var id = request.TryGetProperty("id", out var i) ? i.GetString() : null;
-        if (string.IsNullOrWhiteSpace(id) || !TitleIdRegex.IsMatch(id))
-        {
-            return new { success = false, message = "称号 id 非法（先保存称号目录项再上传图片）" };
-        }
-
-        var image = request.TryGetProperty("image", out var im) ? im.GetString() : null;
-        if (string.IsNullOrWhiteSpace(image))
-        {
-            return new { success = false, message = "缺少 image" };
-        }
-
-        var comma = image.IndexOf(',');
-        if (image.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0)
-        {
-            image = image[(comma + 1)..];
-        }
-
-        byte[] bytes;
-        try
-        {
-            bytes = Convert.FromBase64String(image.Trim());
-        }
-        catch
-        {
-            return new { success = false, message = "图片 base64 解析失败" };
-        }
-
-        if (bytes.Length == 0 || bytes.Length > 512 * 1024)
-        {
-            return new { success = false, message = "图片为空或超过 512KB" };
-        }
-
-        // 必须是 PNG（魔数 89 50 4E 47 0D 0A 1A 0A），且 IHDR 尺寸 == 128×32（约定横幅，透明底）
-        if (bytes.Length < 24 || bytes[0] != 0x89 || bytes[1] != 0x50 || bytes[2] != 0x4E || bytes[3] != 0x47)
-        {
-            return new { success = false, message = "仅支持 PNG 图片" };
-        }
-
-        // IHDR：PNG 签名 8 字节后是 length(4)+"IHDR"(4)+width(4 大端)+height(4 大端)
-        var width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
-        var height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
-        if (width != 128 || height != 32)
-        {
-            return new { success = false, message = $"图片尺寸必须为约定的 128×32（当前 {width}×{height}）" };
-        }
-
-        try
-        {
-            Directory.CreateDirectory(BattlePassStore.TitleImageDir);
-            System.IO.File.WriteAllBytes(BattlePassStore.TitleImagePath(id), bytes);
-        }
-        catch (Exception ex)
-        {
-            return new { success = false, message = "保存失败: " + ex.Message };
-        }
-
-        // 同步目录项：确保该称号 type=image、尺寸记录正确
-        var titles = BattlePassStore.GetTitleCatalog();
-        var t = titles.FirstOrDefault(x => x.Id == id);
-        if (t is not null)
-        {
-            t.Type = "image";
-            t.ImageFile = id + ".png";
-            t.Width = 128;
-            t.Height = 32;
-            BattlePassStore.SaveTitleCatalog(titles);
-        }
-
-        return new { success = true, imageUrl = $"/battlepass/api/title-image/{id}" };
+        return new { success = result.Success, message = result.Message, revision = result.Revision, imageUrl = id is null ? null : $"/battlepass/api/title-image/{id}" };
     }
 
     // ---- 通行证称号：授予 / 撤销 / 持有总览 ----
     [HttpPost("titles/grant")]
     public object GrantTitle([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
-        {
-            return new { success = false, message = "未授权" };
-        }
-
-        var profileId = request.TryGetProperty("profileId", out var p) ? p.GetString() : null;
-        var titleId = request.TryGetProperty("titleId", out var t) ? t.GetString() : null;
-        if (string.IsNullOrWhiteSpace(profileId) || string.IsNullOrWhiteSpace(titleId))
-        {
-            return new { success = false, message = "缺少 profileId 或 titleId" };
-        }
-
-        var ok = BattlePassStore.GrantTitle(profileId, titleId);
-        return new { success = true, granted = ok, message = ok ? "已授予" : "该玩家已拥有此称号" };
+        return TitleCommandResponse(ApplyTitleCommand("title.grant", request, token, "已授予"));
     }
 
     [HttpPost("titles/revoke")]
     public object RevokeTitle([FromBody] JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
-        {
-            return new { success = false, message = "未授权" };
-        }
-
-        var profileId = request.TryGetProperty("profileId", out var p) ? p.GetString() : null;
-        var titleId = request.TryGetProperty("titleId", out var t) ? t.GetString() : null;
-        if (string.IsNullOrWhiteSpace(profileId) || string.IsNullOrWhiteSpace(titleId))
-        {
-            return new { success = false, message = "缺少 profileId 或 titleId" };
-        }
-
-        var ok = BattlePassStore.RevokeTitle(profileId, titleId);
-        return new { success = true, revoked = ok, message = ok ? "已撤销" : "该玩家未拥有此称号" };
+        return TitleCommandResponse(ApplyTitleCommand("title.revoke", request, token, "已撤销"));
     }
 
     [HttpGet("title-holders")]
     public object GetTitleHolders([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!CanRead(token, "titles.read"))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1131,6 +982,36 @@ public class BattlePassAdminController(
             .ToList();
 
         return new { success = true, holders };
+    }
+
+    private static object TitleCommandResponse((bool Success, string Message, string? Revision) result)
+    {
+        return new { success = result.Success, message = result.Message, revision = result.Revision };
+    }
+
+    private (bool Success, string Message, string? Revision) ApplyTitleCommand(string commandType, JsonElement request, string? token, string successMessage)
+    {
+        if (!Auth(token))
+        {
+            return (false, "未授权", null);
+        }
+
+        try
+        {
+            var normalized = titleChangeHandler.Normalize(commandType, request);
+            var error = titleChangeHandler.Validate(commandType, normalized);
+            if (error is not null)
+            {
+                return (false, error, null);
+            }
+
+            var revision = titleChangeHandler.ApplyAndActivate(commandType, normalized, expectedBaseRevision: null, changeId: null);
+            return (true, successMessage, revision);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
     }
 
     // ---- 玩家总览 ----
@@ -1215,7 +1096,7 @@ public class BattlePassAdminController(
     [HttpGet("players")]
     public object GetPlayers([FromHeader(Name = "X-Admin-Token")] string? token = null)
     {
-        if (!Auth(token))
+        if (!Auth(token) && !CanRead(token, "titles.read"))
         {
             return new { success = false, message = "未授权" };
         }

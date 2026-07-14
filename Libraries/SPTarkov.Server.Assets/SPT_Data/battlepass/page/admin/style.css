@@ -26,6 +26,54 @@
 .tab-pane.hidden { display: none; }
 .tab-pane { animation: fadeUp .35s both; }
 
+/* ---- 任务统一入口 ---- */
+.task-hub-content {
+    padding: 0;
+    height: calc(100vh - 74px);
+    min-height: 640px;
+}
+.task-hub-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+}
+.task-hub-frame.hidden { display: none; }
+
+/* ---- 商人任务高级条件编辑器 ---- */
+.quest-objective-card {
+    border: 1px solid var(--line);
+    background: rgba(9, 12, 8, .72);
+    padding: 10px;
+    margin: 8px 0;
+}
+.quest-objective-body { margin-top: 9px; }
+.quest-field-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+}
+.quest-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.quest-field > span:first-child { color: var(--muted); font-size: 11px; }
+.quest-picker, .quest-multi-picker { position: relative; display: block; width: 100%; }
+.quest-picker > input, .quest-multi-picker > input { width: 100%; }
+.quest-multi-picker .ip-results, .quest-picker .ip-results { left: 0; right: 0; }
+.quest-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 7px;
+    margin-top: 10px;
+}
+.compare-editor, .daytime-editor { display: inline-flex; align-items: center; gap: 5px; }
+.compare-editor > span { min-width: 58px; color: var(--muted); font-size: 11px; }
+.compare-editor select { width: 68px; }
+.compare-editor input { width: 88px; }
+.inline-check { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+.quest-field select[multiple] { min-height: 92px; }
+.multi-chip { display: inline-flex; align-items: center; gap: 4px; }
+.multi-chip button { border: 0; background: none; color: inherit; cursor: pointer; padding: 0; }
+
 /* ---- JSON 编辑器 ---- */
 .json-edit {
     width: 100%; min-height: 320px; background: #070805; border: 1px solid var(--line-bright); color: var(--olive);

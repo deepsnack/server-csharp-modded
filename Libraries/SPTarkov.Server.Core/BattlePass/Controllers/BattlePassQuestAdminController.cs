@@ -40,6 +40,43 @@ public class BattlePassQuestAdminController(
         return new { success = true, traders = graphService.GetTraders() };
     }
 
+    /// <summary>自定义条件目录：地图 target 与可选择的击杀阵营/bot role。</summary>
+    [HttpGet("catalog")]
+    public object GetCatalog([FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!CanRead(token, "quests.read"))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new
+        {
+            success = true,
+            locations = graphService.GetLocations(),
+            killTargets = graphService.GetKillTargets(),
+        };
+    }
+
+    /// <summary>检索指定商人的真实货架根商品，供 AssortmentUnlock 奖励选择。</summary>
+    [HttpGet("assorts")]
+    public object GetAssorts(
+        [FromQuery] string? traderId,
+        [FromQuery] string? q,
+        [FromQuery] int? limit,
+        [FromHeader(Name = "X-Admin-Token")] string? token = null)
+    {
+        if (!CanRead(token, "quests.read"))
+        {
+            return new { success = false, message = "未授权" };
+        }
+
+        return new
+        {
+            success = true,
+            assorts = graphService.SearchAssorts(traderId, q, limit is > 0 and <= 100 ? limit.Value : 30),
+        };
+    }
+
     /// <summary>任务清单（可按商人过滤、按名称/id 关键字搜索）。</summary>
     [HttpGet("list")]
     public object ListQuests(

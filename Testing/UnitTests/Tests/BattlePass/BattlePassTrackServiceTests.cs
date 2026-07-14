@@ -67,6 +67,69 @@ public class BattlePassTrackServiceTests
         Assert.That(_trackService.KillMatches(task, new BpKillEvent()), Is.False);
     }
 
+    [Test]
+    public void SupplementalSpecificWeaponTask_ClientSnapshotsAdvanceWithoutAuthoritativeDoubleCount()
+    {
+        const string weaponTpl = "weapon-a";
+        WithTaskStore(
+            new BpTaskTemplate
+            {
+                Id = "specific_weapon_kills",
+                Scope = "daily",
+                ConditionType = "Kills",
+                Target = "Any",
+                Count = 2,
+                Xp = 100,
+                Weapons = [weaponTpl],
+            },
+            (progress, season) =>
+            {
+                _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "client-raid",
+                    Kills = [new BpKillEvent { Weapon = weaponTpl }],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(1));
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.False);
+                });
+
+                _trackService.ApplyAuthoritativeRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "server-raid",
+                    ExitStatus = "Survived",
+                    Kills =
+                    [
+                        new BpKillEvent { Weapon = weaponTpl },
+                        new BpKillEvent { Weapon = weaponTpl },
+                    ],
+                });
+
+                Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(1), "权威战后快照不应重复消费客户端武器任务");
+
+                var final = _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "client-raid",
+                    ExitStatus = "Survived",
+                    Kills =
+                    [
+                        new BpKillEvent { Weapon = weaponTpl },
+                        new BpKillEvent { Weapon = weaponTpl },
+                    ],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(2));
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.True);
+                    Assert.That(progress.Xp, Is.EqualTo(100));
+                    Assert.That(final.Credited.Single(credit => credit.Done).TaskId, Is.EqualTo("specific_weapon_kills"));
+                });
+            });
+    }
+
     [TestCase("Killed")]
     [TestCase("MissingInAction")]
     [TestCase("Left")]
@@ -154,6 +217,67 @@ public class BattlePassTrackServiceTests
             });
     }
 
+    [TestCase("Killed")]
+    [TestCase("MissingInAction")]
+    [TestCase("Left")]
+    [TestCase("Runner")]
+    [TestCase("Transit")]
+    public void OneLife_SupplementalWeaponProgress_NonSurvivedFinalClearsProgress(string exitStatus)
+    {
+        const string weaponTpl = "weapon-a";
+        WithTaskStore(
+            new BpTaskTemplate
+            {
+                Id = "one_life_specific_weapon",
+                Scope = "daily",
+                ConditionType = "Kills",
+                Target = "Any",
+                Count = 1,
+                Xp = 100,
+                OneLife = true,
+                Weapons = [weaponTpl],
+            },
+            (progress, season) =>
+            {
+                _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "client-raid",
+                    Kills = [new BpKillEvent { Weapon = weaponTpl }],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(1));
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.False);
+                    Assert.That(progress.Xp, Is.Zero);
+                });
+
+                _trackService.ApplyAuthoritativeRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "server-raid",
+                    ExitStatus = exitStatus,
+                });
+
+                Assert.That(progress.ActiveTasks[0].Progress, Is.Zero);
+
+                var final = _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "client-raid",
+                    ExitStatus = exitStatus,
+                    Kills = [new BpKillEvent { Weapon = weaponTpl }],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.Zero);
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.False);
+                    Assert.That(progress.Xp, Is.Zero);
+                    Assert.That(final.Credited.Any(credit => credit.Done), Is.False);
+                    Assert.That(progress.PendingSupplementalRaidId, Is.Null);
+                });
+            });
+    }
+
     [Test]
     public void LegacySingleRaid_KilledAfterTargetReached_RetainsLegacyCompletionBehavior()
     {
@@ -169,6 +293,57 @@ public class BattlePassTrackServiceTests
                 });
 
                 Assert.That(progress.ActiveTasks[0].CreditedXp, Is.True);
+            });
+    }
+
+    [Test]
+    public void SupplementalWeaponModTask_ClientFinalAfterAuthoritativeEnd_CompletesFromPendingBaseline()
+    {
+        WithTaskStore(
+            new BpTaskTemplate
+            {
+                Id = "test_drive_like",
+                Scope = "daily",
+                ConditionType = "Kills",
+                Count = 2,
+                Xp = 100,
+                WeaponMods = ["mod-a"],
+            },
+            (progress, season) =>
+            {
+                _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "client-raid",
+                    Kills = [new BpKillEvent { WeaponMods = ["mod-a"] }],
+                });
+
+                _trackService.ApplyAuthoritativeRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "server-raid",
+                    ExitStatus = "Survived",
+                });
+
+                var final = _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "client-raid",
+                    ExitStatus = "Survived",
+                    Kills =
+                    [
+                        new BpKillEvent { WeaponMods = ["mod-a"] },
+                        new BpKillEvent { WeaponMods = ["mod-a"] },
+                    ],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.True);
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(2));
+                    Assert.That(progress.Xp, Is.EqualTo(100));
+                    Assert.That(final.Duplicate, Is.False);
+                    Assert.That(progress.ProcessedRaidIds, Does.Contain("client-raid"));
+                    Assert.That(progress.ProcessedRaidIds, Does.Contain("server-raid"));
+                    Assert.That(progress.PendingSupplementalRaidId, Is.Null);
+                });
             });
     }
 

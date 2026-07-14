@@ -58,7 +58,7 @@ public partial class QuestSkipFrontendTests
     }
 
     [Test]
-    public void EveryPlayerPage_UsesStickyUnifiedNavigation()
+    public void EveryPlayerPage_UsesFixedUnifiedNavigationWithReservedSpace()
     {
         var pageDir = FindPageSourceDirectory();
         foreach (var file in new[] { "index.html", "quest-skip.html", "lottery.html", "titles.html" })
@@ -67,10 +67,17 @@ public partial class QuestSkipFrontendTests
             Assert.That(html, Does.Contain("player-topbar"), file);
             Assert.That(html, Does.Contain("player-nav"), file);
             Assert.That(html, Does.Contain("quest-skip.html"), file);
+            Assert.That(html, Does.Contain("player-topbar.js"), file);
         }
 
         var css = File.ReadAllText(Path.Combine(pageDir, "style.css"));
-        Assert.That(css, Does.Match(@"\.player-topbar\s*\{[^}]*position:\s*sticky"));
+        var script = File.ReadAllText(Path.Combine(pageDir, "player-topbar.js"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(css, Does.Match(@"\.player-topbar\s*\{[^}]*position:\s*fixed"));
+            Assert.That(script, Does.Contain("ResizeObserver"));
+            Assert.That(script, Does.Contain("view.style.paddingTop"));
+        });
     }
 
     [Test]

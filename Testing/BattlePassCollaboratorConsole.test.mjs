@@ -3,11 +3,14 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const root = new URL('../Libraries/SPTarkov.Server.Assets/SPT_Data/battlepass/page/', import.meta.url);
-const [playerSource, legacyHtml, adminAuth, adminScript, myChanges, reviews] = await Promise.all([
+const [playerSource, legacyHtml, adminAuth, adminScript, adminIndex, tasksHub, titlesJs, myChanges, reviews] = await Promise.all([
     readFile(new URL('script.js', root), 'utf8'),
     readFile(new URL('collab/index.html', root), 'utf8'),
     readFile(new URL('admin/auth.js', root), 'utf8'),
     readFile(new URL('admin/script.js', root), 'utf8'),
+    readFile(new URL('admin/index.html', root), 'utf8'),
+    readFile(new URL('admin/tasks-hub.js', root), 'utf8'),
+    readFile(new URL('admin/titles.js', root), 'utf8'),
     readFile(new URL('admin/my-changes.js', root), 'utf8'),
     readFile(new URL('admin/reviews.js', root), 'utf8'),
 ]);
@@ -48,9 +51,23 @@ test('administrator review batches send cross-module items with optimistic versi
     assert.match(reviews, /batchSummary/);
 });
 
-test('shared collaborator console exposes trader-quest management when authorized', () => {
-    assert.match(adminScript, /\['quests\.html', 'quests\.read'\]/);
+test('shared collaborator console exposes one unified task entry for battle-pass and trader quests', () => {
+    assert.match(adminIndex, /href="tasks\.html">任务/);
+    assert.doesNotMatch(adminIndex, /href="quests\.html">商人任务/);
+    assert.match(adminScript, /\['tasks\.html', \['tasks\.read', 'quests\.read'\]\]/);
+    assert.match(tasksHub, /hasCapability\('quests\.read'\)/);
+    assert.match(tasksHub, /data-task-tab/);
     assert.match(myChanges, /quests: '商人任务'/);
-    assert.match(myChanges, /quests: 'quests\.html'/);
+    assert.match(myChanges, /quests: 'tasks\.html\?tab=trader'/);
     assert.match(reviews, /quests: '商人任务'/);
+});
+
+test('title management is available to collaborators through review submissions', () => {
+    assert.match(adminScript, /\['titles\.html', 'titles\.read'\]/);
+    assert.match(titlesJs, /bootstrapAdminPage\(\{ moduleCap: 'titles\.read'/);
+    assert.match(titlesJs, /submitChange\('titles', 'title\.upsert'/);
+    assert.match(titlesJs, /submitChange\('titles', 'title\.grant'/);
+    assert.doesNotMatch(titlesJs, /称号管理仅管理员可用/);
+    assert.match(myChanges, /titles: '称号'/);
+    assert.match(reviews, /titles: '称号'/);
 });

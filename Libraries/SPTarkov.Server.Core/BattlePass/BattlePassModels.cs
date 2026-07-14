@@ -671,6 +671,17 @@ public record BpProgress
     [JsonPropertyName("currentRaidApplied")]
     public Dictionary<string, int> CurrentRaidApplied { get; set; } = new();
 
+    /// <summary>
+    ///     服务端权威战后结算使用 ServerId，客户端 supplemental 使用本地 raidId。若权威结算先收尾，
+    ///     这里暂存客户端 raidId，允许随后到达的客户端 final 快照按既有基线补最后差值并确认撤离状态。
+    /// </summary>
+    [JsonPropertyName("pendingSupplementalRaidId")]
+    public string? PendingSupplementalRaidId { get; set; }
+
+    /// <summary>挂起客户端战局的已应用基线（taskId → 已应用量）。</summary>
+    [JsonPropertyName("pendingSupplementalRaidApplied")]
+    public Dictionary<string, int> PendingSupplementalRaidApplied { get; set; } = new();
+
     /// <summary>网页商店各 offer 的累计购买次数（offerId → 已购次数），用于按 <see cref="BpTraderOffer.BuyLimit"/> 限购。跨赛季随进度重置。</summary>
     [JsonPropertyName("shopPurchases")]
     public Dictionary<string, int> ShopPurchases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -692,7 +703,7 @@ public record BpProgress
 //  客户端只上报「原始战绩事件」，条件匹配/累计/结算全在服务端（BattlePassTrackService）。
 // ============================================================================
 
-/// <summary>一次击杀事件：客户端只上报阵营/角色；服务端战后权威路径会补充武器、部位、距离等字段。</summary>
+/// <summary>一次击杀事件：客户端上报阵营、角色和击杀瞬间的武器上下文；服务端战后权威路径也会提供其可用的战绩字段。</summary>
 public record BpKillEvent
 {
     [JsonPropertyName("side")]
@@ -1045,13 +1056,15 @@ public record BpCustomRecipe
 
 /// <summary>
 ///     任务奖励项（mod 本地）。编译成 core <c>Reward</c> 时按 <see cref="Type"/> 分流。
-///     首版支持：item / experience / traderStanding / traderUnlock。
+///     支持原版任务奖励：item / experience / traderStanding / traderUnlock /
+///     assortmentUnlock / productionScheme。
 /// </summary>
 public record BpQuestReward
 {
     /// <summary>
     ///     奖励类型：<c>item</c>（默认，发实物）/ <c>experience</c>（人物经验）/
-    ///     <c>traderStanding</c>（商人声望）/ <c>traderUnlock</c>（解锁商人）。
+    ///     <c>traderStanding</c>（商人声望）/ <c>traderUnlock</c>（解锁商人）/
+    ///     <c>assortmentUnlock</c>（解锁商人货架）/ <c>productionScheme</c>（解锁藏身处配方）。
     /// </summary>
     [JsonPropertyName("type")]
     public string Type { get; set; } = "item";
@@ -1068,9 +1081,17 @@ public record BpQuestReward
     [JsonPropertyName("value")]
     public double Value { get; set; }
 
-    /// <summary>type=traderStanding / traderUnlock 时的目标商人 id。</summary>
+    /// <summary>type=traderStanding / traderUnlock / assortmentUnlock 时的目标商人 id。</summary>
     [JsonPropertyName("traderId")]
     public string? TraderId { get; set; }
+
+    /// <summary>type=assortmentUnlock 时的商人 assort 根物品实例 id（不是物品 tpl）。</summary>
+    [JsonPropertyName("offerId")]
+    public string? OfferId { get; set; }
+
+    /// <summary>type=productionScheme 时的藏身处 production/recipe id。</summary>
+    [JsonPropertyName("recipeId")]
+    public string? RecipeId { get; set; }
 
     /// <summary>type=item 时是否标记「战局内找到」（FIR）。</summary>
     [JsonPropertyName("foundInRaid")]
@@ -1081,17 +1102,38 @@ public record BpQuestReward
     public string? Name { get; set; }
 }
 
+/// <summary>原版任务数值比较条件（例如枪匠属性、击杀距离）。</summary>
+public record BpQuestValueCompare
+{
+    [JsonPropertyName("compareMethod")]
+    public string CompareMethod { get; set; } = ">=";
+
+    [JsonPropertyName("value")]
+    public double Value { get; set; }
+}
+
+/// <summary>原版击杀任务的游戏内时段；允许跨午夜，例如 22 → 6。</summary>
+public record BpQuestDaytime
+{
+    [JsonPropertyName("from")]
+    public int From { get; set; }
+
+    [JsonPropertyName("to")]
+    public int To { get; set; }
+}
+
 /// <summary>
 ///     自定义任务的完成目标（mod 本地）。编译成 core <c>QuestCondition</c>（进 AvailableForFinish）。
-///     首版支持：<c>handoverItem</c>（上交物品）/ <c>kills</c>（击杀计数，编成 CounterCreator）。
+///     支持：<c>handoverItem</c>（上交物品）/ <c>weaponAssembly</c>（枪匠式上交）/
+///     <c>kills</c>（原版组合击杀条件）/ <c>transit</c>（从指定地图转移）。
 /// </summary>
 public record BpQuestObjective
 {
-    /// <summary>目标类型：<c>handoverItem</c> / <c>kills</c>。</summary>
+    /// <summary>目标类型：handoverItem / weaponAssembly / kills / transit。</summary>
     [JsonPropertyName("type")]
     public string Type { get; set; } = "handoverItem";
 
-    /// <summary>type=handoverItem 时要上交的物品 tpl。</summary>
+    /// <summary>type=handoverItem / weaponAssembly 时的物品或枪械 tpl。</summary>
     [JsonPropertyName("tpl")]
     public string? Tpl { get; set; }
 
@@ -1103,9 +1145,94 @@ public record BpQuestObjective
     [JsonPropertyName("onlyFoundInRaid")]
     public bool OnlyFoundInRaid { get; set; }
 
-    /// <summary>type=kills 时的目标阵营：<c>Any</c> / <c>Savage</c>（Scav）/ <c>AnyPmc</c> / <c>Usec</c> / <c>Bear</c>。</summary>
+    /// <summary>type=kills 时的单目标阵营（旧配置兼容入口）。</summary>
     [JsonPropertyName("target")]
     public string Target { get; set; } = "Any";
+
+    /// <summary>击杀目标阵营列表；为空时回退 <see cref="Target"/>。</summary>
+    [JsonPropertyName("targets")]
+    public List<string> Targets { get; set; } = new();
+
+    /// <summary>Kills/Transit 的地图 target（LocationBase.Id）。</summary>
+    [JsonPropertyName("locations")]
+    public List<string> Locations { get; set; } = new();
+
+    /// <summary>Kills 指定枪械 tpl。</summary>
+    [JsonPropertyName("weapons")]
+    public List<string> Weapons { get; set; } = new();
+
+    /// <summary>Kills 必须装配的配件 tpl；编译为 weaponModsInclusive 的 AND 单元素组。</summary>
+    [JsonPropertyName("weaponMods")]
+    public List<string> WeaponMods { get; set; } = new();
+
+    /// <summary>Kills 指定口径枚举名。</summary>
+    [JsonPropertyName("weaponCalibers")]
+    public List<string> WeaponCalibers { get; set; } = new();
+
+    /// <summary>Kills 指定 Scav/boss 角色。</summary>
+    [JsonPropertyName("savageRoles")]
+    public List<string> SavageRoles { get; set; } = new();
+
+    /// <summary>Kills 指定致命部位。</summary>
+    [JsonPropertyName("bodyParts")]
+    public List<string> BodyParts { get; set; } = new();
+
+    /// <summary>Kills 距离比较条件。</summary>
+    [JsonPropertyName("distance")]
+    public BpQuestValueCompare? Distance { get; set; }
+
+    /// <summary>Kills 游戏内时段；null 表示不限。</summary>
+    [JsonPropertyName("daytime")]
+    public BpQuestDaytime? Daytime { get; set; }
+
+    /// <summary>true 时编译为原版 CounterCreator.oneSessionOnly（死亡/离局会丢失本局未完成进度）。</summary>
+    [JsonPropertyName("oneLife")]
+    public bool OneLife { get; set; }
+
+    /// <summary>true 时仅在前一个目标完成后显示/激活，用于击杀→转移→击杀阶段链。</summary>
+    [JsonPropertyName("dependsOnPrevious")]
+    public bool DependsOnPrevious { get; set; }
+
+    /// <summary>WeaponAssembly 必须包含的具体配件 tpl。</summary>
+    [JsonPropertyName("containsItems")]
+    public List<string> ContainsItems { get; set; } = new();
+
+    /// <summary>WeaponAssembly 必须包含的物品父类别 tpl。</summary>
+    [JsonPropertyName("hasItemFromCategory")]
+    public List<string> HasItemFromCategory { get; set; } = new();
+
+    [JsonPropertyName("baseAccuracy")]
+    public BpQuestValueCompare? BaseAccuracy { get; set; }
+
+    [JsonPropertyName("durability")]
+    public BpQuestValueCompare? Durability { get; set; }
+
+    [JsonPropertyName("effectiveDistance")]
+    public BpQuestValueCompare? EffectiveDistance { get; set; }
+
+    [JsonPropertyName("emptyTacticalSlot")]
+    public BpQuestValueCompare? EmptyTacticalSlot { get; set; }
+
+    [JsonPropertyName("ergonomics")]
+    public BpQuestValueCompare? Ergonomics { get; set; }
+
+    [JsonPropertyName("height")]
+    public BpQuestValueCompare? Height { get; set; }
+
+    [JsonPropertyName("magazineCapacity")]
+    public BpQuestValueCompare? MagazineCapacity { get; set; }
+
+    [JsonPropertyName("muzzleVelocity")]
+    public BpQuestValueCompare? MuzzleVelocity { get; set; }
+
+    [JsonPropertyName("recoil")]
+    public BpQuestValueCompare? Recoil { get; set; }
+
+    [JsonPropertyName("weight")]
+    public BpQuestValueCompare? Weight { get; set; }
+
+    [JsonPropertyName("width")]
+    public BpQuestValueCompare? Width { get; set; }
 
     /// <summary>目标描述（仅后台展示，可空；本地化名由任务名/描述承载）。</summary>
     [JsonPropertyName("note")]
@@ -1200,6 +1327,10 @@ public record BpCustomQuest
     /// <summary>完成目标（编成 AvailableForFinish）。</summary>
     [JsonPropertyName("objectives")]
     public List<BpQuestObjective> Objectives { get; set; } = new();
+
+    /// <summary>接取任务奖励（编成 Rewards["Started"]），例如接取后发放卢布/装备。</summary>
+    [JsonPropertyName("startedRewards")]
+    public List<BpQuestReward> StartedRewards { get; set; } = new();
 
     /// <summary>完成奖励（编成 Rewards["Success"]）。</summary>
     [JsonPropertyName("rewards")]

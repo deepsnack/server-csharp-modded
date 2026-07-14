@@ -5,6 +5,7 @@ using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
@@ -17,6 +18,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 [Injectable]
 public class QuestChangeHandler(
     QuestSync questSync,
+    DatabaseService databaseService,
     ISptLogger<QuestChangeHandler> logger
 ) : IBattlePassChangeHandler
 {
@@ -77,7 +79,7 @@ public class QuestChangeHandler(
             case "quest.customUpsert":
                 var cq = (BpCustomQuest) normalizedInput;
                 var verb = currentState is null ? "新建" : "编辑";
-                return $"{verb}自定义商人任务「{cq.NameZh}」（商人={cq.TraderId}，目标 {cq.Objectives.Count} 项，奖励 {cq.Rewards.Count} 项）";
+                return $"{verb}自定义商人任务「{cq.NameZh}」（商人={cq.TraderId}，目标 {cq.Objectives.Count} 项，接取奖励 {cq.StartedRewards.Count} 项，完成奖励 {cq.Rewards.Count} 项）";
             case "quest.customDelete":
                 return $"删除自定义任务 id={((QuestDeleteInput) normalizedInput).Id}";
             default:
@@ -215,6 +217,7 @@ public class QuestChangeHandler(
         cq.Location = string.IsNullOrWhiteSpace(cq.Location) ? "any" : cq.Location.Trim();
         cq.Prerequisites ??= new List<BpQuestPrereq>();
         cq.Objectives ??= new List<BpQuestObjective>();
+        cq.StartedRewards ??= new List<BpQuestReward>();
         cq.Rewards ??= new List<BpQuestReward>();
         foreach (var pre in cq.Prerequisites)
         {
@@ -228,8 +231,39 @@ public class QuestChangeHandler(
             obj.Tpl = obj.Tpl?.Trim();
             obj.Count = Math.Max(1, obj.Count);
             obj.Target = string.IsNullOrWhiteSpace(obj.Target) ? "Any" : obj.Target.Trim();
+            obj.Targets ??= new List<string>();
+            obj.Locations ??= new List<string>();
+            obj.Weapons ??= new List<string>();
+            obj.WeaponMods ??= new List<string>();
+            obj.WeaponCalibers ??= new List<string>();
+            obj.SavageRoles ??= new List<string>();
+            obj.BodyParts ??= new List<string>();
+            obj.ContainsItems ??= new List<string>();
+            obj.HasItemFromCategory ??= new List<string>();
+            NormalizeStringList(obj.Targets);
+            NormalizeStringList(obj.Locations);
+            NormalizeStringList(obj.Weapons);
+            NormalizeStringList(obj.WeaponMods);
+            NormalizeStringList(obj.WeaponCalibers);
+            NormalizeStringList(obj.SavageRoles);
+            NormalizeStringList(obj.BodyParts);
+            NormalizeStringList(obj.ContainsItems);
+            NormalizeStringList(obj.HasItemFromCategory);
+            NormalizeCompare(obj.Distance);
+            NormalizeCompare(obj.BaseAccuracy);
+            NormalizeCompare(obj.Durability);
+            NormalizeCompare(obj.EffectiveDistance);
+            NormalizeCompare(obj.EmptyTacticalSlot);
+            NormalizeCompare(obj.Ergonomics);
+            NormalizeCompare(obj.Height);
+            NormalizeCompare(obj.MagazineCapacity);
+            NormalizeCompare(obj.MuzzleVelocity);
+            NormalizeCompare(obj.Recoil);
+            NormalizeCompare(obj.Weight);
+            NormalizeCompare(obj.Width);
         }
 
+        NormalizeRewardList(cq.StartedRewards);
         NormalizeRewardList(cq.Rewards);
         cq.UpdatedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         return cq;
@@ -248,9 +282,10 @@ public class QuestChangeHandler(
             return;
         }
 
-        foreach (var list in buckets.Values)
+        foreach (var key in buckets.Keys.ToList())
         {
-            NormalizeRewardList(list);
+            buckets[key] ??= new List<BpQuestReward>();
+            NormalizeRewardList(buckets[key]);
         }
     }
 
@@ -266,13 +301,41 @@ public class QuestChangeHandler(
             r.Type = string.IsNullOrWhiteSpace(r.Type) ? "item" : r.Type.Trim();
             r.Tpl = r.Tpl?.Trim();
             r.TraderId = r.TraderId?.Trim();
+            r.OfferId = r.OfferId?.Trim();
+            r.RecipeId = r.RecipeId?.Trim();
             r.Count = Math.Max(1, r.Count);
         }
     }
 
+    private static void NormalizeStringList(List<string>? values)
+    {
+        if (values is null)
+        {
+            return;
+        }
+
+        var normalized = values
+            .Select(value => (value ?? "").Trim())
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        values.Clear();
+        values.AddRange(normalized);
+    }
+
+    private static void NormalizeCompare(BpQuestValueCompare? compare)
+    {
+        if (compare is null)
+        {
+            return;
+        }
+
+        compare.CompareMethod = string.IsNullOrWhiteSpace(compare.CompareMethod) ? ">=" : compare.CompareMethod.Trim();
+    }
+
     // ---- Validate ----
 
-    private static string? ValidateOverride(BpQuestOverride ov)
+    private string? ValidateOverride(BpQuestOverride ov)
     {
         if (!MongoId.IsValidMongoId(ov.QuestId))
         {
@@ -288,7 +351,7 @@ public class QuestChangeHandler(
                     return $"奖励桶名非法: {bucket}（仅 Started/Success/Fail）";
                 }
 
-                var err = ValidateRewardList(list);
+                var err = ValidateRewardList(list, new MongoId(ov.QuestId));
                 if (err is not null)
                 {
                     return err;
@@ -299,7 +362,7 @@ public class QuestChangeHandler(
         return null;
     }
 
-    private static string? ValidateCustom(BpCustomQuest cq)
+    private string? ValidateCustom(BpCustomQuest cq)
     {
         if (!MongoId.IsValidMongoId(cq.Id))
         {
@@ -321,16 +384,51 @@ public class QuestChangeHandler(
             return "至少需要一个完成目标";
         }
 
-        foreach (var obj in cq.Objectives)
+        for (var index = 0; index < cq.Objectives.Count; index++)
         {
-            if (obj.Type is not ("handoverItem" or "kills"))
+            var obj = cq.Objectives[index];
+            var type = obj.Type.ToLowerInvariant();
+            if (type is not ("handoveritem" or "weaponassembly" or "kills" or "transit"))
             {
-                return $"目标类型暂不支持: {obj.Type}（仅 handoverItem/kills）";
+                return $"目标类型暂不支持: {obj.Type}（仅 handoverItem/weaponAssembly/kills/transit）";
             }
 
-            if (obj.Type == "handoverItem" && !MongoId.IsValidMongoId(obj.Tpl))
+            if (type is "handoveritem" or "weaponassembly" && !MongoId.IsValidMongoId(obj.Tpl))
             {
-                return "上交物品目标的 tpl 无效";
+                return type == "weaponassembly" ? "枪械组装目标的武器 tpl 无效" : "上交物品目标的 tpl 无效";
+            }
+
+            if (obj.DependsOnPrevious && index == 0)
+            {
+                return "第一个目标不能依赖前一目标";
+            }
+
+            if (type == "transit" && obj.Locations.Count == 0)
+            {
+                return "转移目标至少需要选择一个起始地图";
+            }
+
+            var mongoError = ValidateMongoList(obj.Weapons, "指定枪械")
+                             ?? ValidateMongoList(obj.WeaponMods, "指定配件")
+                             ?? ValidateMongoList(obj.ContainsItems, "枪匠必装配件")
+                             ?? ValidateMongoList(obj.HasItemFromCategory, "枪匠物品类别");
+            if (mongoError is not null)
+            {
+                return mongoError;
+            }
+
+            if (obj.Daytime is not null
+                && (obj.Daytime.From is < 0 or > 23 || obj.Daytime.To is < 0 or > 23))
+            {
+                return "击杀时段必须在 0-23 点之间";
+            }
+
+            foreach (var compare in ObjectiveCompares(obj))
+            {
+                if (!IsCompareMethod(compare.CompareMethod))
+                {
+                    return $"不支持的比较方法: {compare.CompareMethod}";
+                }
             }
         }
 
@@ -342,7 +440,8 @@ public class QuestChangeHandler(
             }
         }
 
-        return ValidateRewardList(cq.Rewards);
+        var questId = new MongoId(cq.Id);
+        return ValidateRewardList(cq.StartedRewards, questId) ?? ValidateRewardList(cq.Rewards, questId);
     }
 
     private static string? ValidateDelete(QuestDeleteInput input)
@@ -350,7 +449,7 @@ public class QuestChangeHandler(
         return string.IsNullOrWhiteSpace(input.Id) ? "缺少 id" : null;
     }
 
-    private static string? ValidateRewardList(List<BpQuestReward>? list)
+    private string? ValidateRewardList(List<BpQuestReward>? list, MongoId questId)
     {
         if (list is null)
         {
@@ -379,12 +478,70 @@ public class QuestChangeHandler(
                     }
 
                     break;
+                case "assortmentunlock":
+                    if (!MongoId.IsValidMongoId(r.TraderId) || !MongoId.IsValidMongoId(r.OfferId))
+                    {
+                        return "直购权奖励必须选择有效商人和货架商品";
+                    }
+
+                    var traderId = new MongoId(r.TraderId!);
+                    var offerId = new MongoId(r.OfferId!);
+                    if (!databaseService.GetTables().Traders.TryGetValue(traderId, out var trader)
+                        || trader.Assort?.Items.Any(item => item.Id == offerId) != true)
+                    {
+                        return "直购权奖励选择的商人货架商品不存在";
+                    }
+
+                    break;
+                case "productionscheme":
+                    if (!MongoId.IsValidMongoId(r.RecipeId))
+                    {
+                        return "配方奖励必须选择有效 recipeId";
+                    }
+
+                    if (!questSync.ProductionRewardCanResolve(questId, new MongoId(r.RecipeId!)))
+                    {
+                        return "所选配方不是可唯一匹配的任务解锁配方";
+                    }
+
+                    break;
                 default:
-                    return $"奖励类型暂不支持: {r.Type}（仅 item/experience/traderStanding/traderUnlock）";
+                    return $"奖励类型暂不支持: {r.Type}（仅 item/experience/traderStanding/traderUnlock/assortmentUnlock/productionScheme）";
             }
         }
 
         return null;
+    }
+
+    private static string? ValidateMongoList(IEnumerable<string> values, string label)
+    {
+        var invalid = values.FirstOrDefault(value => !MongoId.IsValidMongoId(value));
+        return invalid is null ? null : $"{label}包含无效 tpl: {invalid}";
+    }
+
+    private static bool IsCompareMethod(string? value)
+    {
+        return value is ">=" or ">" or "<=" or "<" or "=" or "==";
+    }
+
+    private static IEnumerable<BpQuestValueCompare> ObjectiveCompares(BpQuestObjective objective)
+    {
+        BpQuestValueCompare?[] values =
+        [
+            objective.Distance,
+            objective.BaseAccuracy,
+            objective.Durability,
+            objective.EffectiveDistance,
+            objective.EmptyTacticalSlot,
+            objective.Ergonomics,
+            objective.Height,
+            objective.MagazineCapacity,
+            objective.MuzzleVelocity,
+            objective.Recoil,
+            objective.Weight,
+            objective.Width,
+        ];
+        return values.OfType<BpQuestValueCompare>();
     }
 
     // ---- Apply ----

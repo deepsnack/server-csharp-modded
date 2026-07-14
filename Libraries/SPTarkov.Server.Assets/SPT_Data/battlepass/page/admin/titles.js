@@ -2,14 +2,8 @@
 
 // 通行证称号管理页：复用通行证后台 admin token / 登录流程 / Portal SSO（同 trader.js）。
 const ADMIN_API = '/battlepass/api/admin';
-const REGISTER_ADMIN_LOGIN = '/register/api/admin/login';
 const TITLE_IMG = '/battlepass/api/title-image/';
-let ADMIN_TOKEN = sessionStorage.getItem('bp_admin_token') || '';
-
-(function () {
-    const m = location.hash.match(/sso=([a-zA-Z0-9]+)/);
-    if (m) { ADMIN_TOKEN = m[1]; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN); history.replaceState(null, '', location.pathname); }
-})();
+let ADMIN_TOKEN = getAdminToken();
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -19,25 +13,38 @@ function toast(msg, ok) {
 }
 
 async function api(path, method, body) {
-    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+    const headers = { 'Content-Type': 'application/json', 'X-Admin-Token': getAdminToken() };
     const res = await fetch(ADMIN_API + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     return res.json();
 }
 
 // ---- 登录 ----
-async function adminLogin() {
+async function doAdminLogin() {
     const password = el('admin-pass').value;
-    const res = await fetch(REGISTER_ADMIN_LOGIN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-    const r = await res.json();
+    const r = await adminLogin(password);
     if (!r.success) { el('admin-login-msg').textContent = r.message || '登录失败'; return; }
-    ADMIN_TOKEN = r.token; sessionStorage.setItem('bp_admin_token', ADMIN_TOKEN);
-    enterConsole();
+    setActorType(r.actorType || 'admin');
+    ADMIN_TOKEN = getAdminToken();
+    await enterConsole();
 }
-function logout() { ADMIN_TOKEN = ''; sessionStorage.removeItem('bp_admin_token'); el('titles-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
-function enterConsole() {
+function logout() { clearAdminToken(); clearActorType(); clearActorCapabilities(); ADMIN_TOKEN = ''; el('titles-view').classList.add('hidden'); el('login-view').classList.remove('hidden'); }
+async function enterConsole() {
     el('login-view').classList.add('hidden');
     el('titles-view').classList.remove('hidden');
-    loadTitles(); loadPlayers(); loadHolders();
+    if (isCollaborator()) showCollaboratorBanner();
+    await Promise.all([loadTitles(), loadPlayers(), loadHolders()]);
+}
+
+function showCollaboratorBanner() {
+    if (el('collab-banner')) return;
+    const bar = document.createElement('div');
+    bar.id = 'collab-banner';
+    bar.className = 'hint';
+    bar.style.cssText = 'margin:10px 16px;padding:10px 14px;border-left:4px solid #e0a030;background:rgba(224,160,48,.12);font-weight:600;';
+    bar.textContent = '协管模式：称号目录、图片上传、授予与撤销会提交审核，等待管理员批准后生效。';
+    const view = el('titles-view');
+    const topbar = view.querySelector('.topbar');
+    if (topbar?.nextSibling) view.insertBefore(bar, topbar.nextSibling); else view.prepend(bar);
 }
 
 // ---- 标签 ----
@@ -151,6 +158,11 @@ el('save-title').onclick = async () => {
     if (!t.id) return toast('请填写称号 ID', false);
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(t.id)) return toast('ID 仅允许字母/数字/_/-（≤64）', false);
     if (!t.name) return toast('请填写名称', false);
+    if (isCollaborator()) {
+        const r = await submitChange('titles', 'title.upsert', t);
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+        return;
+    }
     const r = await api('/titles', 'POST', t);
     toast(r.success ? '已保存' : (r.message || '失败'), r.success);
     if (r.success) loadTitles();
@@ -158,6 +170,11 @@ el('save-title').onclick = async () => {
 
 async function delTitle(id) {
     if (!confirm('删除称号 ' + id + ' ?（已授予玩家的记录不会自动清理，但目录中将不可见）')) return;
+    if (isCollaborator()) {
+        const r = await submitChange('titles', 'title.delete', { id });
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '提交失败'), r.success);
+        return;
+    }
     const r = await api('/titles', 'DELETE', { id });
     toast(r.success ? '已删除' : '失败', r.success); loadTitles();
 }
@@ -177,6 +194,11 @@ el('upload-title-image').onclick = async () => {
     });
     if (!dim || dim.w !== 128 || dim.h !== 32) return toast(`尺寸必须为 128×32（当前 ${dim ? dim.w + '×' + dim.h : '未知'}）`, false);
     const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+    if (isCollaborator()) {
+        const r = await submitChange('titles', 'title.image', { id, image: dataUrl });
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '上传失败'), r.success);
+        return;
+    }
     const r = await api('/title-image', 'POST', { id, image: dataUrl });
     toast(r.success ? '图片已上传' : (r.message || '上传失败'), r.success);
     if (r.success) { el('t-type').value = 'image'; syncTypeFields(); loadTitles(); }
@@ -206,6 +228,12 @@ function grantTarget() {
 el('grant-btn').onclick = async () => {
     const b = grantTarget();
     if (!b.profileId || !b.titleId) { el('grant-msg').textContent = '请选择玩家和称号'; return; }
+    if (isCollaborator()) {
+        const r = await submitChange('titles', 'title.grant', b);
+        el('grant-msg').textContent = r.message || (r.success ? '已提交审核' : '失败');
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '失败'), r.success);
+        return;
+    }
     const r = await api('/titles/grant', 'POST', b);
     el('grant-msg').textContent = r.message || (r.success ? '完成' : '失败');
     toast(r.message || (r.success ? '完成' : '失败'), r.success); loadHolders();
@@ -213,6 +241,12 @@ el('grant-btn').onclick = async () => {
 el('revoke-btn').onclick = async () => {
     const b = grantTarget();
     if (!b.profileId || !b.titleId) { el('grant-msg').textContent = '请选择玩家和称号'; return; }
+    if (isCollaborator()) {
+        const r = await submitChange('titles', 'title.revoke', b);
+        el('grant-msg').textContent = r.message || (r.success ? '已提交审核' : '失败');
+        toast(r.success ? '已提交审核，等待管理员批准' : (r.message || '失败'), r.success);
+        return;
+    }
     const r = await api('/titles/revoke', 'POST', b);
     el('grant-msg').textContent = r.message || (r.success ? '完成' : '失败');
     toast(r.message || (r.success ? '完成' : '失败'), r.success); loadHolders();
@@ -232,20 +266,36 @@ async function loadHolders() {
 }
 el('refresh-holders').onclick = loadHolders;
 
-el('admin-login-btn').onclick = adminLogin;
-el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+function switchTab(tabName) {
+    const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+    if (tab) tab.click();
+}
+
+function applyPendingTitleEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    const payload = change.proposedPayload || {};
+    if (change.commandType === 'title.upsert') {
+        fillTitle(payload);
+        switchTab('catalog');
+    } else if (change.commandType === 'title.image') {
+        if (payload.id) el('t-id').value = payload.id;
+        el('t-type').value = 'image';
+        syncTypeFields();
+        switchTab('catalog');
+        toast('请选择新的 PNG 并点击上传，以更新原图片审核单', true);
+    } else if (change.commandType === 'title.delete') {
+        switchTab('catalog');
+        toast('请选择新的称号并点击删除，以更新原删除审核单', true);
+    } else if (change.commandType === 'title.grant' || change.commandType === 'title.revoke') {
+        el('g-profileid').value = payload.profileId || '';
+        if (payload.titleId) el('g-title').value = payload.titleId;
+        switchTab('grant');
+    }
+}
+
+el('admin-login-btn').onclick = doAdminLogin;
+el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminLogin(); });
 el('admin-logout').onclick = logout;
 
-// 称号管理仅管理员可用。协管携交换令牌直达此页时，不进控制台，直接引导返回玩家页（不展示密码框）。
-if (sessionStorage.getItem('bp_actor_type') === 'collaborator') {
-    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-    const gate = document.createElement('section');
-    gate.className = 'view';
-    gate.style.cssText = 'max-width:520px;margin:80px auto;text-align:center';
-    gate.innerHTML = '<h1>称号管理仅管理员可用</h1>'
-        + '<p style="opacity:.8;margin:14px 0 22px">你的协管授权不包含称号管理，请从通行证玩家页重新进入。</p>'
-        + '<a class="btn primary" href="/battlepass/index.html">返回通行证玩家页</a>';
-    document.body.appendChild(gate);
-} else if (ADMIN_TOKEN) {
-    enterConsole();
-}
+bootstrapAdminPage({ moduleCap: 'titles.read', onReady: async edit => { ADMIN_TOKEN = getAdminToken(); await enterConsole(); applyPendingTitleEdit(edit); } });

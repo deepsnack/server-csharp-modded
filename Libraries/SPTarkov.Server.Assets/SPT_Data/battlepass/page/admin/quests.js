@@ -9,6 +9,7 @@ let ADMIN_TOKEN = getAdminToken();
 let SELECTED = null;     // 当前选中的 questId
 let TRADERS = [];        // 商人清单缓存
 let CUR_TRADER = '';     // 当前筛选商人
+let QUEST_CATALOG = { locations: [], killTargets: [] };
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -57,6 +58,10 @@ async function loadTraders() {
     const r = await api('/traders');
     if (!r.success) { toast(r.message || '加载商人失败', false); return; }
     TRADERS = r.traders || [];
+    const catalog = await api('/catalog');
+    if (catalog.success) {
+        QUEST_CATALOG = { locations: catalog.locations || [], killTargets: catalog.killTargets || [] };
+    }
     const sel = el('q-trader');
     sel.innerHTML = '<option value="">全部商人</option>' +
         TRADERS.map(t => `<option value="${esc(t.traderId)}">${esc(t.name || t.traderId)}</option>`).join('');
@@ -101,11 +106,12 @@ async function selectQuest(questId) {
 
 const COND_LABEL = {
     HandoverItem: '上交物品', FindItem: '找到物品', CounterCreator: '计数(击杀/到访…)',
+    WeaponAssembly: '指定改装枪械',
     LeaveItemAtLocation: '在指定地点留物', PlaceBeacon: '放置信标', Skill: '技能等级',
     TraderLoyalty: '商人忠诚', Quest: '完成任务', Level: '角色等级', VisitPlace: '到访地点',
 };
 const STATUS_LABEL = { 2: '已接取', 4: '已完成', 5: '已交付' };
-const RTYPE_LABEL = { Item: '物品', Experience: '经验', TraderStanding: '商人好感', TraderUnlock: '解锁商人', Skill: '技能', AssortmentUnlock: '解锁货架' };
+const RTYPE_LABEL = { Item: '物品', Experience: '经验', TraderStanding: '商人好感', TraderUnlock: '解锁商人', Skill: '技能', AssortmentUnlock: '直购权', ProductionScheme: '藏身处配方' };
 
 function renderDetail(d) {
     el('detail-title').textContent = '任务详情 · ' + (d.name || d.questId);
@@ -168,7 +174,8 @@ function renderDetail(d) {
         const label = COND_LABEL[o.conditionType] || o.conditionType;
         const val = o.value != null ? ` ×${o.value}` : '';
         const fir = o.onlyFoundInRaid ? ' · 需战局中找到' : '';
-        row.innerHTML = `<span>${esc(label)}${val}${fir} <span class="meta">${esc((o.targets || []).slice(0, 3).join(', '))}</span></span>`;
+        const details = (o.details || []).join(' · ') || (o.targets || []).slice(0, 3).join(', ');
+        row.innerHTML = `<span>${esc(label)}${val}${fir} <span class="meta">${esc(details)}</span></span>`;
         objSec.appendChild(row);
     });
     body.appendChild(objSec);
@@ -221,21 +228,69 @@ function rewardText(r) {
     if (type === 'experience') return `经验 ${r.value || 0}`;
     if (type === 'traderstanding') return `${r.name || r.traderId} 好感 +${r.value || 0}`;
     if (type === 'traderunlock') return `解锁商人 ${r.name || r.traderId}`;
+    if (type === 'assortmentunlock') return `直购权：${r.name || r.offerId || '货架商品'}`;
+    if (type === 'productionscheme') return `配方：${r.name || r.recipeId || '藏身处制造'}`;
     return `${r.type} ${r.value || ''}`;
 }
 
 // ---- 奖励覆盖编辑弹层 ----
 let REWARD_DRAFT = null; // { Started:[], Success:[], Fail:[] }
+const QUEST_REWARD_TYPES = ['item', 'experience', 'traderStanding', 'traderUnlock', 'assortmentUnlock', 'productionScheme'];
+
+function newQuestReward() {
+    return { type: 'item', tpl: null, count: 1, value: 0, traderId: null, offerId: null, recipeId: null, name: null };
+}
+
+function normalizeQuestReward(r) {
+    const rawType = r.type || 'item';
+    const type = rawType.charAt(0).toLowerCase() + rawType.slice(1);
+    return {
+        type, tpl: r.tpl || null, count: r.count || 1, value: r.value || 0,
+        traderId: r.traderId || null, offerId: r.offerId || null,
+        recipeId: r.recipeId || null, name: r.name || null,
+    };
+}
+
+function traderSelect(selected, onChange) {
+    const select = document.createElement('select');
+    select.innerHTML = '<option value="">选择商人</option>' + TRADERS.map(t =>
+        `<option value="${esc(t.traderId)}"${t.traderId === selected ? ' selected' : ''}>${esc(t.name || t.traderId)}</option>`).join('');
+    select.onchange = () => onChange(select.value);
+    return select;
+}
+
+function attachAssortPicker(input, results, getTraderId, onPick) {
+    let timer = null;
+    async function run(q) {
+        const traderId = getTraderId();
+        if (!isTpl(traderId)) {
+            results.innerHTML = '<div class="sr-none">请先选择商人</div>'; results.style.display = ''; return;
+        }
+        const r = await api(`/assorts?traderId=${encodeURIComponent(traderId)}&q=${encodeURIComponent(q)}&limit=20`);
+        const rows = r.assorts || [];
+        results.innerHTML = rows.length ? rows.map(a => `<div class="sr-item" data-offer-id="${esc(a.offerId)}" data-tpl="${esc(a.tpl)}" data-name="${esc(a.name || a.tpl)}">
+            <img src="${ICON_API}${esc(a.tpl)}" class="sr-icon" alt="" onerror="this.remove()" />
+            <span class="sr-name">${esc(a.name || a.tpl)}${a.unlockQuestId ? ' · 已有关联任务' : ''}</span>
+            <span class="sr-tpl">LL${a.loyaltyLevel || 1} · ${esc(a.offerId).slice(0, 8)}…</span></div>`).join('') : '<div class="sr-none">无结果</div>';
+        results.style.display = '';
+        results.querySelectorAll('.sr-item').forEach(item => {
+            item.onmousedown = e => { e.preventDefault(); results.style.display = 'none'; onPick(item.dataset); };
+        });
+    }
+    input.setAttribute('autocomplete', 'off');
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => run(input.value.trim()), 250); };
+    input.onfocus = () => run(input.value.trim());
+    input.onblur = () => setTimeout(() => { results.style.display = 'none'; }, 200);
+}
 
 function openRewardEditor(d) {
     // 以当前详情奖励为初始草稿（仅取受支持的类型字段）
     REWARD_DRAFT = { Started: [], Success: [], Fail: [] };
     REWARD_BUCKETS.forEach(b => {
         ((d.rewards && d.rewards[b]) || []).forEach(r => {
-            const type = (r.type || 'Item');
-            const t = type.charAt(0).toLowerCase() + type.slice(1);
-            if (['item', 'experience', 'traderStanding', 'traderUnlock'].includes(t)) {
-                REWARD_DRAFT[b].push({ type: t, tpl: r.tpl || null, count: r.count || 1, value: r.value || 0, traderId: r.traderId || null, name: r.name || null });
+            const normalized = normalizeQuestReward(r);
+            if (QUEST_REWARD_TYPES.includes(normalized.type)) {
+                REWARD_DRAFT[b].push(normalized);
             }
         });
     });
@@ -265,18 +320,22 @@ function renderRewardEditor() {
         sec.innerHTML = `<div class="gs-head">${BUCKET_LABEL[bucket]}</div>`;
         REWARD_DRAFT[bucket].forEach((r, i) => sec.appendChild(rewardEditRow(bucket, r, i)));
         const add = document.createElement('button'); add.className = 'btn ghost small'; add.textContent = '+ 添加奖励';
-        add.onclick = () => { REWARD_DRAFT[bucket].push({ type: 'item', tpl: null, count: 1, value: 0, traderId: null, name: null }); renderRewardEditor(); };
+        add.onclick = () => { REWARD_DRAFT[bucket].push(newQuestReward()); renderRewardEditor(); };
         sec.appendChild(add);
         box.appendChild(sec);
     });
 }
 
 function rewardEditRow(bucket, r, idx) {
+    return questRewardRow(r, () => { REWARD_DRAFT[bucket].splice(idx, 1); renderRewardEditor(); }, renderRewardEditor);
+}
+
+function questRewardRow(r, onDelete, rerender) {
     const row = document.createElement('div'); row.className = 'gs-row'; row.style.flexWrap = 'wrap';
     const typeSel = document.createElement('select'); typeSel.innerHTML =
-        `<option value="item">物品</option><option value="experience">经验</option><option value="traderStanding">商人好感</option><option value="traderUnlock">解锁商人</option>`;
+        `<option value="item">物品/货币</option><option value="experience">经验</option><option value="traderStanding">商人好感</option><option value="traderUnlock">解锁商人</option><option value="assortmentUnlock">商人直购权</option><option value="productionScheme">藏身处配方</option>`;
     typeSel.value = r.type || 'item';
-    typeSel.onchange = () => { r.type = typeSel.value; renderRewardEditor(); };
+    typeSel.onchange = () => { r.type = typeSel.value; rerender(); };
     row.appendChild(typeSel);
 
     if (r.type === 'item') {
@@ -290,16 +349,30 @@ function rewardEditRow(bucket, r, idx) {
     } else if (r.type === 'experience') {
         const v = document.createElement('input'); v.type = 'number'; v.value = r.value || 0; v.style.width = '110px'; v.title = '经验值';
         v.oninput = () => r.value = +v.value || 0; row.appendChild(v);
-    } else {
-        const tid = document.createElement('input'); tid.placeholder = '商人 ID(24位)'; tid.value = r.traderId || ''; tid.style.width = '150px';
-        tid.oninput = () => r.traderId = tid.value.trim(); row.appendChild(tid);
+    } else if (r.type === 'traderStanding' || r.type === 'traderUnlock') {
+        row.appendChild(traderSelect(r.traderId, value => { r.traderId = value || null; }));
         if (r.type === 'traderStanding') {
             const v = document.createElement('input'); v.type = 'number'; v.step = '0.01'; v.value = r.value || 0; v.style.width = '80px'; v.title = '好感增量';
             v.oninput = () => r.value = +v.value || 0; row.appendChild(v);
         }
+    } else if (r.type === 'assortmentUnlock') {
+        row.appendChild(traderSelect(r.traderId, value => { r.traderId = value || null; r.offerId = null; r.tpl = null; r.name = null; rerender(); }));
+        const wrap = document.createElement('span'); wrap.style.position = 'relative';
+        const inp = document.createElement('input'); inp.placeholder = '搜索该商人货架商品'; inp.value = r.name || r.offerId || ''; inp.style.width = '190px';
+        const res = document.createElement('div'); res.className = 'ip-results'; res.style.display = 'none';
+        wrap.appendChild(inp); wrap.appendChild(res); row.appendChild(wrap);
+        attachAssortPicker(inp, res, () => r.traderId, ds => {
+            r.offerId = ds.offerId; r.tpl = ds.tpl; r.name = ds.name; inp.value = ds.name || ds.offerId;
+        });
+    } else if (r.type === 'productionScheme') {
+        const wrap = document.createElement('span'); wrap.style.position = 'relative';
+        const inp = document.createElement('input'); inp.placeholder = '搜索藏身处配方'; inp.value = r.name || r.recipeId || ''; inp.style.width = '190px';
+        const res = document.createElement('div'); res.className = 'ip-results'; res.style.display = 'none';
+        wrap.appendChild(inp); wrap.appendChild(res); row.appendChild(wrap);
+        BpPicker.attachRecipe(inp, res, ds => { r.recipeId = ds.id; r.tpl = ds.tpl; r.name = ds.name; inp.value = ds.name || ds.id; }, { minChars: 0, questUnlockOnly: true });
     }
     const del = document.createElement('button'); del.className = 'mini del'; del.textContent = '删';
-    del.onclick = () => { REWARD_DRAFT[bucket].splice(idx, 1); renderRewardEditor(); };
+    del.onclick = onDelete;
     row.appendChild(del);
     return row;
 }
@@ -311,8 +384,7 @@ async function saveRewardOverride(questId) {
     REWARD_BUCKETS.forEach(b => {
         const list = REWARD_DRAFT[b].filter(Boolean);
         list.forEach(r => {
-            if (r.type === 'item' && !isTpl(r.tpl)) err = 'item 奖励需选择有效物品';
-            if ((r.type === 'traderStanding' || r.type === 'traderUnlock') && !isTpl(r.traderId)) err = '商人奖励需填有效商人 ID';
+            err = err || validateQuestReward(r);
         });
         if (list.length) rewards[b] = list;
     });
@@ -369,11 +441,19 @@ function collectExistingOverride(d) {
     REWARD_BUCKETS.forEach(b => {
         const list = ((d.rewards && d.rewards[b]) || []).map(r => {
             const type = (r.type || 'Item'); const t = type.charAt(0).toLowerCase() + type.slice(1);
-            return { type: t, tpl: r.tpl || null, count: r.count || 1, value: r.value || 0, traderId: r.traderId || null };
-        }).filter(r => ['item', 'experience', 'traderStanding', 'traderUnlock'].includes(r.type));
+            return normalizeQuestReward({ ...r, type: t });
+        }).filter(r => QUEST_REWARD_TYPES.includes(r.type));
         if (list.length) rewards[b] = list;
     });
     return rewards;
+}
+
+function validateQuestReward(r) {
+    if (r.type === 'item' && !isTpl(r.tpl)) return '物品奖励需选择有效物品';
+    if ((r.type === 'traderStanding' || r.type === 'traderUnlock') && !isTpl(r.traderId)) return '商人奖励需选择有效商人';
+    if (r.type === 'assortmentUnlock' && (!isTpl(r.traderId) || !isTpl(r.offerId))) return '直购权奖励需选择商人及其货架商品';
+    if (r.type === 'productionScheme' && !isTpl(r.recipeId)) return '配方奖励需选择有效藏身处配方';
+    return null;
 }
 
 // ---- 依赖图谱（SVG 简版）----
@@ -423,9 +503,28 @@ function newCustomDraft() {
     return {
         id: '', traderId: CUR_TRADER || (TRADERS[0] && TRADERS[0].traderId) || '',
         questName: '', nameZh: '', descriptionZh: '', side: 'Pmc', location: 'any',
-        prerequisites: [], objectives: [{ type: 'handoverItem', tpl: null, count: 1, onlyFoundInRaid: false, target: 'Any', note: null, name: null }],
-        rewards: [{ type: 'item', tpl: null, count: 1, value: 0, traderId: null, name: null }],
+        prerequisites: [], objectives: [newObjective('handoverItem')],
+        startedRewards: [], rewards: [newQuestReward()],
     };
+}
+
+function newObjective(type) {
+    return {
+        type: type || 'handoverItem', tpl: null, count: 1, onlyFoundInRaid: false,
+        target: 'Any', targets: [], locations: [], weapons: [], weaponMods: [], weaponCalibers: [],
+        savageRoles: [], bodyParts: [], distance: null, daytime: null, oneLife: false,
+        dependsOnPrevious: false, containsItems: [], hasItemFromCategory: [],
+        baseAccuracy: null, durability: null, effectiveDistance: null, emptyTacticalSlot: null,
+        ergonomics: null, height: null, magazineCapacity: null, muzzleVelocity: null,
+        recoil: null, weight: null, width: null, note: null, name: null,
+    };
+}
+
+function normalizeObjective(o) {
+    const result = { ...newObjective(o.type || 'handoverItem'), ...o };
+    ['targets', 'locations', 'weapons', 'weaponMods', 'weaponCalibers', 'savageRoles', 'bodyParts', 'containsItems', 'hasItemFromCategory']
+        .forEach(key => result[key] = Array.isArray(o[key]) ? [...o[key]] : []);
+    return result;
 }
 
 async function openCustomForm(questId) {
@@ -446,8 +545,9 @@ function normalizeDraft(c) {
         id: c.id || '', traderId: c.traderId || '', questName: c.questName || '', nameZh: c.nameZh || '',
         descriptionZh: c.descriptionZh || '', side: c.side || 'Pmc', location: c.location || 'any',
         prerequisites: (c.prerequisites || []).map(p => ({ questId: p.questId || '', status: p.status || [4], availableAfter: p.availableAfter || 0 })),
-        objectives: (c.objectives || []).map(o => ({ type: o.type || 'handoverItem', tpl: o.tpl || null, count: o.count || 1, onlyFoundInRaid: !!o.onlyFoundInRaid, target: o.target || 'Any', note: o.note || null, name: o.name || null })),
-        rewards: (c.rewards || []).map(r => ({ type: r.type || 'item', tpl: r.tpl || null, count: r.count || 1, value: r.value || 0, traderId: r.traderId || null, name: r.name || null })),
+        objectives: (c.objectives || []).map(normalizeObjective),
+        startedRewards: (c.startedRewards || []).map(normalizeQuestReward),
+        rewards: (c.rewards || []).map(normalizeQuestReward),
     };
 }
 
@@ -492,22 +592,30 @@ function renderCustomForm() {
     objSec.innerHTML = '<div class="gs-head">完成条件 *</div>';
     d.objectives.forEach((o, i) => objSec.appendChild(objectiveRow(o, i)));
     const addObj = document.createElement('button'); addObj.className = 'btn ghost small'; addObj.textContent = '+ 添加目标';
-    addObj.onclick = () => { d.objectives.push({ type: 'handoverItem', tpl: null, count: 1, onlyFoundInRaid: false, target: 'Any', note: null, name: null }); renderCustomForm(); };
+    addObj.onclick = () => { d.objectives.push(newObjective('handoverItem')); renderCustomForm(); };
     objSec.appendChild(addObj); box.appendChild(objSec);
 
-    // 奖励
-    const rwSec = document.createElement('div'); rwSec.className = 'graph-sec';
-    rwSec.innerHTML = '<div class="gs-head">完成奖励</div>';
-    d.rewards.forEach((r, i) => rwSec.appendChild(customRewardRow(r, i)));
-    const addRw = document.createElement('button'); addRw.className = 'btn ghost small'; addRw.textContent = '+ 添加奖励';
-    addRw.onclick = () => { d.rewards.push({ type: 'item', tpl: null, count: 1, value: 0, traderId: null, name: null }); renderCustomForm(); };
-    rwSec.appendChild(addRw); box.appendChild(rwSec);
+    box.appendChild(customRewardSection('接取任务发放（Started）', 'startedRewards'));
+    box.appendChild(customRewardSection('完成奖励（Success）', 'rewards'));
 
     el('c-trader').onchange = e => d.traderId = e.target.value;
     el('c-nameZh').oninput = e => d.nameZh = e.target.value;
     el('c-descZh').oninput = e => d.descriptionZh = e.target.value;
     el('c-questName').oninput = e => d.questName = e.target.value;
     el('c-side').onchange = e => d.side = e.target.value;
+}
+
+function customRewardSection(title, key) {
+    const sec = document.createElement('div'); sec.className = 'graph-sec';
+    sec.innerHTML = `<div class="gs-head">${esc(title)}</div>`;
+    CUSTOM_DRAFT[key].forEach((reward, index) => sec.appendChild(questRewardRow(
+        reward,
+        () => { CUSTOM_DRAFT[key].splice(index, 1); renderCustomForm(); },
+        renderCustomForm)));
+    const add = document.createElement('button'); add.className = 'btn ghost small'; add.textContent = '+ 添加奖励';
+    add.onclick = () => { CUSTOM_DRAFT[key].push(newQuestReward()); renderCustomForm(); };
+    sec.appendChild(add);
+    return sec;
 }
 
 function prereqRow(p, idx) {
@@ -556,61 +664,136 @@ function attachVanillaQuestPicker(input, results, onPick) {
 }
 
 function objectiveRow(o, idx) {
-    const row = document.createElement('div'); row.className = 'gs-row'; row.style.flexWrap = 'wrap';
+    const row = document.createElement('div'); row.className = 'quest-objective-card';
+    const head = document.createElement('div'); head.className = 'gs-row'; head.style.flexWrap = 'wrap';
     const typeSel = document.createElement('select');
-    typeSel.innerHTML = `<option value="handoverItem">上交物品</option><option value="kills">击杀计数</option>`;
-    typeSel.value = o.type; typeSel.onchange = () => { o.type = typeSel.value; renderCustomForm(); };
-    row.appendChild(typeSel);
+    typeSel.innerHTML = `<option value="handoverItem">上交物品</option><option value="weaponAssembly">上交指定改装枪械</option><option value="kills">条件击杀</option><option value="transit">地图转移</option>`;
+    typeSel.value = o.type; typeSel.onchange = () => { CUSTOM_DRAFT.objectives[idx] = { ...newObjective(typeSel.value), count: o.count || 1, dependsOnPrevious: idx > 0 && !!o.dependsOnPrevious }; renderCustomForm(); };
+    head.appendChild(typeSel);
+    const cnt = document.createElement('input'); cnt.type = 'number'; cnt.min = '1'; cnt.value = o.count || 1; cnt.style.width = '72px'; cnt.title = '要求数量';
+    cnt.oninput = () => o.count = Math.max(1, +cnt.value || 1); head.appendChild(cnt);
+    if (idx > 0) {
+        const dep = document.createElement('label'); dep.className = 'inline-check';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!o.dependsOnPrevious; cb.onchange = () => o.dependsOnPrevious = cb.checked;
+        dep.appendChild(cb); dep.appendChild(document.createTextNode('前一目标完成后启用')); head.appendChild(dep);
+    }
+    const del = document.createElement('button'); del.className = 'mini del'; del.textContent = '删';
+    del.onclick = () => { CUSTOM_DRAFT.objectives.splice(idx, 1); renderCustomForm(); }; head.appendChild(del);
+    row.appendChild(head);
+
+    const body = document.createElement('div'); body.className = 'quest-objective-body'; row.appendChild(body);
     if (o.type === 'handoverItem') {
-        const wrap = document.createElement('span'); wrap.style.position = 'relative';
-        const inp = document.createElement('input'); inp.placeholder = '搜索物品'; inp.value = o.name || o.tpl || ''; inp.style.width = '150px';
-        const res = document.createElement('div'); res.className = 'ip-results'; res.style.display = 'none';
-        wrap.appendChild(inp); wrap.appendChild(res); row.appendChild(wrap);
-        BpPicker.attachItem(inp, res, ds => { o.tpl = ds.tpl; o.name = ds.name; inp.value = ds.name || ds.tpl; });
+        body.appendChild(singleItemPicker(o, 'tpl', 'name', null, '搜索需要上交的物品'));
         const fir = document.createElement('label'); fir.style.cssText = 'display:inline-flex;align-items:center;gap:4px';
         const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!o.onlyFoundInRaid; cb.onchange = () => o.onlyFoundInRaid = cb.checked;
-        fir.appendChild(cb); fir.appendChild(document.createTextNode('战局中找到')); row.appendChild(fir);
-    } else {
-        const tgt = document.createElement('input'); tgt.placeholder = '目标(如 Savage/Any)'; tgt.value = o.target || 'Any'; tgt.style.width = '130px';
-        tgt.oninput = () => o.target = tgt.value.trim() || 'Any'; row.appendChild(tgt);
+        fir.appendChild(cb); fir.appendChild(document.createTextNode('战局中找到')); body.appendChild(fir);
+    } else if (o.type === 'weaponAssembly') {
+        const grid = document.createElement('div'); grid.className = 'quest-field-grid'; body.appendChild(grid);
+        appendLabeled(grid, '基础枪械', singleItemPicker(o, 'tpl', 'name', 'weapon', '搜索枪械'));
+        appendLabeled(grid, '必须安装的配件', multiItemPicker(o.containsItems, 'weaponMod', '搜索并添加配件'));
+        const stats = document.createElement('div'); stats.className = 'quest-stat-grid'; body.appendChild(stats);
+        [
+            ['durability', '耐久度', '>='], ['ergonomics', '人机工效', '>='], ['recoil', '后坐力', '<='],
+            ['weight', '重量', '<='], ['height', '高度格', '<='], ['width', '宽度格', '<='],
+            ['magazineCapacity', '弹匣容量', '>='], ['muzzleVelocity', '初速', '>='],
+            ['effectiveDistance', '有效射程', '>='], ['emptyTacticalSlot', '空战术槽', '>='], ['baseAccuracy', '基础精度', '>='],
+        ].forEach(([key, label, method]) => stats.appendChild(compareEditor(o, key, label, method)));
+    } else if (o.type === 'kills') {
+        renderKillObjective(body, o);
+    } else if (o.type === 'transit') {
+        appendLabeled(body, '从这些地图进行 Transit', locationSelect(o.locations));
+        const hint = document.createElement('p'); hint.className = 'hint'; hint.textContent = '与“前一目标完成后启用”组合，可创建：地图击杀 → 转移 → 下一地图击杀的原版阶段链。'; body.appendChild(hint);
     }
-    const cnt = document.createElement('input'); cnt.type = 'number'; cnt.value = o.count || 1; cnt.style.width = '70px'; cnt.title = '数量';
-    cnt.oninput = () => o.count = +cnt.value || 1; row.appendChild(cnt);
-    const del = document.createElement('button'); del.className = 'mini del'; del.textContent = '删';
-    del.onclick = () => { CUSTOM_DRAFT.objectives.splice(idx, 1); renderCustomForm(); };
-    row.appendChild(del);
     return row;
 }
 
-function customRewardRow(r, idx) {
-    const row = document.createElement('div'); row.className = 'gs-row'; row.style.flexWrap = 'wrap';
-    const typeSel = document.createElement('select');
-    typeSel.innerHTML = `<option value="item">物品</option><option value="experience">经验</option><option value="traderStanding">商人好感</option><option value="traderUnlock">解锁商人</option>`;
-    typeSel.value = r.type; typeSel.onchange = () => { r.type = typeSel.value; renderCustomForm(); };
-    row.appendChild(typeSel);
-    if (r.type === 'item') {
-        const wrap = document.createElement('span'); wrap.style.position = 'relative';
-        const inp = document.createElement('input'); inp.placeholder = '搜索物品'; inp.value = r.name || r.tpl || ''; inp.style.width = '150px';
-        const res = document.createElement('div'); res.className = 'ip-results'; res.style.display = 'none';
-        wrap.appendChild(inp); wrap.appendChild(res); row.appendChild(wrap);
-        BpPicker.attachItem(inp, res, ds => { r.tpl = ds.tpl; r.name = ds.name; inp.value = ds.name || ds.tpl; });
-        const cnt = document.createElement('input'); cnt.type = 'number'; cnt.value = r.count || 1; cnt.style.width = '70px'; cnt.title = '数量';
-        cnt.oninput = () => r.count = +cnt.value || 1; row.appendChild(cnt);
-    } else if (r.type === 'experience') {
-        const v = document.createElement('input'); v.type = 'number'; v.value = r.value || 0; v.style.width = '110px'; v.title = '经验值';
-        v.oninput = () => r.value = +v.value || 0; row.appendChild(v);
-    } else {
-        const tid = document.createElement('input'); tid.placeholder = '商人 ID(24位)'; tid.value = r.traderId || ''; tid.style.width = '150px';
-        tid.oninput = () => r.traderId = tid.value.trim(); row.appendChild(tid);
-        if (r.type === 'traderStanding') {
-            const v = document.createElement('input'); v.type = 'number'; v.step = '0.01'; v.value = r.value || 0; v.style.width = '80px'; v.title = '好感增量';
-            v.oninput = () => r.value = +v.value || 0; row.appendChild(v);
-        }
-    }
-    const del = document.createElement('button'); del.className = 'mini del'; del.textContent = '删';
-    del.onclick = () => { CUSTOM_DRAFT.rewards.splice(idx, 1); renderCustomForm(); };
-    row.appendChild(del);
-    return row;
+function renderKillObjective(body, o) {
+    const grid = document.createElement('div'); grid.className = 'quest-field-grid'; body.appendChild(grid);
+    const sides = QUEST_CATALOG.killTargets.filter(t => t.kind === 'side');
+    const target = document.createElement('select');
+    target.innerHTML = sides.map(t => `<option value="${esc(t.value)}"${t.value === (o.target || 'Any') ? ' selected' : ''}>${esc(t.name || t.value)}</option>`).join('');
+    target.onchange = () => o.target = target.value; appendLabeled(grid, '击杀目标', target);
+    const roles = QUEST_CATALOG.killTargets.filter(t => t.kind === 'savageRole').map(t => ({ value: t.value, name: t.name }));
+    appendLabeled(grid, '指定 Scav/Boss 角色（可多选）', multiSelect(roles, o.savageRoles, values => o.savageRoles = values, 5));
+    appendLabeled(grid, '指定地图（可多选）', locationSelect(o.locations));
+    appendLabeled(grid, '指定枪械', multiItemPicker(o.weapons, 'weapon', '搜索并添加枪械'));
+    appendLabeled(grid, '必须安装的配件', multiItemPicker(o.weaponMods, 'weaponMod', '搜索并添加配件'));
+    const calibers = ['Caliber9x18PM','Caliber9x19PARA','Caliber9x21','Caliber45ACP','Caliber46x30','Caliber57x28','Caliber545x39','Caliber556x45NATO','Caliber762x25TT','Caliber762x35','Caliber762x39','Caliber762x51','Caliber762x54R','Caliber9x39','Caliber12g','Caliber20g','Caliber23x75'];
+    appendLabeled(grid, '口径（可多选）', multiSelect(calibers.map(v => ({ value: v, name: v })), o.weaponCalibers, values => o.weaponCalibers = values, 4));
+    const parts = ['Head','Chest','Stomach','LeftArm','RightArm','LeftLeg','RightLeg'];
+    appendLabeled(grid, '致命部位（可多选）', multiSelect(parts.map(v => ({ value: v, name: v })), o.bodyParts, values => o.bodyParts = values, 4));
+    appendLabeled(grid, '击杀距离', compareEditor(o, 'distance', '', '>='));
+    appendLabeled(grid, '游戏内时段', daytimeEditor(o));
+    const oneLife = document.createElement('label'); oneLife.className = 'inline-check';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!o.oneLife; cb.onchange = () => o.oneLife = cb.checked;
+    oneLife.appendChild(cb); oneLife.appendChild(document.createTextNode('一命/同一战局完成（死亡或离局会重置未完成计数）')); body.appendChild(oneLife);
+}
+
+function appendLabeled(parent, label, control) {
+    const wrap = document.createElement('label'); wrap.className = 'quest-field';
+    const title = document.createElement('span'); title.textContent = label; wrap.appendChild(title); wrap.appendChild(control); parent.appendChild(wrap);
+    return wrap;
+}
+
+function singleItemPicker(owner, valueKey, nameKey, category, placeholder) {
+    const wrap = document.createElement('span'); wrap.className = 'quest-picker';
+    const input = document.createElement('input'); input.placeholder = placeholder; input.value = owner[nameKey] || owner[valueKey] || '';
+    const results = document.createElement('div'); results.className = 'ip-results'; results.style.display = 'none';
+    wrap.appendChild(input); wrap.appendChild(results);
+    BpPicker.attachItem(input, results, ds => { owner[valueKey] = ds.tpl; owner[nameKey] = ds.name; input.value = ds.name || ds.tpl; }, category ? { category } : undefined);
+    return wrap;
+}
+
+function multiItemPicker(values, category, placeholder) {
+    const wrap = document.createElement('div'); wrap.className = 'quest-multi-picker';
+    const input = document.createElement('input'); input.placeholder = placeholder;
+    const results = document.createElement('div'); results.className = 'ip-results'; results.style.display = 'none';
+    const chips = document.createElement('div'); chips.className = 'multi-chips';
+    wrap.appendChild(input); wrap.appendChild(results); wrap.appendChild(chips);
+    const render = () => {
+        chips.innerHTML = '';
+        values.forEach((value, index) => {
+            const chip = document.createElement('span'); chip.className = 'multi-chip'; chip.textContent = value;
+            const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.onclick = () => { values.splice(index, 1); render(); };
+            chip.appendChild(remove); chips.appendChild(chip);
+        });
+    };
+    BpPicker.attachItem(input, results, ds => { if (!values.includes(ds.tpl)) values.push(ds.tpl); input.value = ''; render(); }, { category });
+    render(); return wrap;
+}
+
+function multiSelect(options, selected, onChange, size) {
+    const select = document.createElement('select'); select.multiple = true; select.size = size || 5;
+    select.innerHTML = options.map(option => `<option value="${esc(option.value)}"${selected.includes(option.value) ? ' selected' : ''}>${esc(option.name || option.value)}</option>`).join('');
+    select.onchange = () => onChange(Array.from(select.selectedOptions).map(option => option.value));
+    return select;
+}
+
+function locationSelect(selected) {
+    return multiSelect(QUEST_CATALOG.locations.map(location => ({ value: location.value, name: `${location.name} (${location.value})` })), selected, values => {
+        selected.splice(0, selected.length, ...values);
+    }, 5);
+}
+
+function compareEditor(owner, key, label, defaultMethod) {
+    const wrap = document.createElement('span'); wrap.className = 'compare-editor';
+    if (label) { const name = document.createElement('span'); name.textContent = label; wrap.appendChild(name); }
+    const method = document.createElement('select');
+    method.innerHTML = '<option value="">不限</option><option value=">=">≥</option><option value=">">&gt;</option><option value="<=">≤</option><option value="<">&lt;</option><option value="=">=</option>';
+    method.value = owner[key]?.compareMethod || '';
+    const value = document.createElement('input'); value.type = 'number'; value.step = '0.1'; value.min = '0'; value.value = owner[key]?.value ?? ''; value.placeholder = '数值';
+    method.onchange = () => { owner[key] = method.value ? { compareMethod: method.value, value: +value.value || 0 } : null; };
+    value.oninput = () => { if (!method.value) method.value = defaultMethod; owner[key] = { compareMethod: method.value || defaultMethod, value: +value.value || 0 }; };
+    wrap.appendChild(method); wrap.appendChild(value); return wrap;
+}
+
+function daytimeEditor(owner) {
+    const wrap = document.createElement('span'); wrap.className = 'daytime-editor';
+    const from = document.createElement('select'); const to = document.createElement('select');
+    const options = '<option value="">不限</option>' + Array.from({ length: 24 }, (_, hour) => `<option value="${hour}">${String(hour).padStart(2, '0')}:00</option>`).join('');
+    from.innerHTML = options; to.innerHTML = options; from.value = owner.daytime?.from ?? ''; to.value = owner.daytime?.to ?? '';
+    const sync = () => { owner.daytime = from.value === '' || to.value === '' ? null : { from: +from.value, to: +to.value }; };
+    from.onchange = sync; to.onchange = sync; wrap.appendChild(from); wrap.appendChild(document.createTextNode(' 至 ')); wrap.appendChild(to); return wrap;
 }
 
 async function saveCustom() {
@@ -618,12 +801,14 @@ async function saveCustom() {
     if (!d.nameZh.trim()) return toast('请填写中文任务名', false);
     if (!isTpl(d.traderId)) return toast('请选择归属商人', false);
     if (!d.objectives.length) return toast('至少需要一个完成目标', false);
-    for (const o of d.objectives) {
-        if (o.type === 'handoverItem' && !isTpl(o.tpl)) return toast('上交物品目标需选择有效物品', false);
+    for (let index = 0; index < d.objectives.length; index++) {
+        const o = d.objectives[index];
+        if ((o.type === 'handoverItem' || o.type === 'weaponAssembly') && !isTpl(o.tpl)) return toast('上交/枪匠目标需选择有效物品或枪械', false);
+        if (o.type === 'transit' && !o.locations.length) return toast('转移目标至少选择一个起始地图', false);
+        if (index === 0 && o.dependsOnPrevious) return toast('第一个目标不能依赖前一目标', false);
     }
-    for (const r of d.rewards) {
-        if (r.type === 'item' && !isTpl(r.tpl)) return toast('物品奖励需选择有效物品', false);
-        if ((r.type === 'traderStanding' || r.type === 'traderUnlock') && !isTpl(r.traderId)) return toast('商人奖励需填有效商人 ID', false);
+    for (const r of [...d.startedRewards, ...d.rewards]) {
+        const error = validateQuestReward(r); if (error) return toast(error, false);
     }
     for (const p of d.prerequisites) {
         if (!isTpl(p.questId)) return toast('前置任务需选择有效任务', false);
@@ -651,6 +836,27 @@ async function deleteCustom(questId, name) {
     if (r.success) { SELECTED = null; el('detail-body').innerHTML = '<p class="hint">已删除。</p>'; await doSearch(); }
 }
 
+async function applyPendingQuestEdit(change) {
+    if (!change) return;
+    showPendingChangeEditBanner(change);
+    const payload = change.proposedPayload || {};
+    if (change.commandType === 'quest.customUpsert') {
+        CUSTOM_DRAFT = normalizeDraft(payload);
+        showCustomModal();
+        return;
+    }
+
+    if (change.commandType === 'quest.customDelete') {
+        toast('请选择新的自定义任务并点击删除，以更新原删除审核单', true);
+        return;
+    }
+
+    if (change.commandType === 'quest.override' && payload.questId) {
+        await selectQuest(payload.questId);
+        toast('已定位到待审原版任务覆盖；重新执行禁用/改奖会更新原审核单', true);
+    }
+}
+
 // ---- 事件绑定 + 启动 ----
 el('admin-login-btn').onclick = doAdminLogin;
 el('admin-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doAdminLogin(); });
@@ -661,4 +867,4 @@ el('q-trader').addEventListener('change', doSearch);
 el('new-quest-btn').onclick = () => openCustomForm(null);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-bootstrapAdminPage({ moduleCap: 'quests.read', onReady: async () => { ADMIN_TOKEN = getAdminToken(); await enterConsole(); } });
+bootstrapAdminPage({ moduleCap: 'quests.read', onReady: async edit => { ADMIN_TOKEN = getAdminToken(); await enterConsole(); await applyPendingQuestEdit(edit); } });

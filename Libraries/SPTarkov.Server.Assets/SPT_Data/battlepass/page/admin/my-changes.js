@@ -2,9 +2,9 @@
 'use strict';
 
 const API_BASE = '/battlepass/api/admin/reviews';
-const MODULE_NAMES = { shop: '商店', tasks: '任务', tracks: '奖励轨', lottery: '抽奖', trader: '商人', recipes: '配方', items: '物品管控', quests: '商人任务', flea: '跳蚤黑名单' };
+const MODULE_NAMES = { shop: '商店', tasks: '通行证任务', tracks: '奖励轨', lottery: '抽奖', trader: '商人', recipes: '配方', items: '物品管控', quests: '商人任务', titles: '称号', flea: '跳蚤黑名单' };
 const STATUS_NAMES = { pending: '待审核', applied: '已通过', rejected: '已驳回', conflict: '冲突', failed: '失败', withdrawn: '已撤回', applying: '应用中' };
-const MODULE_PAGES = { shop: 'shop.html', tasks: 'tasks.html', tracks: 'index.html', lottery: 'lottery.html', trader: 'trader.html', recipes: 'recipes.html', items: 'items.html', quests: 'quests.html', flea: 'flea.html' };
+const MODULE_PAGES = { shop: 'shop.html', tasks: 'tasks.html?tab=bp', tracks: 'index.html', lottery: 'lottery.html', trader: 'trader.html', recipes: 'recipes.html', items: 'items.html', quests: 'tasks.html?tab=trader', titles: 'titles.html', flea: 'flea.html' };
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function el(id) { return document.getElementById(id); }
@@ -51,7 +51,8 @@ function render(items) {
 function editSubmitted(id, module) {
     const page = MODULE_PAGES[module];
     if (!page) { alert('该模块暂不支持可视化编辑'); return; }
-    location.href = `${page}?editChange=${encodeURIComponent(id)}`;
+    const sep = page.includes('?') ? '&' : '?';
+    location.href = `${page}${sep}editChange=${encodeURIComponent(id)}`;
 }
 
 async function withdraw(id, version) {

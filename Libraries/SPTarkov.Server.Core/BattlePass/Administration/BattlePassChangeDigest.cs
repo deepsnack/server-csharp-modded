@@ -23,6 +23,8 @@ public static class BattlePassChangeDigest
         ["trader"] = "商人",
         ["recipes"] = "配方",
         ["items"] = "物品管控",
+        ["quests"] = "商人任务",
+        ["titles"] = "称号",
         ["flea"] = "跳蚤",
     };
 
@@ -108,6 +110,9 @@ public static class BattlePassChangeDigest
         ["endTime"] = "结束时间",
         ["period"] = "周期",
         ["refreshPeriod"] = "刷新周期",
+        ["profileId"] = "玩家ID",
+        ["image"] = "图片",
+        ["imageBase64"] = "图片",
     };
 
     public static string ModuleLabel(string? module) => ModuleLabels.GetValueOrDefault(module ?? "", module ?? "未知模块");
@@ -278,6 +283,11 @@ public static class BattlePassChangeDigest
     /// <summary>按字段键渲染值：奖励轨/奖励数组走芯片，其余按类型递归。</summary>
     private static string RenderValue(string key, JsonElement v, Func<string, string?>? resolve)
     {
+        if (IsImagePayloadKey(key) && v.ValueKind == JsonValueKind.String)
+        {
+            return Enc(ImageSummary(v.GetString()));
+        }
+
         if (v.ValueKind == JsonValueKind.Array)
         {
             var items = v.EnumerateArray().ToList();
@@ -477,6 +487,19 @@ public static class BattlePassChangeDigest
     };
 
     private static string FieldLabel(string key) => FieldLabels.GetValueOrDefault(key, key);
+
+    private static bool IsImagePayloadKey(string key) =>
+        string.Equals(key, "image", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(key, "imageBase64", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(key, "pngBase64", StringComparison.OrdinalIgnoreCase);
+
+    private static string ImageSummary(string? value)
+    {
+        var raw = value ?? "";
+        var comma = raw.IndexOf(',');
+        var b64 = comma >= 0 ? raw[(comma + 1)..] : raw;
+        return $"PNG 图片数据（base64 {b64.Length} 字符）";
+    }
 
     private static string Scalar(JsonElement v) => Enc(ScalarText(v));
 

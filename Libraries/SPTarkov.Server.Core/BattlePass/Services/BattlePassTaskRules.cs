@@ -28,8 +28,8 @@ public static class BattlePassTaskRules
             return "一命完成仅支持击杀、寻找物品、安放物品和到达地点任务";
         }
 
-        // 敌我装备仍只在服务端 Victim 战绩里无从判定，保留拦截；
-        // 武器改件（WeaponMods）已由客户端击杀瞬间上报支持（走 supplemental 结算），不再拦截。
+        // 敌我装备在服务端战绩和客户端击杀事件中都无从完整判定，保留拦截；
+        // 枪身/口径/武器改件条件由客户端击杀瞬间上报支持（走 supplemental 结算）。
         if (string.Equals(task.ConditionType, "Kills", StringComparison.OrdinalIgnoreCase)
             && ((task.EnemyEquipment?.Count ?? 0) > 0
                 || (task.PlayerEquipment?.Count ?? 0) > 0))

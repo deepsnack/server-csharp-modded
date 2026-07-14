@@ -29,5 +29,5 @@ test('collapsed summaries show reward counts and use cache-busted assets', () =>
     assert.match(style, /\.level-block\[open\] \.level-head/);
     assert.match(style, /\.level-block\[open\] \.level-chevron/);
     assert.match(html, /style\.css\?v=20260708-track-collapse-v1/);
-    assert.match(html, /script\.js\?v=20260708-track-collapse-v1/);
+    assert.match(html, /script\.js\?v=20260713-task-hub-v1/);
 });
