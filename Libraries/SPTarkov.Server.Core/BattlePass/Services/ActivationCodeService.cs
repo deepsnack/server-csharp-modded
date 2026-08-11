@@ -7,7 +7,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     激活码：管理员生成、玩家网页兑换。type=premium 解锁付费轨；type=levels 直升 value 级。
 ///     无外部支付依赖；premiumUnlocked 即"付费检测"标志。
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class ActivationCodeService(BattlePassService battlePassService, LotteryWalletService lotteryWalletService)
 {
     private static readonly object Gate = new();

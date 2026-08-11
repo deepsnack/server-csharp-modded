@@ -14,7 +14,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 /// <summary>
 ///     通行证进度核心：登录校验、经验/等级换算、领奖。等级独立于 PMC 等级，存于 BP 自有进度文件。
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class BattlePassService(
     SaveServer saveServer,
     BattlePassRewardService rewardService,
