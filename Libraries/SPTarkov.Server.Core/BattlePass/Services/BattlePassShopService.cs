@@ -13,7 +13,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     <para>购买流程严格三步：① 按购买份数校验仓库内货币、库存与限购 ② 全部通过才扣减（部分堆叠精确扣减）③ 邮件发货。
 ///     任一条件不满足直接拒绝且不扣任何物品。库存(全局)与限购(每玩家)按 offer 配置生效。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class BattlePassShopService(
     BattlePassService battlePassService,
     BattlePassStashService stashService,

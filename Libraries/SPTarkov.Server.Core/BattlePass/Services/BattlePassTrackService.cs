@@ -12,7 +12,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     <c>singleRaid=true</c> 的任务要求单局内一次达标、不跨局累加。</para>
 ///     <para>通行证经验只进 <see cref="BpProgress.Xp"/> 驱动 BP 等级，<b>绝不</b>触碰角色经验。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class BattlePassTrackService(
     BattlePassService battlePassService,
     Services.DatabaseService databaseService,
