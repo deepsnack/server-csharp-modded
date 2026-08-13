@@ -5,7 +5,7 @@ using SPTarkov.Server.Core.Models.Common;
 namespace SPTarkov.Server.Core.BattlePass;
 
 /// <summary>抽奖奖池查询、状态判断、发布校验和概率计算。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class LotteryService(ItemSearchService itemSearchService)
 {
     public List<BpLotteryPool> GetPools()

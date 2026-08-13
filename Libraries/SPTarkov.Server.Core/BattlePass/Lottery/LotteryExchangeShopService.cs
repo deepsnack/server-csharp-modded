@@ -4,7 +4,7 @@ using SPTarkov.DI.Annotations;
 namespace SPTarkov.Server.Core.BattlePass;
 
 /// <summary>抽奖兑换商店服务。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class LotteryExchangeShopService(
     LotteryWalletService walletService,
     BattlePassService battlePassService,

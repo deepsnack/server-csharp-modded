@@ -3,7 +3,7 @@ using SPTarkov.DI.Annotations;
 namespace SPTarkov.Server.Core.BattlePass;
 
 /// <summary>抽奖模块钱包服务：通用抽奖券、奖池限定券、兑换币。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class LotteryWalletService
 {
     private static readonly object WalletGate = new();

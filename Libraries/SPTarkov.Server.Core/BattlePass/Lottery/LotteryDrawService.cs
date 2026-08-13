@@ -9,7 +9,7 @@ using SPTarkov.Server.Core.Servers;
 namespace SPTarkov.Server.Core.BattlePass;
 
 /// <summary>抽奖核心流程：幂等、并发锁、扣费、抽取、发奖、记录。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class LotteryDrawService(
     LotteryService lotteryService,
     LotteryWalletService walletService,
