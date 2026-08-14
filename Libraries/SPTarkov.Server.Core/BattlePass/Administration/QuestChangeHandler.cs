@@ -15,7 +15,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 ///     热重放进内存 DB（可逆、无需重启，绝不回写 5.6MB 的 quests.json）。</para>
 ///     <para>统一供正常管理员即时写入（各自控制器端点）与协管审核放行（/review/submit）复用同一业务逻辑。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class QuestChangeHandler(
     QuestSync questSync,
     DatabaseService databaseService,

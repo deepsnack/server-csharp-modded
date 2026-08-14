@@ -1534,7 +1534,7 @@ public class HideoutController(
     public void Update()
     {
         // 懒加载时只扫已加载档：下方本就按"近期活跃"过滤，未加载档必然不活跃，语义等价
-        var profilesToCheck = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var profilesToCheck = profileHelper.GetActiveProfilesSnapshot();
         foreach (var (sessionId, profile) in profilesToCheck)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))

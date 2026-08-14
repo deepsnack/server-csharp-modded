@@ -45,16 +45,46 @@ public class RagfairCallbacks(
         // There is a flag inside this class that only makes it run once.
         ragfairServer.AddPlayerOffers();
 
-        // Check player offers and mail payment to player if sold
-        ragfairController.Update();
-
-        // Process all offers / expire offers
-        ragfairServer.Update();
-
-        // 跳蚤数据已刷新，事件驱动失效缓存（原 RagfairOnUpdateInvalidatePatch 内联）
-        fleaTraderCache.InvalidateFlea();
+        RunOfferUpdatesAndInvalidateIfChanged(
+            () => RunLegacyUpdateAndConsumeChanges(
+                ragfairController.Update,
+                ragfairController.ConsumeLastUpdateChanged
+            ),
+            () => RunLegacyUpdateAndConsumeChanges(ragfairServer.Update, ragfairServer.ConsumeLastUpdateChanged),
+            fleaTraderCache.InvalidateFlea
+        );
 
         return Task.FromResult(true);
+    }
+
+    /// <summary>
+    ///     Run both background update sources every interval, but only invalidate cached HTTP responses when
+    ///     at least one source actually changed the visible offer pool.
+    /// </summary>
+    internal static bool RunOfferUpdatesAndInvalidateIfChanged(
+        Func<bool> updatePlayerOffers,
+        Func<bool> updateServerOffers,
+        Action invalidate
+    )
+    {
+        var offersChanged = updatePlayerOffers();
+        offersChanged |= updateServerOffers();
+        if (offersChanged)
+        {
+            invalidate();
+        }
+
+        return offersChanged;
+    }
+
+    /// <summary>
+    ///     Dispatch through the established virtual Update method so binary Mods retain their takeover point,
+    ///     then consume the mutation result recorded by the base implementation.
+    /// </summary>
+    internal static bool RunLegacyUpdateAndConsumeChanges(Action update, Func<bool> consumeChanged)
+    {
+        update();
+        return consumeChanged();
     }
 
     /// <summary>
@@ -70,9 +100,18 @@ public class RagfairCallbacks(
         // 高频只读端点缓存 + 并发合并（原 RagfairSearchCachePatch 内联；开关关闭时直通）
         // key 直接用完整请求 JSON：32 位 GetHashCode 碰撞会让玩家拿到另一搜索条件的缓存响应
         //（客户端 selectedCategory 对不上 → 列表显示为空），完整串彻底消除碰撞
-        var key = $"flea:search:{sessionID}:{jsonUtil.Serialize(info)}";
+        var key = $"flea:search:{sessionID}:{jsonUtil.Serialize(NormalizeSearchRequestForCache(info))}";
         var body = fleaTraderCache.GetOrCompute(key, () => httpResponseUtil.GetBody(ragfairController.GetOffers(sessionID, info)));
         return new ValueTask<string>(body);
+    }
+
+    /// <summary>
+    ///     Remove client refresh metadata that is not read by flea filtering/sorting, so semantically identical
+    ///     requests share a cache entry. Keep all response-affecting fields unchanged.
+    /// </summary>
+    internal static SearchRequestData NormalizeSearchRequestForCache(SearchRequestData info)
+    {
+        return info with { Tm = null, Reload = null };
     }
 
     /// <summary>

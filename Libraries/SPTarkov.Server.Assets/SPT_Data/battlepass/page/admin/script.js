@@ -142,8 +142,9 @@ function seasonFormToJson() {
         endUtc: toUnixSec(el('s-end').value),
         maxLevel: +el('s-maxlevel').value || 50,
         baseXp: +el('s-basexp').value || 1000,
-        xpGrowthPerLevel: +el('s-growth').value || 100,
+        xpGrowthPerLevel: Number.isFinite(+el('s-growth').value) ? +el('s-growth').value : 100,
         premiumXpMultiplier: +el('s-mult').value || 1.0,
+        cycleXp: Number.isFinite(+el('s-cyclexp').value) ? +el('s-cyclexp').value : 0,
         xpCurve: xpCurve.length ? xpCurve : [],
     };
 }
@@ -156,11 +157,12 @@ function fillSeasonForm(s) {
     el('s-basexp').value = s.baseXp ?? 1000;
     el('s-growth').value = s.xpGrowthPerLevel ?? 100;
     el('s-mult').value = s.premiumXpMultiplier ?? 1.0;
+    el('s-cyclexp').value = s.cycleXp ?? 0;
     el('s-curve').value = (s.xpCurve || []).join(', ');
     el('season-json').value = JSON.stringify(s, null, 2);
 }
 // 表单字段变化时同步 JSON 预览
-['s-id','s-name','s-start','s-end','s-maxlevel','s-basexp','s-growth','s-mult','s-curve'].forEach(id => {
+['s-id','s-name','s-start','s-end','s-maxlevel','s-basexp','s-growth','s-mult','s-cyclexp','s-curve'].forEach(id => {
     el(id).addEventListener('input', () => {
         el('season-json').value = JSON.stringify(seasonFormToJson(), null, 2);
     });
@@ -266,13 +268,12 @@ async function postTracksAndSeason(tracksPayload) {
     }
     const r = await api('/tracks', 'POST', tracksPayload);
     if (!r.success) { toast(r.message || '保存失败', false); return false; }
-    // 等级上限 + 循环每轮经验同步进赛季配置（单一数据源）
+    // 等级上限同步进赛季配置（单一数据源；循环每轮经验由赛季页管理）
     try {
         const sr = await api('/season');
         if (sr.success) {
             const season = sr.season;
             season.maxLevel = trackMaxLevel;
-            season.cycleXp = Math.max(0, +el('track-cyclexp').value || 0);
             await api('/season', 'POST', season);
         }
     } catch (e) { /* 上限同步失败不影响奖励保存 */ }
@@ -558,7 +559,6 @@ async function loadTracks() {
         if (sr.success) {
             trackMaxLevel = sr.season.maxLevel || 50;
             el('track-maxlevel').value = trackMaxLevel;
-            el('track-cyclexp').value = sr.season.cycleXp || 0;
         }
     } catch (e) { /* 用默认上限 */ }
     syncTracksJson();

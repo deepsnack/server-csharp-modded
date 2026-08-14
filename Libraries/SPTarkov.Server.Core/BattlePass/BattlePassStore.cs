@@ -404,24 +404,7 @@ public static class BattlePassStore
     /// <summary>列出所有有进度的 profileId（管理员总览用）。</summary>
     public static List<string> ListProgressProfileIds()
     {
-        try
-        {
-            if (!Directory.Exists(ProgressDir))
-            {
-                return new List<string>();
-            }
-
-            return Directory
-                .EnumerateFiles(ProgressDir, "*.json")
-                .Select(Path.GetFileNameWithoutExtension)
-                .Where(x => !string.IsNullOrEmpty(x))
-                .Select(x => x!)
-                .ToList();
-        }
-        catch
-        {
-            return new List<string>();
-        }
+        return ListJsonProfileIds(ProgressDir);
     }
 
     // ---- 称号目录（全局，管理员定义） ----
@@ -516,24 +499,7 @@ public static class BattlePassStore
     /// <summary>列出所有持有称号记录的 profileId（管理员总览用）。</summary>
     public static List<string> ListPlayerTitleProfileIds()
     {
-        try
-        {
-            if (!Directory.Exists(TitlesDir))
-            {
-                return new List<string>();
-            }
-
-            return Directory
-                .EnumerateFiles(TitlesDir, "*.json")
-                .Select(Path.GetFileNameWithoutExtension)
-                .Where(x => !string.IsNullOrEmpty(x))
-                .Select(x => x!)
-                .ToList();
-        }
-        catch
-        {
-            return new List<string>();
-        }
+        return ListJsonProfileIds(TitlesDir);
     }
 
     // ---- 物品获取途径 override ----

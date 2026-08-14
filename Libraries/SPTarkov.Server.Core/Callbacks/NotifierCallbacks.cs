@@ -34,10 +34,14 @@ public class NotifierCallbacks(
          * Take our array of JSON message objects and cast them to JSON strings, so that they can then
          *  be sent to client as NEWLINE separated strings... yup.
          */
-        notifierController
-            .NotifyAsync(tmpSessionID)
-            .ContinueWith(messages => messages.Result.Select(message => string.Join("\n", jsonUtil.Serialize(message))))
-            .ContinueWith(text => httpServerHelper.SendTextJson(resp, text.Result));
+        _ = SendNotificationAsync(tmpSessionID, resp);
+    }
+
+    private async Task SendNotificationAsync(MongoId sessionID, HttpResponse resp)
+    {
+        var messages = await notifierController.NotifyAsync(sessionID);
+        var text = string.Join("\n", messages.Select(message => jsonUtil.Serialize(message)));
+        httpServerHelper.SendTextJson(resp, text);
     }
 
     /// <summary>

@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using SPTarkov.Server.Core.Models.Common;
 
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
@@ -58,6 +61,14 @@ public class ChangeConflictException(string message) : InvalidOperationException
 
 internal static class BattlePassSnapshotCodec
 {
+    /// <summary>由 seed+salt 派生稳定的 MongoId（原散落三处，收敛于此保持幂等）。</summary>
+    public static MongoId DeterministicId(string seed, string salt)
+    {
+        using var sha = SHA256.Create();
+        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(salt + ":" + seed));
+        return new MongoId(Convert.ToHexString(bytes).ToLowerInvariant()[..24]);
+    }
+
     public static T Deserialize<T>(object? snapshot)
     {
         if (snapshot is null)

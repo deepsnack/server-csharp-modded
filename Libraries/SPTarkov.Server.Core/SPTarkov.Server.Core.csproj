@@ -14,6 +14,8 @@
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
     <NoDefaultLaunchSettingsFile>true</NoDefaultLaunchSettingsFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- C9 A/B 闸门：-p:SkipVirtualizer=true 时跳过构建期全量方法虚拟化补丁（默认 false 维持现状） -->
+    <SkipVirtualizer Condition="'$(SkipVirtualizer)' == ''">false</SkipVirtualizer>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SPTarkov.Common\SPTarkov.Common.csproj" />
@@ -35,11 +37,12 @@
     <!-- Run virtualizer patch -->
     <Exec
       ConsoleToMsBuild="true"
-      Condition="'$(IsPublish)' == 'true'"
+      Condition="'$(IsPublish)' == 'true' and '$(SkipVirtualizer)' != 'true'"
       Command="dotnet build -c &quot;$(Configuration)&quot; &quot;$(MSBuildProjectDirectory)/../../Patches/Ceciler.Virtualizer/Ceciler.Virtualizer.csproj&quot;"
     />
     <Exec
       ConsoleToMsBuild="true"
+      Condition="'$(SkipVirtualizer)' != 'true'"
       Command="dotnet &quot;$(MSBuildProjectDirectory)/../../Ceciler/Ceciler.Launcher.dll&quot; &quot;$(OutDir)SPTarkov.Server.Core.dll&quot; &quot;$(MSBuildProjectDirectory)/../../Patches/Ceciler.Virtualizer/bin/$(Configuration)/$(TargetFramework)/Ceciler.Virtualizer.dll&quot;"
     />
     <!-- Run ExtensionData patch -->

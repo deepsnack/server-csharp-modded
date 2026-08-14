@@ -499,20 +499,6 @@ public class RagfairOfferHelper(
     public bool TraderOfferItemQuestLocked(RagfairOffer offer, Dictionary<MongoId, TraderAssort> traderAssorts)
     {
         var itemIds = offer.Items.Select(x => x.Id).ToHashSet();
-        //foreach (var item in offer.Items)
-        //{
-        //    traderAssorts.TryGetValue(offer.User.Id, out var assorts);
-        //    foreach (var barterKvP in assorts.BarterScheme.Where(x => itemIds.Contains(x.Key)))
-        //    {
-        //        foreach (var subBarter in barterKvP.Value)
-        //        {
-        //            if (subBarter.Any(subBarter => subBarter.SptQuestLocked.GetValueOrDefault(false)))
-        //            {
-        //                return true;
-        //            }
-        //        }
-        //    }
-        //}
 
         foreach (var _ in offer.Items)
         {
@@ -611,16 +597,17 @@ public class RagfairOfferHelper(
     /// Process all player-listed flea offers for a desired profile
     /// </summary>
     /// <param name="sessionId">Session id to process offers for</param>
-    /// <returns>true = complete</returns>
+    /// <returns>True when at least one completed sale changed the offer pool</returns>
     public bool ProcessOffersOnProfile(MongoId sessionId)
     {
         var currentTimestamp = timeUtil.GetTimeStamp();
         var profileOffers = GetProfileOffers(sessionId);
+        var offersChanged = false;
 
         // No offers, don't do anything
         if (!profileOffers.Any())
         {
-            return true;
+            return false;
         }
 
         // Index backwards as CompleteOffer() can delete offer object
@@ -666,9 +653,10 @@ public class RagfairOfferHelper(
 
             // Can delete offer object, must run last
             CompleteOffer(sessionId, offer, boughtAmount);
+            offersChanged = true;
         }
 
-        return true;
+        return offersChanged;
     }
 
     /// <summary>

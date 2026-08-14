@@ -2,6 +2,7 @@ using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using SPTarkov.Server.Core.Controllers;
+using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Services.Portal;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Spt.Config;
@@ -17,7 +18,7 @@ namespace SPTarkov.Server.Core.BattlePass.Portal;
 ///     <para>
 ///     复用同程序集（SPT-AccountWeb）内的 Portal 组件：<see cref="PortalSsoToken"/> 验签、
 ///     <see cref="PortalSharedKey"/> 取共享密钥、<see cref="JtiReplayGuard"/> 防重放、
-///     <see cref="PortalRegistrar"/> 自注册；SSO 通过后签发的是 <see cref="WebRegisterController.IssueAdminToken"/>
+///     <see cref="PortalRegistrar"/> 自注册；SSO 通过后签发的是 <see cref="Services.IAdminTokenService.IssueAdminToken"/>
 ///     ——通行证管理端本就复用 WebRegister 的同一 <c>X-Admin-Token</c> 鉴权域，故 token 直接可用。
 ///     </para>
 ///     <para>
@@ -28,7 +29,8 @@ namespace SPTarkov.Server.Core.BattlePass.Portal;
 [Injectable(InjectionType.Singleton)]
 public class BattlePassPortalBridgeService(
     ISptLogger<BattlePassPortalBridgeService> logger,
-    ConfigServer configServer
+    ConfigServer configServer,
+    IAdminTokenService adminTokenService
 ) : IDisposable
 {
     private const string PortalAudience = "battlepass";
@@ -167,7 +169,7 @@ public class BattlePassPortalBridgeService(
 
         // 通过 → 签发与 WebRegister 控制器同进程共享的 admin token（通行证管理端复用同一鉴权域），
         // 经 URL fragment 注入 admin 页（fragment 不进服务器日志、不发往服务端），admin JS 读取后存入 sessionStorage。
-        var adminToken = WebRegisterController.IssueAdminToken();
+        var adminToken = adminTokenService.IssueAdminToken();
 
         var adminPath = !string.IsNullOrEmpty(ret) && ret.StartsWith("/battlepass/", StringComparison.Ordinal)
             ? ret

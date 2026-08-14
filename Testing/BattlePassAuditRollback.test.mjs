@@ -8,6 +8,7 @@ const review = read('Libraries/SPTarkov.Server.Core/BattlePass/Administration/Ba
 const controller = read('Libraries/SPTarkov.Server.Core/BattlePass/Administration/BattlePassReviewController.cs');
 const auditController = read('Libraries/SPTarkov.Server.Core/BattlePass/Administration/BattlePassAuditController.cs');
 const notifier = read('Libraries/SPTarkov.Server.Core/BattlePass/Administration/BattlePassReviewResultNotifier.cs');
+const mailService = read('Libraries/SPTarkov.Server.Core/Services/WebRegisterMailService.cs');
 const handlers = [
     'ShopChangeHandler.cs', 'TaskChangeHandler.cs', 'TrackChangeHandler.cs', 'LotteryChangeHandler.cs',
     'TraderChangeHandler.cs', 'RecipeChangeHandler.cs', 'ItemsChangeHandler.cs', 'FleaChangeHandler.cs',
@@ -29,6 +30,17 @@ test('review notifications resolve collaborators and batch approval is aggregate
     assert.match(review, /NotifySubmitted\(change\)/);
     assert.match(controller, /sendNotification:\s*false/);
     assert.match(controller, /NotifyApprovedBatch\(approvedChanges\)/);
+});
+
+test('review submission uses the public admin mail boundary and module-specific subjects', () => {
+    assert.match(mailService, /bool TrySendBackground\(IEnumerable<string> recipients/);
+    assert.match(mailService, /bool TrySendAdminNotification\(string subject/);
+    assert.match(mailService, /ResolveAdminRecipients/);
+    assert.match(mailService, /MaxSendAttempts\s*=\s*3/);
+    assert.match(notifier, /TrySendAdminNotification/);
+    assert.doesNotMatch(notifier, /WebRegisterModConfig\.Load/);
+    assert.match(notifier, /"abps"\s*=>\s*new\("ABPS 配置", "SPT ABPS"/);
+    assert.match(notifier, /"tasks"\s*=>\s*new\("通行证任务", "SPT 通行证任务"/);
 });
 
 test('audit records submit approve reject and protects rollback with revision checks', () => {

@@ -1,8 +1,8 @@
 using SPTarkov.DI.Annotations;
-using System.Collections.Concurrent;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
+using SPTarkov.Server.Core.Models.Eft.Profile;
 using SPTarkov.Server.Core.Models.Eft.Ws;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Utils;
@@ -20,14 +20,13 @@ public class BattlePassService(
     BattlePassRewardService rewardService,
     LotteryWalletService lotteryWalletService,
     DatabaseService databaseService,
+    BattlePassClothingCatalogService clothingCatalog,
     ProfileHelper profileHelper,
     PasswordStoreService passwordStoreService,
     NotificationSendHelper notificationSendHelper,
     ISptLogger<BattlePassService> logger
 )
 {
-    private readonly ConcurrentDictionary<string, object> compensationLocks = new(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>用用户名+密码校验，成功返回 profileId，失败返回 null。</summary>
     public string? VerifyLogin(string? username, string? password)
     {
@@ -88,7 +87,7 @@ public class BattlePassService(
 
     public List<string> ListProfileIds()
     {
-        var loaded = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var loaded = profileHelper.GetActiveProfilesSnapshot();
         var ids = loaded.Keys.Select(id => id.ToString());
         if (saveServer.LazyEnabled)
         {
@@ -151,7 +150,7 @@ public class BattlePassService(
             return result;
         }
 
-        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var profiles = profileHelper.GetActiveProfilesSnapshot();
         foreach (var (id, profile) in profiles)
         {
             var nick = profile.CharacterData?.PmcData?.Info?.Nickname;
@@ -323,25 +322,52 @@ public class BattlePassService(
         }
 
         var rewards = isPremium ? levelRewards.Premium : levelRewards.Free;
+        var progressSnapshot = CaptureProgressRewardState(prog);
         if (rewards.Count == 0)
         {
-            BattlePassRewardLedger.RecordTrack(prog, level, isPremium, rewards);
-            claimedSet.Add(level); // 无奖励也标记，避免反复点击
-            BattlePassStore.SaveProgress(profileId, prog);
+            var commit = TryCommitProgressRewardState(
+                profileId,
+                prog,
+                progressSnapshot,
+                () =>
+                {
+                    BattlePassRewardLedger.RecordTrack(prog, level, isPremium, rewards);
+                    claimedSet.Add(level); // 无奖励也标记，避免反复点击
+                }
+            );
+            if (!commit.ok)
+            {
+                return (false, commit.message);
+            }
             return (true, "该等级该轨无奖励");
         }
 
-        var message = GrantRewardList(
+        var grant = TryGrantRewardList(
             profileId,
             prog,
             rewards,
             $"【通行证】赛季「{season.Name}」{(isPremium ? "付费" : "免费")}轨 {level} 级奖励，请查收。"
         );
+        if (!grant.ok)
+        {
+            return (false, grant.message);
+        }
 
-        BattlePassRewardLedger.RecordTrack(prog, level, isPremium, rewards);
-        claimedSet.Add(level);
-        BattlePassStore.SaveProgress(profileId, prog);
-        return (true, message);
+        var claimCommit = TryCommitProgressRewardState(
+            profileId,
+            prog,
+            progressSnapshot,
+            () =>
+            {
+                BattlePassRewardLedger.RecordTrack(prog, level, isPremium, rewards);
+                claimedSet.Add(level);
+            }
+        );
+        if (!claimCommit.ok)
+        {
+            return (false, claimCommit.message);
+        }
+        return (true, grant.message);
     }
 
     /// <summary>返回所有已领取普通等级轨中，管理员后续追加且尚未补发的奖励项数量。</summary>
@@ -353,8 +379,7 @@ public class BattlePassService(
     /// <summary>一次性补发所有已领取普通等级轨里的新增奖励；循环奖励不参与补偿。</summary>
     public (bool ok, string message, int granted) ClaimCompensation(string profileId, BpSeason season)
     {
-        var claimLock = compensationLocks.GetOrAdd(profileId, _ => new object());
-        lock (claimLock)
+        using (BattlePassStore.LockProfile(profileId))
         {
             var progress = GetOrResetProgress(profileId, season);
             var pending = BattlePassRewardLedger.GetPending(progress, BattlePassStore.GetTracks());
@@ -363,16 +388,29 @@ public class BattlePassService(
                 return (false, "当前没有可领取的新增补偿", 0);
             }
 
-            var message = GrantRewardList(
+            var progressSnapshot = CaptureProgressRewardState(progress);
+            var grant = TryGrantRewardList(
                 profileId,
                 progress,
                 pending.Select(x => x.Reward).ToList(),
                 $"【通行证】赛季「{season.Name}」奖励轨新增补偿，请查收。"
             );
+            if (!grant.ok)
+            {
+                return (false, grant.message, 0);
+            }
 
-            BattlePassRewardLedger.RecordPending(progress, pending);
-            BattlePassStore.SaveProgress(profileId, progress);
-            return (true, $"已补领 {pending.Count} 项新增奖励。{message}", pending.Count);
+            var commit = TryCommitProgressRewardState(
+                profileId,
+                progress,
+                progressSnapshot,
+                () => BattlePassRewardLedger.RecordPending(progress, pending)
+            );
+            if (!commit.ok)
+            {
+                return (false, commit.message, 0);
+            }
+            return (true, $"已补领 {pending.Count} 项新增奖励。{grant.message}", pending.Count);
         }
     }
 
@@ -544,23 +582,44 @@ public class BattlePassService(
         }
 
         var rewards = isPremium ? cycleRewards.Premium : cycleRewards.Free;
+        var progressSnapshot = CaptureProgressRewardState(prog);
         if (rewards.Count == 0)
         {
-            claimedSet.Add(cycle);
-            BattlePassStore.SaveProgress(profileId, prog);
+            var emptyCommit = TryCommitProgressRewardState(
+                profileId,
+                prog,
+                progressSnapshot,
+                () => claimedSet.Add(cycle)
+            );
+            if (!emptyCommit.ok)
+            {
+                return (false, emptyCommit.message);
+            }
             return (true, "该轨循环奖励为空");
         }
 
-        var message = GrantRewardList(
+        var grant = TryGrantRewardList(
             profileId,
             prog,
             rewards,
             $"【通行证】赛季「{season.Name}」{(isPremium ? "付费" : "免费")}轨 循环奖励第 {cycle} 轮，请查收。"
         );
+        if (!grant.ok)
+        {
+            return (false, grant.message);
+        }
 
-        claimedSet.Add(cycle);
-        BattlePassStore.SaveProgress(profileId, prog);
-        return (true, message);
+        var cycleCommit = TryCommitProgressRewardState(
+            profileId,
+            prog,
+            progressSnapshot,
+            () => claimedSet.Add(cycle)
+        );
+        if (!cycleCommit.ok)
+        {
+            return (false, cycleCommit.message);
+        }
+        return (true, grant.message);
     }
 
     /// <summary>
@@ -608,6 +667,102 @@ public class BattlePassService(
         return GrantRewardList(profileId, progress, rewards, mailMessage);
     }
 
+    private (bool ok, string message) TryGrantRewardList(
+        string profileId,
+        BpProgress progress,
+        List<BpReward> rewards,
+        string mailMessage
+    )
+    {
+        try
+        {
+            return (true, GrantRewardList(profileId, progress, rewards, mailMessage));
+        }
+        catch (BattlePassRewardGrantException ex)
+        {
+            logger.Warning($"[SPT-BattlePass] 奖励发放未确认 profile={profileId}: {ex.Message}");
+            return (false, ex.Message);
+        }
+    }
+
+    private (bool ok, string message) TryCommitProgressRewardState(
+        string profileId,
+        BpProgress progress,
+        ProgressRewardStateSnapshot snapshot,
+        Action mutation
+    )
+    {
+        try
+        {
+            mutation();
+            BattlePassStore.SaveProgress(profileId, progress);
+            return (true, "");
+        }
+        catch (Exception ex)
+        {
+            RestoreProgressRewardState(progress, snapshot);
+            try
+            {
+                // Save the restored cache state in case the first write reached disk before a later hook failed.
+                BattlePassStore.SaveProgress(profileId, progress);
+            }
+            catch (Exception rollbackSaveException)
+            {
+                logger.Warning(
+                    $"[SPT-BattlePass] 领取状态回滚后的保存仍失败 profile={profileId}: {rollbackSaveException.Message}"
+                );
+            }
+
+            logger.Warning($"[SPT-BattlePass] 领取状态保存失败并已回滚缓存 profile={profileId}: {ex.Message}");
+            return (false, "奖励已处理，但通行证领取状态保存失败；状态已回滚，请重试");
+        }
+    }
+
+    private static ProgressRewardStateSnapshot CaptureProgressRewardState(BpProgress progress)
+    {
+        return new ProgressRewardStateSnapshot
+        {
+            ClaimedFree = new HashSet<int>(progress.ClaimedFree ?? []),
+            ClaimedPremium = new HashSet<int>(progress.ClaimedPremium ?? []),
+            ClaimedCycleFree = new HashSet<int>(progress.ClaimedCycleFree ?? []),
+            ClaimedCyclePremium = new HashSet<int>(progress.ClaimedCyclePremium ?? []),
+            GrantedTrackRewards = (progress.GrantedTrackRewards ?? new Dictionary<string, HashSet<string>>())
+                .ToDictionary(
+                    entry => entry.Key,
+                    entry => new HashSet<string>(entry.Value ?? [], StringComparer.OrdinalIgnoreCase),
+                    StringComparer.OrdinalIgnoreCase
+                ),
+            RewardLedgerInitialized = progress.RewardLedgerInitialized,
+            PurchaseRights = new HashSet<string>(progress.PurchaseRights ?? [], StringComparer.OrdinalIgnoreCase),
+        };
+    }
+
+    private static void RestoreProgressRewardState(BpProgress progress, ProgressRewardStateSnapshot snapshot)
+    {
+        progress.ClaimedFree = new HashSet<int>(snapshot.ClaimedFree);
+        progress.ClaimedPremium = new HashSet<int>(snapshot.ClaimedPremium);
+        progress.ClaimedCycleFree = new HashSet<int>(snapshot.ClaimedCycleFree);
+        progress.ClaimedCyclePremium = new HashSet<int>(snapshot.ClaimedCyclePremium);
+        progress.GrantedTrackRewards = snapshot.GrantedTrackRewards.ToDictionary(
+            entry => entry.Key,
+            entry => new HashSet<string>(entry.Value, StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase
+        );
+        progress.RewardLedgerInitialized = snapshot.RewardLedgerInitialized;
+        progress.PurchaseRights = new HashSet<string>(snapshot.PurchaseRights, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed record ProgressRewardStateSnapshot
+    {
+        public required HashSet<int> ClaimedFree { get; init; }
+        public required HashSet<int> ClaimedPremium { get; init; }
+        public required HashSet<int> ClaimedCycleFree { get; init; }
+        public required HashSet<int> ClaimedCyclePremium { get; init; }
+        public required Dictionary<string, HashSet<string>> GrantedTrackRewards { get; init; }
+        public required bool RewardLedgerInitialized { get; init; }
+        public required HashSet<string> PurchaseRights { get; init; }
+    }
+
     /// <summary>判定玩家是否已拥有某个唯一性奖励；item 永远视为未拥有。</summary>
     public bool HasReward(string profileId, BpProgress progress, BpReward reward)
     {
@@ -632,6 +787,10 @@ public class BattlePassService(
 
     private string GrantRewardList(string profileId, BpProgress progress, List<BpReward> rewards, string mailMessage)
     {
+        // All entitlement mutation, persistence, notification and rollback for one profile share
+        // the same gate as Claim/ClaimCycle/compensation. This prevents a failed batch from
+        // removing an entitlement concurrently committed by another reward path.
+        using var profileGate = BattlePassStore.LockProfile(profileId);
         var itemRewards = new List<BpReward>();
         var unlockedOffers = 0;
         var unlockedRecipes = 0;
@@ -642,25 +801,19 @@ public class BattlePassService(
         var grantedExchangeCoins = 0;
         var skippedOwnedEntitlements = 0;
         var profileTouched = false;
+        var addedRecipeIds = new List<MongoId>();
+        var addedClothingIds = new List<MongoId>();
 
+        // Validate every clothing reward before any mail, wallet, title, purchase-right, or profile side effect.
+        // A stale component tpl must fail the whole claim so its ledger/claimed state remains retryable.
+        ValidateClothingRewards(profileId, rewards);
+
+        // Apply profile-backed entitlements first. They are persisted as one batch before any irreversible
+        // non-profile reward is delivered; a save failure rolls this batch back and aborts the claim.
         foreach (var r in rewards)
         {
             switch ((r.Type ?? "item").Trim().ToLowerInvariant())
             {
-                case "purchaseright":
-                    if (!string.IsNullOrWhiteSpace(r.OfferId))
-                    {
-                        var offerId = r.OfferId.Trim();
-                        if (BattlePassPurchaseRights.Has(progress, offerId))
-                        {
-                            skippedOwnedEntitlements++;
-                        }
-                        else if (BattlePassPurchaseRights.Grant(progress, offerId))
-                        {
-                            unlockedOffers++;
-                        }
-                    }
-                    break;
                 case "recipe":
                     if (!string.IsNullOrWhiteSpace(r.RecipeId))
                     {
@@ -673,6 +826,63 @@ public class BattlePassService(
                         {
                             unlockedRecipes++;
                             profileTouched = true;
+                            if (MongoId.IsValidMongoId(recipeId))
+                            {
+                                addedRecipeIds.Add(new MongoId(recipeId));
+                            }
+                        }
+                    }
+                    break;
+                case "clothing":
+                    var suitId = r.SuitId!.Trim(); // Validated above.
+                    if (HasClothing(profileId, suitId))
+                    {
+                        skippedOwnedEntitlements++;
+                    }
+                    else if (UnlockClothing(profileId, suitId))
+                    {
+                        unlockedClothing++;
+                        profileTouched = true;
+                        addedClothingIds.Add(new MongoId(suitId));
+                    }
+                    else
+                    {
+                        throw new BattlePassRewardGrantException($"服装奖励 {suitId} 无法写入玩家档案，请稍后重试");
+                    }
+                    break;
+            }
+        }
+
+        if (profileTouched)
+        {
+            PersistProfileRewardBatch(profileId, addedRecipeIds, addedClothingIds);
+        }
+
+        if (addedClothingIds.Count > 0)
+        {
+            SendCustomizationRefresh(profileId);
+        }
+
+        // Only after the profile-backed batch is durable do we perform rewards whose services own separate persistence
+        // or delivery channels.
+        foreach (var r in rewards)
+        {
+            switch ((r.Type ?? "item").Trim().ToLowerInvariant())
+            {
+                case "recipe":
+                case "clothing":
+                    break;
+                case "purchaseright":
+                    if (!string.IsNullOrWhiteSpace(r.OfferId))
+                    {
+                        var offerId = r.OfferId.Trim();
+                        if (BattlePassPurchaseRights.Has(progress, offerId))
+                        {
+                            skippedOwnedEntitlements++;
+                        }
+                        else if (BattlePassPurchaseRights.Grant(progress, offerId))
+                        {
+                            unlockedOffers++;
                         }
                     }
                     break;
@@ -688,21 +898,6 @@ public class BattlePassService(
                         else if (BattlePassStore.GrantTitle(profileId, titleId))
                         {
                             unlockedTitles++;
-                        }
-                    }
-                    break;
-                case "clothing":
-                    if (!string.IsNullOrWhiteSpace(r.SuitId))
-                    {
-                        var suitId = r.SuitId.Trim();
-                        if (HasClothing(profileId, suitId))
-                        {
-                            skippedOwnedEntitlements++;
-                        }
-                        else if (UnlockClothing(profileId, suitId))
-                        {
-                            unlockedClothing++;
-                            profileTouched = true;
                         }
                     }
                     break;
@@ -737,11 +932,6 @@ public class BattlePassService(
         if (itemRewards.Count > 0)
         {
             rewardService.Deliver(profileId, itemRewards, mailMessage);
-        }
-
-        if (profileTouched)
-        {
-            PersistProfile(profileId);
         }
 
         var parts = new List<string>();
@@ -783,6 +973,109 @@ public class BattlePassService(
         }
 
         return parts.Count > 0 ? "领取成功：" + string.Join("；", parts) : "领取成功";
+    }
+
+    private void ValidateClothingRewards(string profileId, IEnumerable<BpReward> rewards)
+    {
+        var clothingRewards = rewards
+            .Where(reward => string.Equals((reward.Type ?? "item").Trim(), "clothing", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (clothingRewards.Count == 0)
+        {
+            return;
+        }
+
+        if (!MongoId.IsValidMongoId(profileId) || saveServer.GetProfile(new MongoId(profileId)) is null)
+        {
+            throw new BattlePassRewardGrantException("玩家档案不可用，服装奖励未领取，请稍后重试");
+        }
+
+        foreach (var reward in clothingRewards)
+        {
+            var suitId = reward.SuitId?.Trim();
+            if (string.IsNullOrWhiteSpace(suitId)
+                || !MongoId.IsValidMongoId(suitId)
+                || !clothingCatalog.IsRegisteredSuite(new MongoId(suitId)))
+            {
+                throw new BattlePassRewardGrantException(
+                    $"服装奖励 {suitId ?? "<empty>"} 不是当前已注册的可发放套装，领取状态未改变"
+                );
+            }
+        }
+    }
+
+    private void PersistProfileRewardBatch(
+        string profileId,
+        IReadOnlyCollection<MongoId> addedRecipeIds,
+        IReadOnlyCollection<MongoId> addedClothingIds
+    )
+    {
+        var sessionId = new MongoId(profileId);
+        try
+        {
+            saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            RollbackProfileRewardBatch(sessionId, addedRecipeIds, addedClothingIds);
+            try
+            {
+                // Save the restored in-memory state in case the first atomic write completed before a later hook failed.
+                saveServer.SaveProfileAsync(sessionId).GetAwaiter().GetResult();
+            }
+            catch (Exception rollbackSaveException)
+            {
+                logger.Warning(
+                    $"[SPT-BattlePass] 奖励回滚后的档案保存仍失败 profile={profileId}: {rollbackSaveException.Message}"
+                );
+            }
+
+            throw new BattlePassRewardGrantException("玩家档案保存失败，本次服装/配方奖励已回滚，请重试", ex);
+        }
+    }
+
+    private void RollbackProfileRewardBatch(
+        MongoId sessionId,
+        IReadOnlyCollection<MongoId> addedRecipeIds,
+        IReadOnlyCollection<MongoId> addedClothingIds
+    )
+    {
+        if (addedClothingIds.Count > 0)
+        {
+            var clothingSet = addedClothingIds.ToHashSet();
+            saveServer.GetProfile(sessionId)?.CustomisationUnlocks?.RemoveAll(entry => clothingSet.Contains(entry.Id));
+        }
+
+        if (addedRecipeIds.Count > 0)
+        {
+            profileHelper
+                .GetPmcProfile(sessionId)
+                ?.UnlockedInfo
+                ?.UnlockedProductionRecipe
+                ?.ExceptWith(addedRecipeIds);
+        }
+    }
+
+    private void SendCustomizationRefresh(string profileId)
+    {
+        var sessionId = new MongoId(profileId);
+        try
+        {
+            notificationSendHelper.SendMessage(
+                sessionId,
+                new WsNotificationEvent
+                {
+                    EventIdentifier = new MongoId(),
+                    EventType = NotificationEventType.CustomizationUpdateRequired,
+                }
+            );
+        }
+        catch (Exception ex)
+        {
+            // The entitlement is already durable. A transient online notification failure must not make the claim retry
+            // and duplicate unrelated rewards; the client will receive the customization on its next normal refresh.
+            logger.Warning($"[SPT-BattlePass] 服装已保存但客户端刷新通知失败 profile={profileId}: {ex.Message}");
+        }
     }
 
     /// <summary>解锁某藏身处制造配方（直接写玩家档案 UnlockedProductionRecipe，不经商人）。</summary>
@@ -831,13 +1124,24 @@ public class BattlePassService(
         var sessionId = new MongoId(profileId);
         var sid = new MongoId(suitId);
         var profile = saveServer.GetProfile(sessionId);
-        if (profile is null || !databaseService.GetCustomization().ContainsKey(sid))
+        if (profile is null || !clothingCatalog.IsRegisteredSuite(sid))
         {
             return false;
         }
 
+        if (!AddClothingUnlock(profile, sid))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Adds the suite entitlement to a profile. Component tpls must never be passed here.</summary>
+    internal static bool AddClothingUnlock(SptProfile profile, MongoId suiteId)
+    {
         profile.CustomisationUnlocks ??= [];
-        if (profile.CustomisationUnlocks.Any(customisation => customisation.Id == sid))
+        if (profile.CustomisationUnlocks.Any(customisation => customisation.Id == suiteId))
         {
             return false;
         }
@@ -845,21 +1149,11 @@ public class BattlePassService(
         profile.CustomisationUnlocks.Add(
             new CustomisationStorage
             {
-                Id = sid,
+                Id = suiteId,
                 Source = CustomisationSource.UNLOCKED_IN_GAME,
                 Type = CustomisationType.SUITE,
             }
         );
-
-        notificationSendHelper.SendMessage(
-            sessionId,
-            new WsNotificationEvent
-            {
-                EventIdentifier = new MongoId(),
-                EventType = NotificationEventType.CustomizationUpdateRequired,
-            }
-        );
-
         return true;
     }
 
@@ -885,6 +1179,14 @@ public class BattlePassService(
         catch (Exception ex)
         {
             logger.Warning($"[SPT-BattlePass] 保存档案失败（内存态已生效）profile={profileId}: {ex.Message}");
+        }
+    }
+
+    private sealed class BattlePassRewardGrantException : InvalidOperationException
+    {
+        public BattlePassRewardGrantException(string message, Exception? innerException = null)
+            : base(message, innerException)
+        {
         }
     }
 }

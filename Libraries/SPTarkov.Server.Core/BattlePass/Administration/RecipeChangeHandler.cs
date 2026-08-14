@@ -12,7 +12,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 ///     <para>产物/原料均为实体物品（tpl 必填）；应用后调用 <see cref="BattlePassRecipeSync.Sync"/>
 ///     热重注入藏身处生产数据库。锁定配方（locked=true）挂通行证虚拟任务锁，经奖励轨 recipe 解锁。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class RecipeChangeHandler(
     BattlePassRecipeSync recipeSync,
     ISptLogger<RecipeChangeHandler> logger

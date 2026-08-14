@@ -7,7 +7,7 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
 /// <summary>任务模块命令处理器：task.upsert / task.delete / task.genSpec。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class TaskChangeHandler(ISptLogger<TaskChangeHandler> logger) : IBattlePassChangeHandler
 {
     public string Module => "tasks";

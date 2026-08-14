@@ -51,7 +51,7 @@ public class InsuranceController(
         // Process each installed profile.
         // 懒加载时只扫已加载档：保险回邮只有玩家在线才可见，未加载档物化后由下个保险周期补发，
         // 对玩家不可感知（邮件创建更晚 = 过期更晚，无损）
-        var profilesToProcess = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var profilesToProcess = profileHelper.GetActiveProfilesSnapshot();
         foreach (var (sessionId, _) in profilesToProcess)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))
@@ -171,6 +171,7 @@ public class InsuranceController(
     protected void RemoveInsurancePackageFromProfile(MongoId sessionId, Insurance insPackage)
     {
         var profile = saveServer.GetProfile(sessionId);
+        var previousCount = profile.InsuranceList?.Count ?? 0;
         profile.InsuranceList = profile
             .InsuranceList.Where(insurance =>
                 insurance.TraderId != insPackage.TraderId
@@ -179,6 +180,11 @@ public class InsuranceController(
                 || insurance.SystemData?.Location != insPackage.SystemData?.Location
             )
             .ToList();
+
+        if (profile.InsuranceList.Count != previousCount)
+        {
+            saveServer.MarkProfileDirty(sessionId);
+        }
 
         if (logger.IsLogEnabled(LogLevel.Debug))
         {

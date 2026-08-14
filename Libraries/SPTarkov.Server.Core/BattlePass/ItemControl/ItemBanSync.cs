@@ -1,7 +1,9 @@
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
+using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
@@ -33,10 +35,13 @@ public class ItemBanSync(
     ISptLogger<ItemBanSync> logger
 ) : IOnLoad
 {
+    private const string TraderPolicyKey = "battlepass-item-bans";
     private readonly HashSet<MongoId> _managedTpls = new();
+    private HashSet<MongoId> _traderBlockedTpls = [];
 
     public Task OnLoad()
     {
+        TraderAssortAccessPolicy.Register(TraderPolicyKey, FilterTraderAssort);
         Apply();
         return Task.CompletedTask;
     }
@@ -93,6 +98,7 @@ public class ItemBanSync(
             // ---- 让生成期缓存重建（散落/静态、主黑名单缓存）+ 清 bot 战利品池缓存，使增删即时生效 ----
             itemFilterService.RefreshBlacklistCaches();
             botLootCacheService.ClearCache();
+            Volatile.Write(ref _traderBlockedTpls, _managedTpls.ToHashSet());
 
             logger.Success(
                 $"[SPT-BattlePass] 全局物品封禁已应用（tpl {cfg.Tpls.Count}、分类 {cfg.Categories.Count} → 实际屏蔽 {_managedTpls.Count} 项）。"
@@ -114,5 +120,12 @@ public class ItemBanSync(
         itemCfg.Blacklist.Add(id);
         itemCfg.LootableItemBlacklist.Add(id);
         fleaBlack.Custom.Add(id);
+    }
+
+    private TraderAssort FilterTraderAssort(MongoId sessionId, MongoId traderId, TraderAssort assort, bool isFlea)
+    {
+        var blockedTpls = Volatile.Read(ref _traderBlockedTpls);
+        assort.RemoveItemsFromAssort(blockedTpls);
+        return assort;
     }
 }

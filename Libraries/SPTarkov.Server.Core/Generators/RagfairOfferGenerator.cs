@@ -295,18 +295,9 @@ public class RagfairOfferGenerator(
         }
 
         stopwatch.Restart();
-        var tasks = new List<Task>();
-        foreach (var assortItemWithChildren in assortItemsToProcess)
-        {
-            tasks.Add(
-                Task.Factory.StartNew(() =>
-                {
-                    CreateOffersFromAssort(assortItemWithChildren, replacingExpiredOffers, RagfairConfig.Dynamic);
-                })
-            );
-        }
-
-        Task.WaitAll(tasks.ToArray());
+        Parallel.ForEach(assortItemsToProcess, assortItemWithChildren =>
+            CreateOffersFromAssort(assortItemWithChildren, replacingExpiredOffers, RagfairConfig.Dynamic)
+        );
         stopwatch.Stop();
         if (logger.IsLogEnabled(LogLevel.Debug))
         {

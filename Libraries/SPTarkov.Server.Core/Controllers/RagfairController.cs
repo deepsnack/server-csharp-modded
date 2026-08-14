@@ -49,6 +49,8 @@ public class RagfairController(
     ConfigServer configServer
 )
 {
+    private int _lastUpdateChanged;
+
     protected readonly RagfairConfig RagfairConfig = configServer.GetConfig<RagfairConfig>();
 
     /// <summary>
@@ -56,6 +58,25 @@ public class RagfairController(
     /// </summary>
     public void Update()
     {
+        Volatile.Write(ref _lastUpdateChanged, UpdateAndReportChanges() ? 1 : 0);
+    }
+
+    /// <summary>
+    ///     Consume the mutation result recorded by the most recent legacy <see cref="Update"/> call.
+    ///     Callbacks use this after virtual Mod overrides have completed.
+    /// </summary>
+    public bool ConsumeLastUpdateChanged()
+    {
+        return Interlocked.Exchange(ref _lastUpdateChanged, 0) == 1;
+    }
+
+    /// <summary>
+    ///     Check profiles for completed sales and report whether the visible offer pool changed.
+    /// </summary>
+    public bool UpdateAndReportChanges()
+    {
+        var offersChanged = false;
+
         // 懒加载时只扫已加载档：有挂单的档在启动恢复市场时已物化，无挂单的离线档此处无事可做，语义等价。
         // 经 ProfileHelper 封装，避免 RagfairController 直接依赖 SaveServer（保持构造签名与上游一致，兼容 SVM 等覆盖型模组）。
         var profilesToCheck = profileHelper.GetActiveProfilesSnapshot();
@@ -68,9 +89,11 @@ public class RagfairController(
                 && pmcProfile?.Info?.Level >= databaseService.GetGlobals().Configuration.RagFair.MinUserLevel
             )
             {
-                ragfairOfferHelper.ProcessOffersOnProfile(sessionId);
+                offersChanged |= ragfairOfferHelper.ProcessOffersOnProfile(sessionId);
             }
         }
+
+        return offersChanged;
     }
 
     /// <summary>

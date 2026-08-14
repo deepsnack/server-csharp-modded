@@ -6,6 +6,7 @@ using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Eft.Profile;
+using SPTarkov.Server.Core.Models.Eft.Ragfair;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Utils;
@@ -54,6 +55,8 @@ public class ProfileAutoRepairService(
 
         RepairCharacter(profile.CharacterData?.PmcData, "pmc", summary);
         RepairCharacter(profile.CharacterData?.ScavData, "scav", summary);
+        RepairRagfairOffers(profile.CharacterData?.PmcData, "pmc", summary);
+        RepairRagfairOffers(profile.CharacterData?.ScavData, "scav", summary);
         RepairUserBuilds(profile.UserBuildData, summary);
         RepairDialogues(profile.DialogueRecords, summary);
         RepairInsurance(profile.InsuranceList, summary);
@@ -81,6 +84,77 @@ public class ProfileAutoRepairService(
         RepairItemList(new ItemListContext($"{characterName}.inventory", items, adoptParentId, "hideout"), summary);
         RemoveBrokenCharacterReferences(character!, summary);
         RestoreInvalidCustomizations(character, summary);
+    }
+
+    /// <summary>
+    ///     返回客户端可安全解析的挂单列表（剔除 root 悬空 / items 为空 / 物品模板未知的坏单）。
+    ///     供 RepairProfile 与市场挂单恢复（AddPlayerOffers）共用，防止坏单进入档案或市场后
+    ///     导致客户端 profile/list 或跳蚤列表反序列化抛 KeyNotFoundException。
+    /// </summary>
+    public List<RagfairOffer> FilterClientSafeOffers(List<RagfairOffer>? offers)
+    {
+        if (offers is not { Count: > 0 })
+        {
+            return offers ?? [];
+        }
+
+        var knownTemplates = databaseService.GetItems();
+        return offers.Where(offer => RagfairOfferIsClientSafe(offer, knownTemplates)).ToList();
+    }
+
+    /// <summary>
+    ///     校验档案 RagfairInfo 挂单，剔除会在客户端反序列化 Offer 时抛
+    ///     KeyNotFoundException（"The given key 'xxx' was not present in the dictionary."）的坏单：
+    ///     客户端 GClass2357.Deserialize 对每张单执行 FlatItemsToTree(items).Items[root]，
+    ///     当 items 为空、root 不在 items 中、或物品模板不存在（模板未知的物品会被客户端
+    ///     跳过后 root 悬空）时客户端即抛该异常并导致 profile/list 解析失败。
+    /// </summary>
+    private void RepairRagfairOffers(PmcData? character, string characterName, ProfileRepairSummary summary)
+    {
+        var ragfairInfo = character?.RagfairInfo;
+        var offers = ragfairInfo?.Offers;
+        if (offers is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var validOffers = FilterClientSafeOffers(offers);
+        if (validOffers.Count != offers.Count)
+        {
+            ragfairInfo!.Offers = validOffers;
+            summary.InvalidOffersRemoved += offers.Count - validOffers.Count;
+            logger.Warning(
+                $"[ProfileAutoRepair] removed {offers.Count - validOffers.Count} invalid ragfair offer(s) from {characterName} profile"
+            );
+        }
+    }
+
+    private static bool RagfairOfferIsClientSafe(
+        RagfairOffer offer,
+        IReadOnlyDictionary<MongoId, TemplateItem> knownTemplates
+    )
+    {
+        var items = offer.Items;
+        if (items is not { Count: > 0 } || offer.Root.IsEmpty)
+        {
+            return false;
+        }
+
+        var itemIds = items.Select(item => item.Id.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!itemIds.Contains(offer.Root.ToString()))
+        {
+            return false;
+        }
+
+        foreach (var item in items)
+        {
+            if (item.Template.IsEmpty || !knownTemplates.ContainsKey(item.Template))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void RepairUserBuilds(UserBuilds? userBuilds, ProfileRepairSummary summary)

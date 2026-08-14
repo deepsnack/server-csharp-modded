@@ -21,6 +21,7 @@ public class RagfairOfferService(
     TimeUtil timeUtil,
     DatabaseService databaseService,
     SaveServer saveServer,
+    ProfileAutoRepairService profileAutoRepairService,
     RagfairServerHelper ragfairServerHelper,
     ItemHelper itemHelper,
     ProfileHelper profileHelper,
@@ -34,6 +35,8 @@ public class RagfairOfferService(
 {
     private bool _playerOffersLoaded;
     protected readonly RagfairConfig RagfairConfig = configServer.GetConfig<RagfairConfig>();
+
+    internal readonly record struct PlayerOfferRestoreSummary(int RestoredProfiles, int RestoredOffers, int FailedProfiles);
 
     /// <summary>
     ///     Get all offers
@@ -152,29 +155,80 @@ public class RagfairOfferService(
                 .ToList()
             : saveServer.GetProfiles().Keys.ToList();
 
+        var summary = RestorePlayerOffersForProfiles(
+            sessionIds,
+            sessionId =>
+            {
+                var profile = saveServer.GetProfile(sessionId);
+                var offers = profile.CharacterData?.PmcData?.RagfairInfo?.Offers;
+                var safeOffers = profileAutoRepairService.FilterClientSafeOffers(offers);
+                if (safeOffers.Count != (offers?.Count ?? 0))
+                {
+                    // 坏单（root 悬空/空 items/物品模板未知）会让客户端解析 Offer 时抛
+                    // KeyNotFoundException；进市场前剔除并写回档案保持一致。
+                    if (profile.CharacterData?.PmcData?.RagfairInfo is { } ragfairInfo)
+                    {
+                        ragfairInfo.Offers = safeOffers;
+                    }
+
+                    logger.Warning(
+                        $"[ProfileAutoRepair] removed {offers!.Count - safeOffers.Count} invalid ragfair offer(s) while restoring player offers for {sessionId}"
+                    );
+                }
+
+                return safeOffers;
+            },
+            ragfairOfferHolder.AddOffers
+        );
+
+        // A complete scan is terminal for this startup pass. Failed profiles are isolated and must not block every
+        // subsequent ragfair update from running.
+        _playerOffersLoaded = true;
+
+        if (summary.FailedProfiles > 0)
+        {
+            // Deliberately anonymous: do not expose profile ids/usernames in aggregated startup warnings.
+            logger.Warning($"Unable to restore player offers for {summary.FailedProfiles} profile(s); skipped them and continued the scan.");
+        }
+    }
+
+    internal static PlayerOfferRestoreSummary RestorePlayerOffersForProfiles(
+        IEnumerable<MongoId> sessionIds,
+        Func<MongoId, List<RagfairOffer>?> getOffers,
+        Action<IEnumerable<RagfairOffer>> addOffers
+    )
+    {
+        var restoredProfiles = 0;
+        var restoredOffers = 0;
+        var failedProfiles = 0;
+
         foreach (var sessionId in sessionIds)
         {
-            var pmcData = saveServer.GetProfile(sessionId)?.CharacterData?.PmcData;
-            if (pmcData?.RagfairInfo?.Offers == null)
-            // Profile has been wiped, ignore
+            try
             {
-                continue;
-            }
+                var offers = getOffers(sessionId);
+                if (offers is not { Count: > 0 })
+                {
+                    // Profile has been wiped or has no active offers, ignore.
+                    continue;
+                }
 
-            if (!pmcData.RagfairInfo.Offers.Any())
+                foreach (var offer in offers)
+                {
+                    offer.CreatedBy = OfferCreator.Player;
+                }
+
+                addOffers(offers);
+                restoredProfiles++;
+                restoredOffers += offers.Count;
+            }
+            catch (Exception)
             {
-                continue;
+                failedProfiles++;
             }
-
-            foreach (var offer in pmcData.RagfairInfo.Offers)
-            {
-                offer.CreatedBy = OfferCreator.Player;
-            }
-
-            ragfairOfferHolder.AddOffers(pmcData.RagfairInfo.Offers);
         }
 
-        _playerOffersLoaded = true;
+        return new PlayerOfferRestoreSummary(restoredProfiles, restoredOffers, failedProfiles);
     }
 
     /// <summary>

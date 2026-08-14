@@ -111,6 +111,8 @@ public class BuildController(
             // Add fresh
             profile.UserBuildData.WeaponBuilds.Add(newBuild);
         }
+
+        saveServer.MarkProfileDirty(sessionId);
     }
 
     /// <summary>
@@ -149,6 +151,8 @@ public class BuildController(
             // Fresh, add new
             profile.UserBuildData.EquipmentBuilds.Add(newBuild);
         }
+
+        saveServer.MarkProfileDirty(sessionID);
     }
 
     /// <summary>
@@ -191,6 +195,7 @@ public class BuildController(
 
         // Add new template to profile
         profile.UserBuildData.MagazineBuilds.Add(result);
+        saveServer.MarkProfileDirty(sessionId);
     }
 
     /// <summary>
@@ -211,6 +216,7 @@ public class BuildController(
         if (matchingWeaponBuild is not null)
         {
             weaponBuilds.Remove(matchingWeaponBuild);
+            saveServer.MarkProfileDirty(sessionID);
 
             return;
         }
@@ -220,6 +226,7 @@ public class BuildController(
         if (matchingEquipmentBuild is not null)
         {
             equipmentBuilds.Remove(matchingEquipmentBuild);
+            saveServer.MarkProfileDirty(sessionID);
 
             return;
         }
@@ -229,6 +236,7 @@ public class BuildController(
         if (matchingMagazineBuild is not null)
         {
             magazineBuilds.Remove(matchingMagazineBuild);
+            saveServer.MarkProfileDirty(sessionID);
 
             return;
         }

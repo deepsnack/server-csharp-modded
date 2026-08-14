@@ -25,8 +25,13 @@ public sealed class WebRegisterAccountEmailService(
 {
     private static readonly object MappingLock = new();
 
-    private static string EmailMappingFilePath =>
-        Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "email_mapping.json");
+    private static string EmailMappingFilePath
+    {
+        get
+        {
+            return Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "email_mapping.json");
+        }
+    }
 
     public string? ResolveByProfileId(string? profileId)
     {
@@ -38,12 +43,7 @@ public sealed class WebRegisterAccountEmailService(
         try
         {
             var sessionId = new MongoId(profileId);
-            if (!saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
-            {
-                return null;
-            }
-
-            var username = profile.ProfileInfo?.Username?.Trim();
+            var username = saveServer.GetUsernameBySessionId(sessionId)?.Trim();
             if (string.IsNullOrWhiteSpace(username))
             {
                 return null;

@@ -516,7 +516,7 @@ function newObjective(type) {
         dependsOnPrevious: false, containsItems: [], hasItemFromCategory: [],
         baseAccuracy: null, durability: null, effectiveDistance: null, emptyTacticalSlot: null,
         ergonomics: null, height: null, magazineCapacity: null, muzzleVelocity: null,
-        recoil: null, weight: null, width: null, note: null, name: null,
+        recoil: null, weight: null, width: null, textZh: null, textEn: null, note: null, name: null,
     };
 }
 
@@ -668,7 +668,17 @@ function objectiveRow(o, idx) {
     const head = document.createElement('div'); head.className = 'gs-row'; head.style.flexWrap = 'wrap';
     const typeSel = document.createElement('select');
     typeSel.innerHTML = `<option value="handoverItem">上交物品</option><option value="weaponAssembly">上交指定改装枪械</option><option value="kills">条件击杀</option><option value="transit">地图转移</option>`;
-    typeSel.value = o.type; typeSel.onchange = () => { CUSTOM_DRAFT.objectives[idx] = { ...newObjective(typeSel.value), count: o.count || 1, dependsOnPrevious: idx > 0 && !!o.dependsOnPrevious }; renderCustomForm(); };
+    typeSel.value = o.type; typeSel.onchange = () => {
+        CUSTOM_DRAFT.objectives[idx] = {
+            ...newObjective(typeSel.value),
+            count: o.count || 1,
+            dependsOnPrevious: idx > 0 && !!o.dependsOnPrevious,
+            textZh: o.textZh || null,
+            textEn: o.textEn || null,
+            note: o.note || null,
+        };
+        renderCustomForm();
+    };
     head.appendChild(typeSel);
     const cnt = document.createElement('input'); cnt.type = 'number'; cnt.min = '1'; cnt.value = o.count || 1; cnt.style.width = '72px'; cnt.title = '要求数量';
     cnt.oninput = () => o.count = Math.max(1, +cnt.value || 1); head.appendChild(cnt);
@@ -704,6 +714,23 @@ function objectiveRow(o, idx) {
         appendLabeled(body, '从这些地图进行 Transit', locationSelect(o.locations));
         const hint = document.createElement('p'); hint.className = 'hint'; hint.textContent = '与“前一目标完成后启用”组合，可创建：地图击杀 → 转移 → 下一地图击杀的原版阶段链。'; body.appendChild(hint);
     }
+
+    const localeGrid = document.createElement('div'); localeGrid.className = 'quest-field-grid';
+    const textZh = document.createElement('textarea'); textZh.rows = 2; textZh.maxLength = 300;
+    textZh.placeholder = '游戏内显示的中文目标文本；留空则自动生成';
+    textZh.value = o.textZh || '';
+    textZh.oninput = () => o.textZh = textZh.value;
+    appendLabeled(localeGrid, '中文目标文本', textZh);
+    const textEn = document.createElement('textarea'); textEn.rows = 2; textEn.maxLength = 300;
+    textEn.placeholder = '可选；留空时回退中文文本';
+    textEn.value = o.textEn || '';
+    textEn.oninput = () => o.textEn = textEn.value;
+    appendLabeled(localeGrid, '英文目标文本（可选）', textEn);
+    body.appendChild(localeGrid);
+
+    const localeHint = document.createElement('p'); localeHint.className = 'hint';
+    localeHint.textContent = '文本会写入该目标 condition ID 的本地化键；留空也不会向客户端显示 tpl。';
+    body.appendChild(localeHint);
     return row;
 }
 

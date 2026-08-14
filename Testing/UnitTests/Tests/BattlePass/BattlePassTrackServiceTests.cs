@@ -130,12 +130,12 @@ public class BattlePassTrackServiceTests
             });
     }
 
-    [TestCase("Killed")]
-    [TestCase("MissingInAction")]
-    [TestCase("Left")]
-    [TestCase("Runner")]
-    [TestCase("Transit")]
-    public void OneLife_KillTargetReachedWithoutSurvived_DoesNotComplete(string exitStatus)
+    [TestCase("Killed", 0)]
+    [TestCase("MissingInAction", 2)]
+    [TestCase("Left", 2)]
+    [TestCase("Runner", 2)]
+    [TestCase("Transit", 2)]
+    public void OneLife_KillTargetReachedWithoutSurvived_OnlyDeathClearsProgress(string exitStatus, int expectedProgress)
     {
         WithTaskStore(
             new BpTaskTemplate { Id = "one_life_kills", Scope = "daily", ConditionType = "Kills", Count = 2, Xp = 100, OneLife = true },
@@ -151,7 +151,7 @@ public class BattlePassTrackServiceTests
                 Assert.Multiple(() =>
                 {
                     Assert.That(progress.ActiveTasks[0].CreditedXp, Is.False);
-                    Assert.That(progress.ActiveTasks[0].Progress, Is.Zero);
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(expectedProgress));
                     Assert.That(progress.Xp, Is.Zero);
                     Assert.That(result.Credited.Any(credit => credit.Done), Is.False);
                 });
@@ -178,6 +178,44 @@ public class BattlePassTrackServiceTests
                     Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(2));
                     Assert.That(progress.Xp, Is.EqualTo(100));
                     Assert.That(result.Credited.Single(credit => credit.Done).TaskId, Is.EqualTo("one_life_kills"));
+                });
+            });
+    }
+
+    [Test]
+    public void OneLife_ProgressAccumulatesAcrossSurvivedRaids()
+    {
+        WithTaskStore(
+            new BpTaskTemplate { Id = "one_life_kills", Scope = "daily", ConditionType = "Kills", Count = 3, Xp = 100, OneLife = true },
+            (progress, season) =>
+            {
+                var first = _trackService.ApplyAuthoritativeRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "raid-1",
+                    ExitStatus = "Survived",
+                    Kills = [new BpKillEvent()],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(1));
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.False);
+                    Assert.That(first.Credited.Any(credit => credit.Done), Is.False);
+                });
+
+                var second = _trackService.ApplyAuthoritativeRaidTrack("profile", progress, season, new RaidTrackPayload
+                {
+                    RaidId = "raid-2",
+                    ExitStatus = "Survived",
+                    Kills = [new BpKillEvent(), new BpKillEvent()],
+                });
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(3));
+                    Assert.That(progress.ActiveTasks[0].CreditedXp, Is.True);
+                    Assert.That(progress.Xp, Is.EqualTo(100));
+                    Assert.That(second.Credited.Single(credit => credit.Done).TaskId, Is.EqualTo("one_life_kills"));
                 });
             });
     }
@@ -217,12 +255,12 @@ public class BattlePassTrackServiceTests
             });
     }
 
-    [TestCase("Killed")]
-    [TestCase("MissingInAction")]
-    [TestCase("Left")]
-    [TestCase("Runner")]
-    [TestCase("Transit")]
-    public void OneLife_SupplementalWeaponProgress_NonSurvivedFinalClearsProgress(string exitStatus)
+    [TestCase("Killed", 0)]
+    [TestCase("MissingInAction", 1)]
+    [TestCase("Left", 1)]
+    [TestCase("Runner", 1)]
+    [TestCase("Transit", 1)]
+    public void OneLife_SupplementalWeaponProgress_OnlyDeathClearsProgress(string exitStatus, int expectedProgress)
     {
         const string weaponTpl = "weapon-a";
         WithTaskStore(
@@ -258,7 +296,7 @@ public class BattlePassTrackServiceTests
                     ExitStatus = exitStatus,
                 });
 
-                Assert.That(progress.ActiveTasks[0].Progress, Is.Zero);
+                Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(expectedProgress));
 
                 var final = _trackService.ApplyRaidTrack("profile", progress, season, new RaidTrackPayload
                 {
@@ -269,7 +307,7 @@ public class BattlePassTrackServiceTests
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(progress.ActiveTasks[0].Progress, Is.Zero);
+                    Assert.That(progress.ActiveTasks[0].Progress, Is.EqualTo(expectedProgress));
                     Assert.That(progress.ActiveTasks[0].CreditedXp, Is.False);
                     Assert.That(progress.Xp, Is.Zero);
                     Assert.That(final.Credited.Any(credit => credit.Done), Is.False);

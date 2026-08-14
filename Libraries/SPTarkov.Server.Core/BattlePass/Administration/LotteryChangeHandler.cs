@@ -7,7 +7,7 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
 /// <summary>抽奖模块命令处理器：协管可提交 settings/pool/shopItem 草稿的增删改。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class LotteryChangeHandler(ISptLogger<LotteryChangeHandler> logger) : IBattlePassChangeHandler
 {
     public string Module => "lottery";

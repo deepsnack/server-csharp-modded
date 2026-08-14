@@ -26,6 +26,7 @@ public class RagfairServer(
 )
 {
     protected readonly RagfairConfig RagfairConfig = configServer.GetConfig<RagfairConfig>();
+    private int _lastUpdateChanged;
 
     public void Load()
     {
@@ -36,15 +37,44 @@ public class RagfairServer(
 
     public void Update()
     {
-        RefreshTraderOffers();
-        ProcessExpiredFleaOffers();
+        Volatile.Write(ref _lastUpdateChanged, UpdateAndReportChanges() ? 1 : 0);
+    }
 
-        // Flag data as stale and in need of regeneration
-        ragfairRequiredItemsService.InvalidateCache();
+    /// <summary>
+    ///     Consume the mutation result recorded by the most recent legacy <see cref="Update"/> call.
+    ///     This lets callbacks dispatch through Mod overrides while retaining precise cache invalidation.
+    /// </summary>
+    public bool ConsumeLastUpdateChanged()
+    {
+        return Interlocked.Exchange(ref _lastUpdateChanged, 0) == 1;
+    }
+
+    /// <summary>
+    ///     Refresh stale flea data and report whether the visible offer pool actually changed.
+    /// </summary>
+    public bool UpdateAndReportChanges()
+    {
+        var offersChanged = RefreshTraderOffersAndReportChanges();
+        offersChanged |= ProcessExpiredFleaOffers();
+
+        if (offersChanged)
+        {
+            // Required-items depends on the offer pool; keep it hot when an 8-second update made no changes.
+            ragfairRequiredItemsService.InvalidateCache();
+        }
+
+        return offersChanged;
     }
 
     protected void RefreshTraderOffers()
     {
+        RefreshTraderOffersAndReportChanges();
+    }
+
+    private bool RefreshTraderOffersAndReportChanges()
+    {
+        var offersChanged = false;
+
         // Generate/refresh trader offers - skip fence as his offers are separately handled
         var tradersToProcess = GetUpdateableTraders().Where(trader => trader != Traders.FENCE);
         foreach (var traderId in tradersToProcess)
@@ -54,11 +84,14 @@ public class RagfairServer(
             {
                 // Trader has passed its offer expiry time, update stock and reset offer times
                 ragfairOfferGenerator.GenerateFleaOffersForTrader(traderId);
+                offersChanged = true;
             }
         }
+
+        return offersChanged;
     }
 
-    private void ProcessExpiredFleaOffers()
+    private bool ProcessExpiredFleaOffers()
     {
         // Regenerate expired offers when over timestamp threshold
         ragfairOfferHolder.FlagExpiredOffersAfterDate(timeUtil.GetTimeStamp());
@@ -66,7 +99,7 @@ public class RagfairServer(
         if (!ragfairOfferService.EnoughExpiredOffersExistToProcess())
         {
             // Not enough expired offers to process, exit
-            return;
+            return false;
         }
 
         // Must occur BEFORE "RemoveExpiredOffers" + clone items as they'll be purged by `RemoveExpiredOffers()`
@@ -74,14 +107,13 @@ public class RagfairServer(
 
         ragfairOfferService.RemoveExpiredOffers();
 
-        // Force a cleanup+compact now all the expired offers are gone
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, true, true);
-
         if (expiredOfferItemsClone is not null)
         {
             // Replace the expired offers with new ones
             ragfairOfferGenerator.GenerateDynamicOffers(expiredOfferItemsClone);
         }
+
+        return true;
     }
 
     /// <summary>

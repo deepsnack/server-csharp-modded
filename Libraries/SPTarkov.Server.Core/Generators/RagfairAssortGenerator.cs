@@ -1,4 +1,4 @@
-﻿using System.Collections.Frozen;
+using System.Collections.Frozen;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Helpers;
@@ -42,7 +42,7 @@ public class RagfairAssortGenerator(
     /// <returns> List of lists (item + children)</returns>
     public IEnumerable<List<Item>> GenerateRagfairAssortItems()
     {
-        IEnumerable<List<Item>> results = [];
+        var results = new List<List<Item>>();
 
         // Get cloned items from db
         var blacklist = itemFilterService.GetBlacklistedItems();
@@ -74,7 +74,7 @@ public class RagfairAssortGenerator(
                 SptPresetId = preset.Id,
             };
 
-            results = results.Union([presetAndModsClone]);
+            results.Add(presetAndModsClone);
         }
 
         foreach (var (tpl, item) in dbItems)
@@ -97,7 +97,7 @@ public class RagfairAssortGenerator(
             }
 
             var assortItemToAdd = new List<Item> { CreateRagfairAssortRootItem(tpl, tpl) }; // tpl and id must be the same so hideout recipe rewards work
-            results = results.Union([assortItemToAdd]);
+            results.Add(assortItemToAdd);
         }
 
         return results;

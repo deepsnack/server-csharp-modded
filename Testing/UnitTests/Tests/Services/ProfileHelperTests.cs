@@ -1,5 +1,8 @@
 using NUnit.Framework;
 using SPTarkov.Server.Core.Helpers;
+using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Eft.Profile;
+using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Utils;
@@ -33,6 +36,37 @@ public class ProfileHelperTests
     {
         var result = _sut.AdjustSkillExpForLowLevels(startingProgress, addedProgress);
         Assert.AreEqual(expectedAdjustedProgress, result, 0.001);
+    }
+
+    [Test]
+    public void GetChatRoomMemberFromProfileHeaderProjectsIndexedFields()
+    {
+        var pmcId = new MongoId("777777777777777777777777");
+        var header = new LazyProfileHeader
+        {
+            ProfileInfo = new Info { ProfileId = new MongoId("888888888888888888888888") },
+            PmcId = pmcId,
+            PmcAid = 123456,
+            Nickname = "IndexedPlayer",
+            Side = "Bear",
+            Level = 42,
+            MemberCategory = MemberCategory.Default,
+            SelectedMemberCategory = MemberCategory.Default,
+            FilePath = "unused.json",
+        };
+
+        var result = _sut.GetChatRoomMemberFromProfileHeader(header);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result!.Id, Is.EqualTo(pmcId));
+            Assert.That(result.Aid, Is.EqualTo(123456));
+            Assert.That(result.Info!.Nickname, Is.EqualTo("IndexedPlayer"));
+            Assert.That(result.Info.Side, Is.EqualTo("Bear"));
+            Assert.That(result.Info.Level, Is.EqualTo(42));
+            Assert.That(result.Info.MemberCategory, Is.EqualTo(MemberCategory.Default));
+        });
     }
 
     private static IEnumerable<double[]> GetAdjustSkillExpForLowLevelsTestData()

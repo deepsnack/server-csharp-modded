@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.IO.Compression;
 using System.Text;
 using Microsoft.AspNetCore.Http;
@@ -21,10 +21,15 @@ public class SptHttpListener(
     ISptLogger<SptHttpListener> logger,
     ISptLogger<RequestLogger> requestsLogger,
     JsonUtil jsonUtil,
-    HttpResponseUtil httpResponseUtil
+    HttpResponseUtil httpResponseUtil,
+    DataCacheService dataCacheService
 ) : IHttpListener
 {
     private static readonly ImmutableHashSet<string> SupportedMethods = ["GET", "PUT", "POST"];
+    private const int LargeResponseChars = 256 * 1024;
+    private const int ResponseChunkSize = 64 * 1024;
+    // 日志正文截断阈值：>16KB 仅记录长度摘要（此前 1MB 阈值会让 ≤1MB 响应全文嵌入日志、每请求重复序列化）
+    private const int LargeLogResponseChars = 16 * 1024;
 
     public bool CanHandle(MongoId _, HttpContext context)
     {
@@ -108,8 +113,6 @@ public class SptHttpListener(
     {
         body ??= new object();
 
-        var bodyInfo = jsonUtil.Serialize(body);
-
         if (IsDebugRequest(req))
         {
             // Send only raw response without transformation
@@ -127,6 +130,7 @@ public class SptHttpListener(
         var serialiser = serializers.FirstOrDefault(x => x.CanHandle(output));
         if (serialiser != null)
         {
+            var bodyInfo = jsonUtil.Serialize(body);
             await serialiser.Serialize(sessionID, req, resp, bodyInfo);
         }
         else
@@ -157,7 +161,8 @@ public class SptHttpListener(
     {
         if (ProgramStatics.ENTRY_TYPE() != EntryType.RELEASE)
         {
-            var log = new Response(req.Method, output);
+            // 大响应（items 级 12.7MB）完整序列化每请求产生 ~25MB LOH 分配并拖慢请求线程，日志仅记录长度。
+            var log = new Response(req.Method, output.Length > LargeLogResponseChars ? $"<{output.Length} chars>" : output);
             requestsLogger.Info($"RESPONSE={jsonUtil.Serialize(log)}");
         }
     }
@@ -186,6 +191,20 @@ public class SptHttpListener(
         return output;
     }
 
+    /// <summary>
+    ///     分块写出缓存字节：单次大 WriteAsync 会把整包同步拷入 Kestrel Pipe（items 级 12.7MB 池化周转），
+    ///     分块后 Pipe 峰值降到 ~64KB+排空窗口，削减 GC/换页触发源；ReadOnlyMemory 切片零拷贝零分配。
+    /// </summary>
+    private static async Task WriteBytesInChunks(HttpResponse resp, byte[] bytes)
+    {
+        var ct = resp.HttpContext.RequestAborted;
+        for (var offset = 0; offset < bytes.Length; offset += ResponseChunkSize)
+        {
+            var length = Math.Min(ResponseChunkSize, bytes.Length - offset);
+            await resp.Body.WriteAsync(bytes.AsMemory(offset, length), ct);
+        }
+    }
+
     public async Task SendJson(HttpResponse resp, string? output, MongoId sessionID)
     {
         resp.StatusCode = 200;
@@ -194,7 +213,15 @@ public class SptHttpListener(
 
         if (!string.IsNullOrEmpty(output))
         {
-            await resp.WriteAsync(output);
+            // 大响应（LOH 级）走 UTF-8 字节缓存，避免每次请求重复 12.7MB 级编码分配（静态端点实例稳定，命中零编码）。
+            if (output.Length >= LargeResponseChars)
+            {
+                await WriteBytesInChunks(resp, dataCacheService.GetOrComputeUtf8(output));
+            }
+            else
+            {
+                await resp.WriteAsync(output);
+            }
         }
     }
 
@@ -204,10 +231,9 @@ public class SptHttpListener(
         resp.ContentType = "application/json";
         resp.Headers.Append("Set-Cookie", $"PHPSESSID={sessionID.ToString()}");
 
-        await using (var deflateStream = new ZLibStream(resp.Body, CompressionLevel.SmallestSize))
-        {
-            await deflateStream.WriteAsync(Encoding.UTF8.GetBytes(output));
-        }
+        // 缓存压缩字节（DataCallbacks 静态端点输出实例稳定复用，命中零压缩）
+        var compressed = dataCacheService.GetOrComputeZlib(output);
+        await WriteBytesInChunks(resp, compressed);
     }
 
     private record Response(string Method, string jsonData);

@@ -1,5 +1,4 @@
-using System.Collections.Immutable;
-using System.Text.RegularExpressions;
+using System.Text;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Eft.HttpResponse;
 using SPTarkov.Server.Core.Models.Eft.ItemEvent;
@@ -11,24 +10,32 @@ namespace SPTarkov.Server.Core.Utils;
 [Injectable]
 public class HttpResponseUtil(JsonUtil jsonUtil, ServerLocalisationService serverLocalisationService)
 {
-    protected static readonly ImmutableList<Regex> _cleanupRegexList =
-    [
-        new("[\\b]"),
-        new("[\\f]"),
-        new("[\\n]"),
-        new("[\\r]"),
-        new("[\\t]"),
-    ];
+    private static readonly char[] CleanupChars = ['\b', '\f', '\n', '\r', '\t'];
 
     protected string ClearString(string? s)
     {
-        var value = s ?? "";
-        foreach (var regex in _cleanupRegexList)
+        if (string.IsNullOrEmpty(s))
         {
-            value = regex.Replace(value, string.Empty);
+            return s ?? "";
         }
 
-        return value;
+        if (s.IndexOfAny(CleanupChars) < 0)
+        {
+            return s;
+        }
+
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            if (c is '\b' or '\f' or '\n' or '\r' or '\t')
+            {
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>

@@ -14,7 +14,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 ///     整表保存用命令 flea.config.save（单例目标）；逐项拉黑/放开用 flea.blacklist.toggle /
 ///     flea.whitelist.toggle。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class FleaChangeHandler(
     FleaControlSync fleaSync,
     ISptLogger<FleaChangeHandler> logger

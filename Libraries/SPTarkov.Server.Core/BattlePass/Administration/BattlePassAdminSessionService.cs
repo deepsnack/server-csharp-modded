@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
@@ -12,6 +13,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 [Injectable(InjectionType.Singleton)]
 public class BattlePassAdminSessionService(
     BattlePassChangeStore changeStore,
+    IAdminTokenService adminTokenService,
     ISptLogger<BattlePassAdminSessionService> logger
 )
 {
@@ -71,7 +73,7 @@ public class BattlePassAdminSessionService(
             if (!_sessions.TryGetValue(token, out var entry))
             {
                 // 回退：WebRegister 原始 admin token 视为完整管理员主体
-                if (WebRegisterController.IsAdminAuthorized(token))
+                if (adminTokenService.IsAdminAuthorized(token))
                 {
                     var now2 = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     return new BattlePassAdminPrincipal

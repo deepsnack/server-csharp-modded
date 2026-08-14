@@ -33,6 +33,14 @@ public record CoreConfig : BaseConfig
     [JsonPropertyName("profileSaveIntervalSeconds")]
     public required int ProfileSaveIntervalInSeconds { get; set; }
 
+    /// <summary>
+    ///     Every N periodic save cycles, SaveServer saves ALL in-memory profiles regardless of dirty
+    ///     state. Backstop for write paths that mutate profiles in place without marking them dirty.
+    ///     Default 5 (about 5 minutes at the default 60s interval). Set to 1 to restore old behavior.
+    /// </summary>
+    [JsonPropertyName("profileFullSaveEveryNCycles")]
+    public int ProfileFullSaveEveryNCycles { get; set; } = 5;
+
     [JsonPropertyName("sptFriendNickname")]
     public required string SptFriendNickname { get; set; }
 
@@ -65,7 +73,11 @@ public record CoreConfig : BaseConfig
     // ReSharper disable once InconsistentNaming
     public required int NoGCRegionMaxMemoryGB
     {
-        get => _noGCRegionMaxMemoryGB;
+        get
+        {
+            return _noGCRegionMaxMemoryGB;
+        }
+
         set
         {
             if (value <= 0)
@@ -85,7 +97,11 @@ public record CoreConfig : BaseConfig
     // ReSharper disable once InconsistentNaming
     public required int NoGCRegionMaxLOHMemoryGB
     {
-        get => _noGCRegionMaxLOHMemoryGB;
+        get
+        {
+            return _noGCRegionMaxLOHMemoryGB;
+        }
+
         set
         {
             if (value <= 0)
@@ -305,10 +321,10 @@ public record ServerFeatures
 
     /// <summary>
     ///     Lazy profile loading: scan only profile headers at startup, materialize full
-    ///     profiles on demand. High-value for servers with many profiles. Default off.
+    ///     profiles on demand. High-value for servers with many profiles. Default on.
     /// </summary>
     [JsonPropertyName("lazyProfileLoad")]
-    public bool LazyProfileLoad { get; set; }
+    public bool LazyProfileLoad { get; set; } = true;
 
     /// <summary>
     ///     Cache flea/trader read-only endpoint responses (final HTTP body) with
@@ -317,6 +333,14 @@ public record ServerFeatures
     /// </summary>
     [JsonPropertyName("fleaTraderCache")]
     public bool FleaTraderCache { get; set; } = true;
+
+    /// <summary>
+    ///     Flea bucket TTL backstop for FleaTraderCacheService (seconds). Offer-pool changes
+    ///     are invalidated by events; this longer TTL only covers missed hooks and extends
+    ///     cross-session hits on the global price endpoints. Default 300.
+    /// </summary>
+    [JsonPropertyName("fleaTraderCacheTtlSeconds")]
+    public int FleaTraderCacheTtlSeconds { get; set; } = 300;
 
     /// <summary>
     ///     Generate bot waves serially instead of in parallel. Lowers memory spikes and

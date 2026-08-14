@@ -1,5 +1,4 @@
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
@@ -17,7 +16,8 @@ public class DataCallbacks(
     TraderController traderController,
     HideoutController hideoutController,
     LocaleService localeService,
-    ItemAcquisitionMaskService acquisitionMask,
+    IItemAcquisitionMaskService acquisitionMask,
+    DataCacheService dataCacheService,
     ICloner cloner
 )
 {
@@ -27,8 +27,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetSettings(string url, EmptyRequestData _, MongoId sessionID)
     {
-        var returns = httpResponseUtil.GetBody(databaseService.GetSettings());
-        return new ValueTask<string>(returns);
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:settings", () => httpResponseUtil.GetBody(databaseService.GetSettings())));
     }
 
     /// <summary>
@@ -37,10 +36,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetGlobals(string url, EmptyRequestData _, MongoId sessionID)
     {
-        var globals = databaseService.GetGlobals();
-        var returns = httpResponseUtil.GetBody(globals);
-
-        return new ValueTask<string>(returns);
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:globals", () => httpResponseUtil.GetBody(databaseService.GetGlobals())));
     }
 
     /// <summary>
@@ -49,7 +45,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetTemplateItems(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetUnclearedBody(databaseService.GetItems()));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:items", () => httpResponseUtil.GetUnclearedBody(databaseService.GetItems())));
     }
 
     /// <summary>
@@ -58,7 +54,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetTemplateHandbook(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetHandbook()));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:handbook", () => httpResponseUtil.GetBody(databaseService.GetHandbook())));
     }
 
     /// <summary>
@@ -67,7 +63,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetTemplateSuits(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetTemplates().Customization));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:customization", () => httpResponseUtil.GetBody(databaseService.GetTemplates().Customization)));
     }
 
     /// <summary>
@@ -76,7 +72,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetTemplateCharacter(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetTemplates().Character));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:character", () => httpResponseUtil.GetBody(databaseService.GetTemplates().Character)));
     }
 
     /// <summary>
@@ -85,7 +81,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetHideoutSettings(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetHideout().Settings));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:hideout-settings", () => httpResponseUtil.GetBody(databaseService.GetHideout().Settings)));
     }
 
     /// <summary>
@@ -94,7 +90,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetHideoutAreas(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetHideout().Areas));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:hideout-areas", () => httpResponseUtil.GetBody(databaseService.GetHideout().Areas)));
     }
 
     /// <summary>
@@ -129,7 +125,7 @@ public class DataCallbacks(
     /// <returns></returns>
     public ValueTask<string> GetLocalesLanguages(string url, EmptyRequestData _, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetBody(databaseService.GetLocales().Languages));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:languages", () => httpResponseUtil.GetBody(databaseService.GetLocales().Languages)));
     }
 
     /// <summary>
@@ -147,7 +143,7 @@ public class DataCallbacks(
             throw new Exception($"Unable to determine locale for request with {localeId}");
         }
 
-        return new ValueTask<string>(httpResponseUtil.GetBody(result));
+        return new ValueTask<string>(dataCacheService.GetOrCompute($"data:menu-locale:{localeId}", () => httpResponseUtil.GetBody(result)));
     }
 
     /// <summary>
@@ -157,9 +153,8 @@ public class DataCallbacks(
     public ValueTask<string> GetLocalesGlobal(string url, EmptyRequestData _, MongoId sessionID)
     {
         var localeId = url.Replace("/client/locale/", "");
-        var locales = localeService.GetLocaleDb(localeId);
 
-        return new ValueTask<string>(httpResponseUtil.GetUnclearedBody(locales));
+        return new ValueTask<string>(dataCacheService.GetOrCompute($"data:locale:{localeId}", () => httpResponseUtil.GetUnclearedBody(localeService.GetLocaleDb(localeId))));
     }
 
     /// <summary>
@@ -179,7 +174,9 @@ public class DataCallbacks(
     {
         var traderId = url.Replace("/client/items/prices/", "");
 
-        return new ValueTask<string>(httpResponseUtil.GetBody(traderController.GetItemPrices(sessionID, traderId)));
+        // 价格字典为静态（GetAllStaticPrices 返回缓存引用），响应与 session 无关：
+        // 按 traderId 缓存完整响应串，避免每请求全量序列化价格表（SupplyNextTime 最长滞后 5 分钟 TTL，可接受）。
+        return new ValueTask<string>(dataCacheService.GetOrCompute($"data:item-prices:{traderId}", () => httpResponseUtil.GetBody(traderController.GetItemPrices(sessionID, traderId))));
     }
 
     /// <summary>
@@ -187,6 +184,6 @@ public class DataCallbacks(
     /// </summary>
     public ValueTask<string> GetDialogue(string url, GetClientDialogueRequestData request, MongoId sessionID)
     {
-        return new ValueTask<string>(httpResponseUtil.GetUnclearedBody(databaseService.GetTemplates().Dialogue));
+        return new ValueTask<string>(dataCacheService.GetOrCompute("data:dialogue", () => httpResponseUtil.GetUnclearedBody(databaseService.GetTemplates().Dialogue)));
     }
 }

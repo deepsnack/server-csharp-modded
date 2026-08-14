@@ -12,48 +12,22 @@ public interface IWebRegisterMailService
 {
     /// <summary>校验地址并在后台发送 HTML 邮件。成功进入发送队列返回 true。</summary>
     bool TrySendBackground(IEnumerable<string> recipients, string subject, string htmlBody, string contextId);
+
+    /// <summary>使用 WebRegister 自有配置解析管理员通知邮箱并发送，不向业务模块暴露地址或 SMTP 凭据。</summary>
+    bool TrySendAdminNotification(string subject, string htmlBody, string contextId);
 }
 
 [Injectable(InjectionType.Singleton)]
 public sealed class WebRegisterMailService(ISptLogger<WebRegisterMailService> logger) : IWebRegisterMailService
 {
+    private const int MaxSendAttempts = 3;
+
     public bool TrySendBackground(IEnumerable<string> recipients, string subject, string htmlBody, string contextId)
     {
         try
         {
-            var config = WebRegisterModConfig.Load().SmtpConfig;
-            if (config is null
-                || string.IsNullOrWhiteSpace(config.Server)
-                || string.IsNullOrWhiteSpace(config.SenderEmail))
-            {
-                logger.Debug($"[WebRegister] 邮件跳过：SMTP 未配置 (context={contextId})");
-                return false;
-            }
-
-            var validRecipients = recipients
-                .Select(address => address?.Trim())
-                .Where(address => !string.IsNullOrWhiteSpace(address) && MailboxAddress.TryParse(address, out _))
-                .Select(address => address!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (validRecipients.Count == 0)
-            {
-                logger.Debug($"[WebRegister] 邮件跳过：无有效收件人 (context={contextId})");
-                return false;
-            }
-
-            var snapshot = new SmtpSnapshot(
-                config.Server,
-                config.Port,
-                config.UseSsl,
-                config.Username,
-                config.Password,
-                config.SenderEmail,
-                string.IsNullOrWhiteSpace(config.SenderName) ? "SPT 通知" : config.SenderName!,
-                config.TimeoutMs > 0 ? config.TimeoutMs : 30000);
-
-            _ = Task.Run(() => Send(snapshot, validRecipients, subject, htmlBody, contextId));
-            return true;
+            var config = WebRegisterModConfig.Load();
+            return TryQueue(config.SmtpConfig, recipients, subject, htmlBody, contextId);
         }
         catch (Exception ex)
         {
@@ -62,7 +36,96 @@ public sealed class WebRegisterMailService(ISptLogger<WebRegisterMailService> lo
         }
     }
 
-    private void Send(SmtpSnapshot smtp, IReadOnlyCollection<string> recipients, string subject, string body, string contextId)
+    public bool TrySendAdminNotification(string subject, string htmlBody, string contextId)
+    {
+        try
+        {
+            var config = WebRegisterModConfig.Load();
+            var recipients = ResolveAdminRecipients(config);
+            if (recipients.Count == 0)
+            {
+                logger.Warning($"[WebRegister] 管理员通知跳过：未配置有效管理员邮箱 (context={contextId})");
+                return false;
+            }
+
+            return TryQueue(config.SmtpConfig, recipients, subject, htmlBody, contextId);
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[WebRegister] 管理员通知准备失败 (context={contextId}): {ex.Message}");
+            return false;
+        }
+    }
+
+    private bool TryQueue(
+        WebRegisterSmtpConfig? config,
+        IEnumerable<string> recipients,
+        string subject,
+        string htmlBody,
+        string contextId)
+    {
+        if (config is null
+            || string.IsNullOrWhiteSpace(config.Server)
+            || string.IsNullOrWhiteSpace(config.SenderEmail))
+        {
+            logger.Warning($"[WebRegister] 邮件跳过：SMTP 未配置 (context={contextId})");
+            return false;
+        }
+
+        var validRecipients = NormalizeAddresses(recipients);
+        if (validRecipients.Count == 0)
+        {
+            logger.Warning($"[WebRegister] 邮件跳过：无有效收件人 (context={contextId})");
+            return false;
+        }
+
+        var snapshot = new SmtpSnapshot(
+            config.Server,
+            config.Port,
+            config.UseSsl,
+            config.Username,
+            config.Password,
+            config.SenderEmail,
+            string.IsNullOrWhiteSpace(config.SenderName) ? "SPT 通知" : config.SenderName!,
+            config.TimeoutMs > 0 ? config.TimeoutMs : 30000);
+
+        _ = Task.Run(() => SendWithRetryAsync(snapshot, validRecipients, subject, htmlBody, contextId));
+        logger.Info($"[WebRegister] 邮件已进入发送队列，收件人 {validRecipients.Count} 位 (context={contextId})");
+        return true;
+    }
+
+    private async Task SendWithRetryAsync(
+        SmtpSnapshot smtp,
+        IReadOnlyCollection<string> recipients,
+        string subject,
+        string body,
+        string contextId)
+    {
+        for (var attempt = 1; attempt <= MaxSendAttempts; attempt++)
+        {
+            if (TrySend(smtp, recipients, subject, body, out var error))
+            {
+                logger.Info($"[WebRegister] 邮件发送成功，收件人 {recipients.Count} 位 (context={contextId}, attempt={attempt})");
+                return;
+            }
+
+            if (attempt == MaxSendAttempts)
+            {
+                logger.Warning($"[WebRegister] 邮件发送失败，已重试 {MaxSendAttempts} 次 (context={contextId}): {error}");
+                return;
+            }
+
+            logger.Warning($"[WebRegister] 邮件发送失败，准备重试 (context={contextId}, attempt={attempt}): {error}");
+            await Task.Delay(TimeSpan.FromSeconds(attempt));
+        }
+    }
+
+    private static bool TrySend(
+        SmtpSnapshot smtp,
+        IReadOnlyCollection<string> recipients,
+        string subject,
+        string body,
+        out string? error)
     {
         try
         {
@@ -87,13 +150,37 @@ public sealed class WebRegisterMailService(ISptLogger<WebRegisterMailService> lo
             }
             client.Send(message);
             client.Disconnect(true);
-            logger.Info($"[WebRegister] 邮件发送成功，收件人 {recipients.Count} 位 (context={contextId})");
+            error = null;
+            return true;
         }
         catch (Exception ex)
         {
-            logger.Warning($"[WebRegister] 邮件发送失败 (context={contextId}): {ex.Message}");
+            error = ex.Message;
+            return false;
         }
     }
+
+    internal static List<string> ResolveAdminRecipients(WebRegisterModConfig config)
+    {
+        var configured = NormalizeAddresses(config.WebRegisterConfig?.AdminNotificationEmails ?? []);
+        if (configured.Count > 0) return configured;
+
+        var fallback = NormalizeAddresses([
+            config.SmtpConfig?.SenderEmail ?? "",
+            config.SmtpConfig?.Username ?? "",
+        ]);
+        return fallback.Take(1).ToList();
+    }
+
+    private static List<string> NormalizeAddresses(IEnumerable<string> addresses) => addresses
+        .Select(address => address?.Trim())
+        .Where(address => !string.IsNullOrWhiteSpace(address)
+            && address.IndexOf('@') > 0
+            && address.LastIndexOf('@') < address.Length - 1
+            && MailboxAddress.TryParse(address, out _))
+        .Select(address => address!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
 
     private sealed record SmtpSnapshot(
         string Server,

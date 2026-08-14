@@ -4,6 +4,7 @@
   "compatibleTarkovVersion": "0.16.9.40087",
   "serverName": "SPT Server",
   "profileSaveIntervalSeconds": 60,
+  "profileFullSaveEveryNCycles": 5,
   "sptFriendNickname": "SPT",
   "allowProfileWipe": true,
   "enableNoGCRegions": false,
@@ -322,8 +323,9 @@
     "achievementProfileIdBlacklist": [],
     "allowRegistration": false,
     "autoRepairProfiles": true,
-    "lazyProfileLoad": false,
+    "lazyProfileLoad": true,
     "fleaTraderCache": true,
+    "fleaTraderCacheTtlSeconds": 300,
     "botSerialGeneration": false
   },
   "customWatermarkLocaleKeys": []

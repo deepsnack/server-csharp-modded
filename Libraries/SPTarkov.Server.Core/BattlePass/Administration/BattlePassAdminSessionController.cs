@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Controllers;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
@@ -9,7 +10,8 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 [ApiController]
 [Route("battlepass/api/admin")]
 public class BattlePassAdminSessionController(
-    BattlePassAdminSessionService sessionService
+    BattlePassAdminSessionService sessionService,
+    IAdminTokenService adminTokenService
 ) : ControllerBase
 {
     /// <summary>交换管理会话（正常管理员用 X-Admin-Token，协管用 X-BP-Token）。</summary>
@@ -18,7 +20,7 @@ public class BattlePassAdminSessionController(
     {
         // 优先检查正常管理员
         var adminToken = Request.Headers["X-Admin-Token"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(adminToken) && WebRegisterController.IsAdminAuthorized(adminToken))
+        if (!string.IsNullOrWhiteSpace(adminToken) && adminTokenService.IsAdminAuthorized(adminToken))
         {
             var bpToken = sessionService.ExchangeAdmin();
             return new { success = true, token = bpToken, actorType = "admin" };

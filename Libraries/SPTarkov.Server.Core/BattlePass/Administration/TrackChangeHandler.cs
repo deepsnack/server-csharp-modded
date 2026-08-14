@@ -7,7 +7,7 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
 /// <summary>奖励轨模块命令处理器：tracks.save（整体保存）。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class TrackChangeHandler(ISptLogger<TrackChangeHandler> logger) : IBattlePassChangeHandler
 {
     public string Module => "tracks";

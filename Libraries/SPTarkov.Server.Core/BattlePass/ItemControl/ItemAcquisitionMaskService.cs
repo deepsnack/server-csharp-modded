@@ -1,6 +1,7 @@
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass.ItemControl;
 
@@ -12,7 +13,7 @@ namespace SPTarkov.Server.Core.BattlePass.ItemControl;
 ///     热路径查询纯内存、零磁盘 IO。loot 类移除仍由 <see cref="ItemControlSync"/> 的非破坏 transformer 处理。
 /// </summary>
 [Injectable(InjectionType.Singleton)]
-public class ItemAcquisitionMaskService(ISptLogger<ItemAcquisitionMaskService> logger)
+public class ItemAcquisitionMaskService(ISptLogger<ItemAcquisitionMaskService> logger) : IItemAcquisitionMaskService
 {
     private Dictionary<MongoId, HashSet<MongoId>> _trader = new(); // traderId -> 被移除 tpl
     private Dictionary<string, HashSet<MongoId>> _quest = new(); // "questId:group" -> 被移除 tpl

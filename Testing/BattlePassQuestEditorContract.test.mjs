@@ -50,3 +50,12 @@ test('custom and collaborator edit paths retain the same normalized payload', ()
     assert.match(quests, /targets:\s*\[\], locations:\s*\[\], weapons:\s*\[\], weaponMods:\s*\[\]/);
     assert.doesNotMatch(quests, /目标\(如 Savage\/Any\)/);
 });
+
+test('every custom objective exposes and preserves localized display text', () => {
+    assert.match(quests, /textZh:\s*null,\s*textEn:\s*null/);
+    assert.match(quests, /中文目标文本/);
+    assert.match(quests, /英文目标文本（可选）/);
+    assert.match(quests, /textZh:\s*o\.textZh\s*\|\|\s*null/);
+    assert.match(quests, /textEn:\s*o\.textEn\s*\|\|\s*null/);
+    assert.match(quests, /留空也不会向客户端显示 tpl/);
+});

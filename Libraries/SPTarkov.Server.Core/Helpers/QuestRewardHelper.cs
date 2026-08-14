@@ -1,5 +1,4 @@
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
@@ -21,7 +20,7 @@ public class QuestRewardHelper(
     RewardHelper rewardHelper,
     ServerLocalisationService serverLocalisationService,
     ICloner cloner,
-    ItemAcquisitionMaskService acquisitionMask
+    IItemAcquisitionMaskService acquisitionMask
 )
 {
     /// <summary>

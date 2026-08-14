@@ -30,21 +30,12 @@ public class QuestSkipRaidStateProbe(
         return FikaReportsInRaid(sessionId) || SptReportsRaidActive(sessionId);
     }
 
-    private static MethodInfo? _isRaidActiveMethod;
-    private static bool _isRaidActiveResolved;
-
-    /// <summary>单机战局：反射调用 <c>ProfileActivityService.IsRaidActive(MongoId)</c>。</summary>
+    /// <summary>单机战局：直调 <c>ProfileActivityService.IsRaidActive(MongoId)</c>（同程序集，强类型）。</summary>
     private bool SptReportsRaidActive(MongoId sessionId)
     {
         try
         {
-            if (!_isRaidActiveResolved)
-            {
-                _isRaidActiveMethod = profileActivityService.GetType().GetMethod("IsRaidActive", new[] { typeof(MongoId) });
-                _isRaidActiveResolved = true;
-            }
-
-            return _isRaidActiveMethod?.Invoke(profileActivityService, new object[] { sessionId }) is true;
+            return profileActivityService.IsRaidActive(sessionId);
         }
         catch (Exception ex)
         {

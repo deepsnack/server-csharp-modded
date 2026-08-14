@@ -101,6 +101,7 @@ public class CustomizationController(
         };
 
         profile.CustomisationUnlocks?.Add(rewardToStore);
+        saveServer.MarkProfileDirty(sessionId);
 
         return output;
     }

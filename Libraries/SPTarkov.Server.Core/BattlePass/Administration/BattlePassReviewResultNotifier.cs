@@ -1,6 +1,5 @@
 using System.Net;
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Services;
 
@@ -19,28 +18,28 @@ public sealed class BattlePassReviewResultNotifier(
 
     public bool NotifySubmitted(BpChangeRequest change)
     {
-        var recipients = ResolveAdminRecipients();
-        if (recipients.Count == 0)
-        {
-            logger.Warning($"[BattlePass] 审核提交通知跳过：未配置管理员提醒邮箱 (change={change.Id})");
-            return false;
-        }
+        var module = DescribeModule(change.Module);
 
-        var subject = $"[SPT 通行证] 待审核：{change.TargetDisplayName}";
+        var subject = $"[{module.SubjectTag}] 待审核：{change.TargetDisplayName}";
         var body = $"""
             <html><body style="font-family:sans-serif;color:#20242a">
-            <h2>通行证协管提交待审核</h2>
+            <h2>{Html(module.DisplayName)}协管提交待审核</h2>
             <p>协管 <strong>{Html(change.Actor.DisplayName)}</strong> 提交了一项变更，等待管理员审核。</p>
             <ul>
-              <li>模块：{Html(change.Module)}</li>
+              <li>模块：{Html(module.DisplayName)}（{Html(change.Module)}）</li>
               <li>目标：{Html(change.TargetDisplayName)}</li>
               <li>摘要：{Html(change.Summary)}</li>
               <li>变更编号：{Html(change.Id)}</li>
             </ul>
-            <p style="color:#68717d">请打开通行证管理页的审核中心处理。</p>
+            <p style="color:#68717d">请打开{Html(module.ReviewLocation)}处理。</p>
             </body></html>
             """;
-        return mailService.TrySendBackground(recipients, subject, body, $"battlepass-review:{change.Id}:submitted");
+        var queued = mailService.TrySendAdminNotification(subject, body, $"review:{change.Module}:{change.Id}:submitted");
+        if (!queued)
+        {
+            logger.Warning($"[BattlePass] 审核提交通知未进入发送队列 (module={change.Module}, change={change.Id})");
+        }
+        return queued;
     }
 
     public int NotifyApprovedBatch(IEnumerable<BpChangeRequest> changes)
@@ -104,6 +103,7 @@ public sealed class BattlePassReviewResultNotifier(
 
     private bool Notify(BpChangeRequest change, bool approved)
     {
+        var module = DescribeModule(change.Module);
         var profileId = CollaboratorProfileId(change);
         var email = accountEmailService.ResolveByProfileId(profileId);
         if (string.IsNullOrWhiteSpace(email))
@@ -113,13 +113,13 @@ public sealed class BattlePassReviewResultNotifier(
         }
 
         var outcome = approved ? "审核通过" : "已被驳回";
-        var subject = $"[SPT 通行证] {outcome}：{change.TargetDisplayName}";
+        var subject = $"[{module.SubjectTag}] {outcome}：{change.TargetDisplayName}";
         var reason = approved
             ? "管理员已批准该变更，改动已经即时生效。"
             : $"驳回理由：{WebUtility.HtmlEncode(change.ReviewReason ?? "未填写")}。";
         var body = $"""
             <html><body style="font-family:sans-serif;color:#20242a">
-            <h2>通行证协管审核结果</h2>
+            <h2>{Html(module.DisplayName)}协管审核结果</h2>
             <p>你好，{WebUtility.HtmlEncode(change.Actor.DisplayName)}：</p>
             <p>你的提交 <strong>{WebUtility.HtmlEncode(change.Summary)}</strong> {outcome}。</p>
             <p>{reason}</p>
@@ -133,20 +133,15 @@ public sealed class BattlePassReviewResultNotifier(
 
     private static string Html(string? value) => WebUtility.HtmlEncode(value ?? "");
 
-    private static List<string> ResolveAdminRecipients()
+    private static ReviewModuleDescription DescribeModule(string? module) => module?.ToLowerInvariant() switch
     {
-        var config = WebRegisterModConfig.Load();
-        var recipients = config.WebRegisterConfig?.AdminNotificationEmails ?? [];
-        if (recipients.Count == 0 && !string.IsNullOrWhiteSpace(config.SmtpConfig?.SenderEmail))
-        {
-            recipients = [config.SmtpConfig.SenderEmail];
-        }
+        "abps" => new("ABPS 配置", "SPT ABPS", "ABPS 管理页的审核中心"),
+        "tasks" => new("通行证任务", "SPT 通行证任务", "通行证管理页的审核中心"),
+        "shop" => new("通行证商店", "SPT 通行证商店", "通行证管理页的审核中心"),
+        "tracks" => new("通行证奖励轨", "SPT 通行证奖励轨", "通行证管理页的审核中心"),
+        "lottery" => new("通行证抽奖", "SPT 通行证抽奖", "通行证管理页的审核中心"),
+        _ => new("统一后台", "SPT 管理审核", "统一管理后台的审核中心"),
+    };
 
-        return recipients
-            .Select(email => email?.Trim())
-            .Where(email => !string.IsNullOrWhiteSpace(email))
-            .Select(email => email!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
+    private sealed record ReviewModuleDescription(string DisplayName, string SubjectTag, string ReviewLocation);
 }

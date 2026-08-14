@@ -171,6 +171,7 @@ public class TradeController(
 
         // Remove/lower offer quantity of item purchased from trader flea offer
         ragfairServer.ReduceOfferQuantity(fleaOffer.Id, requestOffer.Count ?? 0);
+        tradeHelper.InvalidateFleaCache();
     }
 
     /// <summary>
@@ -215,12 +216,14 @@ public class TradeController(
         {
             // Complete selling the offer now it has been purchased
             ragfairOfferHelper.CompleteOffer(offerOwnerId, fleaOffer, offerBuyCount ?? 0);
+            tradeHelper.InvalidateFleaCache();
 
             return;
         }
 
         // Remove/lower offer quantity of item purchased from PMC flea offer
         ragfairServer.ReduceOfferQuantity(fleaOffer.Id, requestOffer.Count ?? 0);
+        tradeHelper.InvalidateFleaCache();
     }
 
     /// <summary>

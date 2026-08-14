@@ -1,5 +1,6 @@
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
+using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Utils.Cloners;
@@ -13,6 +14,7 @@ namespace SPTarkov.Server.Core.Services;
 [Injectable(TypePriority = OnLoadOrder.SaveCallbacks + 3)]
 public class ProfileAutoRepairOnLoad(
     SaveServer saveServer,
+    ProfileHelper profileHelper,
     ProfileAutoRepairService repairService,
     BackupService backupService,
     ICloner cloner,
@@ -32,9 +34,13 @@ public class ProfileAutoRepairOnLoad(
         var repairedProfiles = 0;
         var skippedWrites = 0;
         BackupSnapshotResult? repairSnapshot = null;
-        var profiles = saveServer.GetProfiles();
+        var profiles = profileHelper.GetActiveProfilesSnapshot();
+        var deferredProfiles = saveServer.LazyEnabled ? Math.Max(0, saveServer.GetLazyHeaders().Count - profiles.Count) : 0;
 
-        logger.Info($"[ProfileAutoRepair] startup repair enabled; scanning {profiles.Count} profile(s)");
+        logger.Info(
+            $"[ProfileAutoRepair] startup repair enabled; scanning {profiles.Count} loaded profile(s), "
+                + $"deferred={deferredProfiles}"
+        );
         foreach (var (sessionId, profile) in profiles)
         {
             scannedProfiles++;
@@ -72,7 +78,8 @@ public class ProfileAutoRepairOnLoad(
         logger.Success(
             "[ProfileAutoRepair] startup repair complete; "
                 + $"scanned={scannedProfiles}, modified={modifiedProfiles}, saved={repairedProfiles}, "
-                + $"skippedWrites={skippedWrites}, snapshot={(repairSnapshot?.Succeeded == true ? repairSnapshot.SnapshotPath : "none")}, "
+                + $"deferred={deferredProfiles}, skippedWrites={skippedWrites}, "
+                + $"snapshot={(repairSnapshot?.Succeeded == true ? repairSnapshot.SnapshotPath : "none")}, "
                 + $"elapsedMs={stopwatch.ElapsedMilliseconds}"
         );
     }

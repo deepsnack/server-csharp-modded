@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Generators;
 using SPTarkov.Server.Core.Helpers;
@@ -37,7 +36,7 @@ public class CreateProfileService(
     PlayerScavGenerator playerScavGenerator,
     ICloner cloner,
     MailSendService mailSendService,
-    ItemAcquisitionMaskService acquisitionMask,
+    IItemAcquisitionMaskService acquisitionMask,
     EditionUpgradeService editionUpgradeService,
     SoftResetService softResetService
 )
@@ -80,7 +79,7 @@ public class CreateProfileService(
         pmcData.SessionId = sessionId;
         pmcData.Info.Nickname = request.Nickname;
         pmcData.Info.LowerNickname = request.Nickname.ToLowerInvariant();
-        pmcData.Info.RegistrationDate = (int)timeUtil.GetTimeStamp();
+        pmcData.Info.RegistrationDate = (int) timeUtil.GetTimeStamp();
         pmcData.Customization.Voice = databaseService.GetCustomization()[request.VoiceId].Id;
         pmcData.Stats = profileHelper.GetDefaultCounters();
         pmcData.Info.NeedWipeOptions = [];
@@ -275,7 +274,7 @@ public class CreateProfileService(
     /// <param name="sessionID"> ID of profile to delete </param>
     protected void DeleteProfileBySessionId(MongoId sessionID)
     {
-        if (saveServer.GetProfiles().ContainsKey(sessionID))
+        if (saveServer.ProfileExists(sessionID))
         {
             saveServer.DeleteProfileById(sessionID);
         }

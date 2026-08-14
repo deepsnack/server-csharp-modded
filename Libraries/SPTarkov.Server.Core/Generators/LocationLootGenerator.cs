@@ -56,6 +56,16 @@ public class LocationLootGenerator(
         // Clone ammo data to ensure any changes don't affect the db values
         var staticAmmoDistClone = cloner.Clone(locationDetails.StaticAmmo);
 
+        // Dynamic generation filters spawnpoints and replaces Template.Items/Root in-place.
+        // The database LooseLoot object is process-wide; using it directly permanently shrinks
+        // later raid pools. Give every raid a deep working copy just like StaticAmmo.
+        var looseLootClone = cloner.Clone(locationDetails.LooseLoot.Value);
+        if (looseLootClone is null)
+        {
+            logger.Error($"Location: {locationId} has no loose loot data, generated 0 dynamic loot items");
+            return result;
+        }
+
         // Pull location-specific spawn limits from db
         var itemsWithSpawnCountLimitsClone = cloner.Clone(
             LocationConfig.LootMaxSpawnLimits.GetValueOrDefault(locationId.ToLowerInvariant())
@@ -71,7 +81,7 @@ public class LocationLootGenerator(
         result.AddRange(GenerateStaticContainers(locationId.ToLowerInvariant(), staticAmmoDistClone));
 
         // Add dynamic loot to output loot
-        var dynamicSpawnPoints = GenerateDynamicLoot(locationDetails.LooseLoot.Value, staticAmmoDistClone, locationId.ToLowerInvariant());
+        var dynamicSpawnPoints = GenerateDynamicLoot(looseLootClone, staticAmmoDistClone, locationId.ToLowerInvariant());
 
         // Merge dynamic spawns into result
         result.AddRange(dynamicSpawnPoints);

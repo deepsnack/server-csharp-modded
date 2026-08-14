@@ -33,6 +33,39 @@ public class BattlePassReviewService(
         return _handlers.GetValueOrDefault(module);
     }
 
+    /// <summary>
+    ///     通过统一审核边界查询变更。协管无论传入什么 actorId 都只能读取自己的提交；
+    ///     管理员可按需查看全部或指定提交人。
+    /// </summary>
+    public IReadOnlyList<BpChangeRequest> Query(
+        BattlePassAdminPrincipal principal,
+        string? module = null,
+        string? status = null,
+        string? actorId = null,
+        int limit = 50)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        var effectiveActorId = principal.IsCollaborator ? principal.ActorId : actorId;
+        return changeStore.QueryChanges(module, status, effectiveActorId, Math.Clamp(limit, 1, 200));
+    }
+
+    /// <summary>通过统一审核边界读取单条变更，并强制协管只能读取自己的提交。</summary>
+    public BpChangeRequest? Get(BattlePassAdminPrincipal principal, string changeId)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        if (string.IsNullOrWhiteSpace(changeId)) return null;
+
+        var change = changeStore.GetChange(changeId);
+        if (change is null) return null;
+        if (principal.IsCollaborator
+            && !string.Equals(change.Actor.ActorId, principal.ActorId, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return change;
+    }
+
     /// <summary>协管提交变更。返回 (成功, changeId/错误消息, 是否新建)。created=false 表示复用了同目标的既有待审变更。</summary>
     public (bool ok, string result, bool created) Submit(
         BattlePassAdminPrincipal principal,

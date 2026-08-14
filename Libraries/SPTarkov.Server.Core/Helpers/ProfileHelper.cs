@@ -120,6 +120,14 @@ public class ProfileHelper(
     /// <returns>True if already in use</returns>
     public bool IsNicknameTaken(ValidateNicknameRequestData nicknameRequest, MongoId sessionId)
     {
+        if (saveServer.LazyEnabled)
+        {
+            return saveServer.GetLazyHeaders().Any(entry =>
+                entry.Key != sessionId
+                && string.Equals(entry.Value.Nickname, nicknameRequest.Nickname, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+
         var allProfiles = saveServer.GetProfiles().Values;
 
         // Find a profile that doesn't have same session id but has same name
@@ -170,6 +178,12 @@ public class ProfileHelper(
     /// <returns>PmcData</returns>
     public PmcData? GetProfileByPmcId(MongoId pmcId)
     {
+        if (saveServer.LazyEnabled)
+        {
+            var matchingProfile = saveServer.GetLazyHeaders().First(entry => entry.Value.PmcId == pmcId);
+            return saveServer.GetProfile(matchingProfile.Key).CharacterData?.PmcData;
+        }
+
         return saveServer.GetProfiles().Values.First(p => p.CharacterData?.PmcData?.Id == pmcId).CharacterData?.PmcData;
     }
 
@@ -249,6 +263,19 @@ public class ProfileHelper(
             logger.Error($"Account {accountId} does not exist");
         }
 
+        if (saveServer.LazyEnabled)
+        {
+            foreach (var (sessionId, header) in saveServer.GetLazyHeaders())
+            {
+                if (header.ProfileInfo.Aid == aid)
+                {
+                    return saveServer.GetProfile(sessionId);
+                }
+            }
+
+            return null;
+        }
+
         return saveServer.GetProfiles().FirstOrDefault(p => p.Value.ProfileInfo?.Aid == aid).Value;
     }
 
@@ -283,6 +310,49 @@ public class ProfileHelper(
                 SelectedMemberCategory = pmcProfile.Info.SelectedMemberCategory,
             },
         };
+    }
+
+    /// <summary>从轻量档案头构造好友搜索结果，不触发整档物化。</summary>
+    public SearchFriendResponse? GetChatRoomMemberFromProfileHeader(LazyProfileHeader header)
+    {
+        if (header.PmcId is null)
+        {
+            return null;
+        }
+
+        return new SearchFriendResponse
+        {
+            Id = header.PmcId.Value,
+            Aid = header.PmcAid,
+            Info = new UserDialogDetails
+            {
+                Nickname = header.Nickname,
+                Side = header.Side,
+                Level = header.Level,
+                MemberCategory = header.MemberCategory,
+                SelectedMemberCategory = header.SelectedMemberCategory,
+            },
+        };
+    }
+
+    /// <summary>获取全部已知档案的成就 ID 快照；懒加载时不会物化离线档。</summary>
+    public IReadOnlyDictionary<MongoId, IReadOnlySet<MongoId>> GetAchievementIdsByProfile()
+    {
+        if (!saveServer.LazyEnabled)
+        {
+            return saveServer.GetProfiles().ToDictionary(
+                entry => entry.Key,
+                entry => (IReadOnlySet<MongoId>) (entry.Value.CharacterData?.PmcData?.Achievements?.Keys.ToHashSet() ?? [])
+            );
+        }
+
+        var result = saveServer.GetLazyHeaders().ToDictionary(entry => entry.Key, entry => entry.Value.AchievementIds);
+        foreach (var (sessionId, profile) in saveServer.GetLoadedProfilesSnapshot())
+        {
+            result[sessionId] = profile.CharacterData?.PmcData?.Achievements?.Keys.ToHashSet() ?? [];
+        }
+
+        return result;
     }
 
     /// <summary>

@@ -9,32 +9,23 @@ namespace SPTarkov.Server.Core.BattlePass;
 [Injectable]
 public class BattlePassClothingSearchService(
     Services.DatabaseService databaseService,
-    Services.LocaleService localeService
+    Services.LocaleService localeService,
+    BattlePassClothingCatalogService clothingCatalog
 )
 {
     public List<BattlePassClothingSearchResult> Search(string? q, int limit)
     {
         var query = (q ?? "").Trim();
         var capped = Math.Clamp(limit, 1, 100);
-        var customization = databaseService.GetCustomization();
-        var offers = CollectTraderSuitOffers();
-        var offerBySuit = offers
-            .GroupBy(offer => offer.SuitId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.FirstOrDefault(offer => offer.IsActive) ?? group.First(), StringComparer.OrdinalIgnoreCase);
+        var localeDbs = CollectLocaleDbs();
 
         var hits = new List<BattlePassClothingSearchResult>();
-        foreach (var (id, item) in customization)
+        foreach (var entry in clothingCatalog.GetEntries())
         {
-            var suitId = id.ToString();
-            var isTraderSuit = offerBySuit.TryGetValue(suitId, out var offer);
-            if (!isTraderSuit && !IsClothingCustomization(item))
-            {
-                continue;
-            }
-
-            var candidates = BuildLocaleCandidates(suitId, item, offer);
-            var names = ResolveNames(candidates, item);
-            var searchTerms = BuildSearchTerms(suitId, item, offer, candidates, names);
+            var offer = entry.Offers.FirstOrDefault(candidate => candidate.IsActive) ?? entry.Offers.FirstOrDefault();
+            var candidates = BuildLocaleCandidates(entry);
+            var names = ResolveNames(candidates, entry.Item, localeDbs);
+            var searchTerms = BuildSearchTerms(entry, candidates, names);
             if (query.Length > 0 && !searchTerms.Any(term => term.Contains(query, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
@@ -42,54 +33,55 @@ public class BattlePassClothingSearchService(
 
             hits.Add(new BattlePassClothingSearchResult
             {
-                Id = suitId,
-                SuitId = suitId,
-                Name = string.IsNullOrWhiteSpace(names.Name) ? suitId : names.Name,
+                Id = entry.SuiteId,
+                SuitId = entry.SuiteId,
+                Name = string.IsNullOrWhiteSpace(names.Name) ? entry.SuiteId : names.Name,
                 ShortName = names.ShortName,
-                Parent = item.Parent,
-                BodyPart = item.Properties?.BodyPart,
-                Side = item.Properties?.Side ?? [],
+                Parent = entry.Item.Parent,
+                BodyPart = entry.Item.Properties?.BodyPart,
+                Side = entry.Item.Properties?.Side ?? [],
                 OfferId = offer?.OfferId,
                 TraderId = offer?.TraderId,
-                IsTraderSuit = isTraderSuit,
+                IsTraderSuit = entry.Offers.Count > 0,
                 IsActive = offer?.IsActive ?? false,
                 SearchTerms = searchTerms,
             });
-
-            if (hits.Count >= capped)
-            {
-                break;
-            }
         }
 
-        return hits;
-    }
-
-    private List<TraderSuitOfferInfo> CollectTraderSuitOffers()
-    {
-        return databaseService
-            .GetTraders()
-            .SelectMany(trader => (trader.Value.Suits ?? [])
-                .Select(suit => new TraderSuitOfferInfo
-                {
-                    SuitId = suit.SuiteId.ToString(),
-                    OfferId = suit.Id.ToString(),
-                    TraderId = trader.Key.ToString(),
-                    IsActive = suit.IsActive ?? true,
-                }))
-            .Where(offer => !string.IsNullOrWhiteSpace(offer.SuitId))
+        return hits
+            .OrderBy(hit => SearchRank(hit, query))
+            .ThenBy(hit => hit.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(hit => hit.SuitId, StringComparer.OrdinalIgnoreCase)
+            .Take(capped)
             .ToList();
     }
 
-    private static bool IsClothingCustomization(CustomizationItem item)
+    private List<Dictionary<string, string>> CollectLocaleDbs()
     {
-        return item.Parent is CustomisationTypeId.SUITS or CustomisationTypeId.UPPER or CustomisationTypeId.LOWER;
+        var localeDbs = new List<Dictionary<string, string>>();
+        var globalLocales = databaseService.GetLocales().Global;
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var localeOrder = new[] { localeService.GetDesiredGameLocale(), "ch", "en" }
+            .Concat(globalLocales.Keys.OrderBy(key => key, StringComparer.OrdinalIgnoreCase));
+
+        foreach (var locale in localeOrder)
+        {
+            if (!visited.Add(locale) || !globalLocales.ContainsKey(locale))
+            {
+                continue;
+            }
+
+            localeDbs.Add(localeService.GetLocaleDb(locale));
+        }
+
+        return localeDbs;
     }
 
-    private static HashSet<string> BuildLocaleCandidates(string suitId, CustomizationItem item, TraderSuitOfferInfo? offer)
+    private static HashSet<string> BuildLocaleCandidates(BattlePassClothingCatalogEntry entry)
     {
+        var item = entry.Item;
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        Add(set, suitId);
+        Add(set, entry.SuiteId);
         Add(set, item.Id.ToString());
         Add(set, item.Name);
         Add(set, item.Properties?.Name);
@@ -101,33 +93,40 @@ public class BattlePassClothingSearchService(
         Add(set, item.Properties?.Hands?.ToString());
         Add(set, item.Properties?.UsecTemplateId?.ToString());
         Add(set, item.Properties?.BearTemplateId?.ToString());
-        Add(set, offer?.OfferId);
-        Add(set, offer?.TraderId);
         return set;
     }
 
-    private ClothingNames ResolveNames(HashSet<string> candidates, CustomizationItem item)
+    private static ClothingNames ResolveNames(
+        HashSet<string> candidates,
+        CustomizationItem item,
+        List<Dictionary<string, string>> localeDbs)
     {
-        var name = ResolveLocaleValue(candidates, "Name", item.Properties?.Name, item.Name);
-        var shortName = ResolveLocaleValue(candidates, "ShortName", item.Properties?.ShortName, item.Properties?.Name, item.Name);
-        return new ClothingNames { Name = name, ShortName = shortName };
+        var localizedTerms = CollectLocalizedTerms(candidates, localeDbs);
+        var name = ResolveLocaleValue(candidates, localeDbs, ["Name", ""], item.Properties?.Name, item.Name);
+        var shortName = ResolveLocaleValue(
+            candidates,
+            localeDbs,
+            ["ShortName", "Name", ""],
+            item.Properties?.ShortName,
+            item.Properties?.Name,
+            item.Name
+        );
+        return new ClothingNames { Name = name, ShortName = shortName, LocalizedTerms = localizedTerms };
     }
 
-    private string ResolveLocaleValue(HashSet<string> candidates, string suffix, params string?[] fallbacks)
+    private static string ResolveLocaleValue(
+        HashSet<string> candidates,
+        List<Dictionary<string, string>> localeDbs,
+        string[] suffixes,
+        params string?[] fallbacks)
     {
-        var localeDbs = new[]
+        foreach (var db in localeDbs)
         {
-            localeService.GetLocaleDb(),
-            localeService.GetLocaleDb("ch"),
-            localeService.GetLocaleDb("en"),
-        };
-
-        foreach (var id in candidates)
-        {
-            foreach (var key in new[] { $"{id} {suffix}", id })
+            foreach (var id in candidates)
             {
-                foreach (var db in localeDbs)
+                foreach (var suffix in suffixes)
                 {
+                    var key = suffix.Length == 0 ? id : $"{id} {suffix}";
                     if (db.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
                     {
                         return value;
@@ -157,32 +156,84 @@ public class BattlePassClothingSearchService(
         return "";
     }
 
+    private static HashSet<string> CollectLocalizedTerms(
+        HashSet<string> candidates,
+        List<Dictionary<string, string>> localeDbs)
+    {
+        var localized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var db in localeDbs)
+        {
+            foreach (var id in candidates)
+            {
+                foreach (var suffix in new[] { "", "Name", "ShortName", "Description" })
+                {
+                    var key = suffix.Length == 0 ? id : $"{id} {suffix}";
+                    if (db.TryGetValue(key, out var value))
+                    {
+                        Add(localized, value);
+                    }
+                }
+            }
+        }
+
+        return localized;
+    }
+
     private static List<string> BuildSearchTerms(
-        string suitId,
-        CustomizationItem item,
-        TraderSuitOfferInfo? offer,
+        BattlePassClothingCatalogEntry entry,
         HashSet<string> candidates,
         ClothingNames names)
     {
+        var item = entry.Item;
         var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var candidate in candidates)
         {
             Add(terms, candidate);
         }
 
-        Add(terms, suitId);
+        foreach (var localized in names.LocalizedTerms)
+        {
+            Add(terms, localized);
+        }
+
+        Add(terms, entry.SuiteId);
         Add(terms, names.Name);
         Add(terms, names.ShortName);
         Add(terms, item.Parent);
         Add(terms, item.Properties?.BodyPart);
-        Add(terms, offer?.OfferId);
-        Add(terms, offer?.TraderId);
+        foreach (var offer in entry.Offers)
+        {
+            Add(terms, offer.OfferId);
+            Add(terms, offer.TraderId);
+        }
         foreach (var side in item.Properties?.Side ?? [])
         {
             Add(terms, side);
         }
 
         return terms.ToList();
+    }
+
+    private static int SearchRank(BattlePassClothingSearchResult hit, string query)
+    {
+        if (query.Length == 0)
+        {
+            return 0;
+        }
+
+        if (hit.SuitId.Equals(query, StringComparison.OrdinalIgnoreCase)
+            || (hit.OfferId?.Equals(query, StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            return 0;
+        }
+
+        if (hit.Name.Equals(query, StringComparison.OrdinalIgnoreCase)
+            || (hit.ShortName?.Equals(query, StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            return 1;
+        }
+
+        return hit.SearchTerms.Any(term => term.StartsWith(query, StringComparison.OrdinalIgnoreCase)) ? 2 : 3;
     }
 
     private static void Add(HashSet<string> set, string? value)
@@ -193,18 +244,11 @@ public class BattlePassClothingSearchService(
         }
     }
 
-    private sealed record TraderSuitOfferInfo
-    {
-        public string SuitId { get; init; } = "";
-        public string OfferId { get; init; } = "";
-        public string TraderId { get; init; } = "";
-        public bool IsActive { get; init; }
-    }
-
     private sealed record ClothingNames
     {
         public string Name { get; init; } = "";
         public string ShortName { get; init; } = "";
+        public HashSet<string> LocalizedTerms { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }
 

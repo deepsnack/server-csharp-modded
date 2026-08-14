@@ -2,6 +2,7 @@ using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.BattlePass;
 
@@ -13,7 +14,7 @@ namespace SPTarkov.Server.Core.BattlePass;
 ///     <see cref="QuestSync.Sync"/> 调用）时重建，热路径查询纯内存、零磁盘 IO。
 /// </summary>
 [Injectable(InjectionType.Singleton)]
-public class QuestClientMaskService(ISptLogger<QuestClientMaskService> logger)
+public class QuestClientMaskService(ISptLogger<QuestClientMaskService> logger) : IQuestClientMaskService
 {
     private HashSet<MongoId> _disabled = new();
     private volatile bool _any;

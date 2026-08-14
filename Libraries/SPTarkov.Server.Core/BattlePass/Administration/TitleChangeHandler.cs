@@ -9,7 +9,7 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
 /// <summary>称号模块命令处理器：目录 CRUD、PNG 上传、授予/撤销玩家称号。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class TitleChangeHandler : IBattlePassChangeHandler
 {
     private static readonly Regex TitleIdRegex = new("^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);

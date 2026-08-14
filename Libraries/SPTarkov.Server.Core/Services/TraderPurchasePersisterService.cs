@@ -74,7 +74,7 @@ public class TraderPurchasePersisterService(
     {
         // Reset all profiles purchase dictionaries now a trader update has occured;
         // 懒加载时只扫已加载档（不触发全量物化）；未加载档的记录在下个商人刷新周期清理
-        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : profileHelper.GetProfiles();
+        var profiles = profileHelper.GetActiveProfilesSnapshot();
         foreach (var profile in profiles)
         {
             // Skip if no purchases
@@ -102,7 +102,7 @@ public class TraderPurchasePersisterService(
     public void RemoveStalePurchasesFromProfiles(MongoId traderId)
     {
         // 懒加载时只扫已加载档（不触发全量物化）；未加载档的过期记录在下个商人刷新周期清理
-        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : profileHelper.GetProfiles();
+        var profiles = profileHelper.GetActiveProfilesSnapshot();
         foreach (var profileKvP in profiles)
         {
             var profile = profileKvP.Value;

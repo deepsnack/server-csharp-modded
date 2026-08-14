@@ -5,6 +5,7 @@ using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Services;
+using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Utils;
 using SPTarkov.Server.Core.Utils.Cloners;
 using SPTarkov.Server.Core.Utils.Logger;
@@ -21,7 +22,8 @@ public class ItemEventRouter(
     ServerLocalisationService localisationService,
     EventOutputHolder eventOutputHolder,
     IEnumerable<ItemEventRouterDefinition> itemEventRouters,
-    ICloner cloner
+    ICloner cloner,
+    SaveServer saveServer
 )
 {
     /// <summary>
@@ -32,6 +34,12 @@ public class ItemEventRouter(
     /// <returns> Item response </returns>
     public async ValueTask<ItemEventRouterResponse> HandleEvents(ItemEventRouterRequest info, MongoId sessionID)
     {
+        if (info.Data.Count > 0)
+        {
+            // ItemEvent 会就地改写内存中的 PMC 档，置脏以在周期保存时序列化（SaveProfileAsync 成功后清除）。
+            saveServer.MarkProfileDirty(sessionID);
+        }
+
         var output = eventOutputHolder.GetOutput(sessionID);
 
         foreach (var body in info.Data)

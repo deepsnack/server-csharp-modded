@@ -41,10 +41,44 @@ public static class TraderAssortExtensions
     /// </summary>
     /// <param name="assortToFilter">Trader assort to modify</param>
     /// <param name="itemsTplsToRemove">Item TPLs the assort should not have</param>
-    public static void RemoveItemsFromAssort(this TraderAssort assortToFilter, HashSet<MongoId> itemsTplsToRemove)
+    public static void RemoveItemsFromAssort(this TraderAssort assortToFilter, IReadOnlySet<MongoId> itemsTplsToRemove)
     {
-        assortToFilter.Items = assortToFilter
-            .Items.Where(item => item.ParentId == "hideout" && itemsTplsToRemove.Contains(item.Template))
-            .ToList();
+        if (itemsTplsToRemove.Count == 0 || assortToFilter.Items.Count == 0)
+        {
+            return;
+        }
+
+        var itemsById = new Dictionary<string, Item>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in assortToFilter.Items)
+        {
+            itemsById.TryAdd(item.Id.ToString(), item);
+        }
+
+        var rootIdsToRemove = new HashSet<MongoId>();
+        foreach (var blockedItem in assortToFilter.Items.Where(item => itemsTplsToRemove.Contains(item.Template)))
+        {
+            var current = blockedItem;
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (
+                !string.IsNullOrWhiteSpace(current.ParentId)
+                && visited.Add(current.Id.ToString())
+                && itemsById.TryGetValue(current.ParentId, out var parent)
+            )
+            {
+                current = parent;
+            }
+
+            // A banned child (for example a mod attachment in a preset) makes the whole offer unavailable.
+            if (string.Equals(current.ParentId, "hideout", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(current.SlotId, "hideout", StringComparison.OrdinalIgnoreCase))
+            {
+                rootIdsToRemove.Add(current.Id);
+            }
+        }
+
+        foreach (var rootId in rootIdsToRemove)
+        {
+            assortToFilter.RemoveItemFromAssort(rootId);
+        }
     }
 }

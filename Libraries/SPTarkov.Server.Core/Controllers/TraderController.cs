@@ -1,6 +1,4 @@
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.BattlePass;
-using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Generators;
 using SPTarkov.Server.Core.Helpers;
@@ -29,9 +27,9 @@ public class TraderController(
     TraderPurchasePersisterService traderPurchasePersisterService,
     FenceService fenceService,
     FenceBaseAssortGenerator fenceBaseAssortGenerator,
-    BattlePassTraderSync battlePassTraderSync,
+    IBattlePassTraderProvider battlePassTraderSync,
     ConfigServer configServer,
-    ItemAcquisitionMaskService acquisitionMask
+    IItemAcquisitionMaskService acquisitionMask
 )
 {
     protected readonly TraderConfig TraderConfig = configServer.GetConfig<TraderConfig>();
@@ -128,7 +126,7 @@ public class TraderController(
             }
 
             // Trader needs to be refreshed
-            if (traderId == BattlePassTraderSync.TraderId)
+            if (traderId == battlePassTraderSync.TraderId)
             {
                 battlePassTraderSync.RefreshExpiredTrader(trader);
             }
@@ -138,7 +136,7 @@ public class TraderController(
             }
 
             // Reset purchase data per trader as they have independent reset times
-            if (traderId != BattlePassTraderSync.TraderId)
+            if (traderId != battlePassTraderSync.TraderId)
             {
                 traderPurchasePersisterService.ResetTraderPurchasesStoredInProfile(traderId);
             }

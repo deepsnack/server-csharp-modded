@@ -1,15 +1,15 @@
-using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MailKit.Net.Smtp;
 using MailKit.Security;
-using MimeKit;
 using Microsoft.AspNetCore.Mvc;
+using MimeKit;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Launcher;
-using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Eft.Profile;
+using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
 using SPTarkov.Server.Core.Utils;
@@ -31,6 +31,7 @@ public class WebRegisterController(
     Services.LastLoginService lastLoginService,
     Services.EditionUpgradeService editionUpgradeService,
     Services.PasswordStoreService passwordStoreService,
+    Services.IAdminTokenService adminTokenService,
     ISptLogger<WebRegisterController> logger
 )
 {
@@ -43,20 +44,11 @@ public class WebRegisterController(
     // 验证码过期时间（邮箱 -> 过期时间）
     private static readonly Dictionary<string, DateTime> VerificationCodeExpiry = new();
 
-    // 管理员 token（server 重启即失效；浏览器关闭后 sessionStorage 清空，客户端不会再发送旧 token）
-    private static readonly ConcurrentDictionary<string, byte> AdminTokens = new();
-
     /// <summary>
     /// 签发并登记一个管理员 token，返回给调用方。供 Portal 兼容 sidecar（同进程）在验证 Portal SSO 短 token 后
-    /// 复用同一鉴权域签发 admin 登录态——admin 页用 X-Admin-Token 携带，<see cref="IsAdminAuthorized"/> 据此放行。
+    /// 复用同一鉴权域签发 admin 登录态——admin 页用 X-Admin-Token 携带，<see cref="Services.IAdminTokenService.IsAdminAuthorized"/> 据此放行。
     /// server 重启即失效，与 admin/login 路径同源。
     /// </summary>
-    public static string IssueAdminToken()
-    {
-        var token = Guid.NewGuid().ToString("N");
-        AdminTokens.TryAdd(token, 0);
-        return token;
-    }
 
     // 验证码有效期（分钟）：读取 core.json 的 smtpConfig.verificationCodeExpiryMinutes，缺省/非法时回退 5
     private int VerificationCodeExpiryMinutes
@@ -69,16 +61,40 @@ public class WebRegisterController(
     }
 
     // 已注册邮箱文件路径（存储在与 database 分离的目录，避免 DatabaseImporter 扫描）
-    private static string RegisteredEmailsFilePath => Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "registered_emails.json");
+    private static string RegisteredEmailsFilePath
+    {
+        get
+        {
+            return Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "registered_emails.json");
+        }
+    }
 
     // 邮箱用户名映射文件路径
-    private static string EmailMappingFilePath => Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "email_mapping.json");
+    private static string EmailMappingFilePath
+    {
+        get
+        {
+            return Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "email_mapping.json");
+        }
+    }
 
     // 管理员版本白名单配置路径
-    private static string AdminConfigFilePath => Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "admin_config.json");
+    private static string AdminConfigFilePath
+    {
+        get
+        {
+            return Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "admin_config.json");
+        }
+    }
 
     // 预注册列表路径（email → 锁定版本）
-    private static string PreRegisteredFilePath => Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "pre_registered.json");
+    private static string PreRegisteredFilePath
+    {
+        get
+        {
+            return Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "webregister", "pre_registered.json");
+        }
+    }
 
     /// <summary>
     /// 获取可用的版本列表
@@ -100,7 +116,7 @@ public class WebRegisterController(
 
             var content = File.ReadAllText(profilesJsonPath);
             using var document = JsonDocument.Parse(content);
-            
+
             var allVersions = new List<string>();
 
             // profiles.json 的每个 key 就是一个版本
@@ -406,14 +422,7 @@ public class WebRegisterController(
                 return null;
             }
 
-            foreach (var kv in saveServer.GetProfiles())
-            {
-                if (kv.Value.ProfileInfo?.Username == username)
-                {
-                    return kv.Key;
-                }
-            }
-            return null;
+            return saveServer.GetSessionIdByUsername(username);
         }
         catch
         {
@@ -554,7 +563,7 @@ public class WebRegisterController(
 
             // 检查用户名是否已存在；仅当磁盘上确有该 profile 才算占用，
             // 否则视为残留的幽灵索引（手动删档或注册中途失败留下），自动清理并放行
-            if (saveServer.GetProfiles().Values.Any(p => p.ProfileInfo?.Username == request.Username))
+            if (saveServer.GetSessionIdByUsername(request.Username!) is not null)
             {
                 if (usingActivationCode)
                 {
@@ -643,8 +652,8 @@ public class WebRegisterController(
     /// <returns>验证码</returns>
     private string GenerateVerificationCode()
     {
-        var random = new Random();
-        return random.Next(100000, 999999).ToString();
+        // ponytail: 线程安全取 6 位数字（原 new Random() 并发下会产出相同序列）
+        return RandomNumberGenerator.GetInt32(100000, 999999).ToString();
     }
 
     /// <summary>
@@ -751,7 +760,7 @@ public class WebRegisterController(
         {
             var emails = LoadRegisteredEmails();
             var normalizedEmail = email.ToLowerInvariant();
-            
+
             if (!emails.Contains(normalizedEmail))
             {
                 emails.Add(normalizedEmail);
@@ -773,7 +782,7 @@ public class WebRegisterController(
         {
             var emails = LoadRegisteredEmails();
             var normalizedEmail = email.ToLowerInvariant();
-            
+
             if (emails.Remove(normalizedEmail))
             {
                 SaveRegisteredEmails(emails);
@@ -802,7 +811,7 @@ public class WebRegisterController(
 
             var content = File.ReadAllText(RegisteredEmailsFilePath);
             using var document = JsonDocument.Parse(content);
-            
+
             var emails = new List<string>();
             if (document.RootElement.TryGetProperty("emails", out var emailsElement))
             {
@@ -934,7 +943,7 @@ public class WebRegisterController(
 
             var content = File.ReadAllText(EmailMappingFilePath);
             using var document = JsonDocument.Parse(content);
-            
+
             var mappings = new Dictionary<string, string>();
             if (document.RootElement.TryGetProperty("mappings", out var mappingsElement))
             {
@@ -1039,7 +1048,7 @@ public class WebRegisterController(
         try
         {
             // 通过 Header 索引按 sessionId 反查 username (不触发完整 profile materialize)
-            var usernameToRemove = saveServer.GetProfiles().TryGetValue(sessionId, out var profileForRemoval) ? profileForRemoval.ProfileInfo?.Username : null;
+            var usernameToRemove = saveServer.GetUsernameBySessionId(sessionId);
 
             if (string.IsNullOrEmpty(usernameToRemove))
             {
@@ -1081,18 +1090,22 @@ public class WebRegisterController(
         {
             var email = request.TryGetProperty("email", out var e) ? e.GetString() : null;
             if (string.IsNullOrEmpty(email))
-                return new { preRegistered = false, lockedVersion = (string?)null };
+            {
+                return new { preRegistered = false, lockedVersion = (string?) null };
+            }
 
             var registrations = LoadPreRegistrations();
             var key = email.ToLowerInvariant();
             if (registrations.TryGetValue(key, out var version))
+            {
                 return new { preRegistered = true, lockedVersion = version };
+            }
 
-            return new { preRegistered = false, lockedVersion = (string?)null };
+            return new { preRegistered = false, lockedVersion = (string?) null };
         }
         catch
         {
-            return new { preRegistered = false, lockedVersion = (string?)null };
+            return new { preRegistered = false, lockedVersion = (string?) null };
         }
     }
 
@@ -1112,13 +1125,16 @@ public class WebRegisterController(
             var adminPassword = _modConfig.WebRegisterConfig?.AdminPassword ?? "";
 
             if (string.IsNullOrEmpty(adminPassword))
+            {
                 return new { success = false, message = "管理员功能未配置密码" };
+            }
 
             if (password != adminPassword)
+            {
                 return new { success = false, message = "密码错误" };
+            }
 
-            var token = Guid.NewGuid().ToString("N");
-            AdminTokens.TryAdd(token, 0);
+            var token = adminTokenService.IssueAdminToken();
             return new { success = true, token };
         }
         catch (Exception ex)
@@ -1133,14 +1149,18 @@ public class WebRegisterController(
     [HttpGet("admin/all-versions")]
     public object AdminGetAllVersions([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
+        {
             return new { success = false, message = "未授权" };
+        }
 
         try
         {
             var profilesJsonPath = Path.Combine(Directory.GetCurrentDirectory(), "SPT_Data", "database", "templates", "profiles.json");
             if (!File.Exists(profilesJsonPath))
+            {
                 return new { success = false, message = "profiles.json 不存在" };
+            }
 
             var content = File.ReadAllText(profilesJsonPath);
             using var document = JsonDocument.Parse(content);
@@ -1159,8 +1179,10 @@ public class WebRegisterController(
     [HttpGet("admin/config")]
     public object AdminGetConfig([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
+        {
             return new { success = false, message = "未授权" };
+        }
 
         return new { success = true, allowedVersions = LoadAllowedVersions() };
     }
@@ -1171,8 +1193,10 @@ public class WebRegisterController(
     [HttpPost("admin/config")]
     public object AdminSaveConfig([FromBody] System.Text.Json.JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
+        {
             return new { success = false, message = "未授权" };
+        }
 
         try
         {
@@ -1182,7 +1206,10 @@ public class WebRegisterController(
                 foreach (var item in arr.EnumerateArray())
                 {
                     var v = item.GetString();
-                    if (!string.IsNullOrEmpty(v)) versions.Add(v);
+                    if (!string.IsNullOrEmpty(v))
+                    {
+                        versions.Add(v);
+                    }
                 }
             }
             SaveAllowedVersions(versions);
@@ -1200,8 +1227,10 @@ public class WebRegisterController(
     [HttpGet("admin/preregistrations")]
     public object AdminGetPreRegistrations([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
+        {
             return new { success = false, message = "未授权" };
+        }
 
         return new { success = true, registrations = LoadPreRegistrations() };
     }
@@ -1212,8 +1241,10 @@ public class WebRegisterController(
     [HttpPost("admin/preregistrations")]
     public object AdminAddPreRegistration([FromBody] System.Text.Json.JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
+        {
             return new { success = false, message = "未授权" };
+        }
 
         try
         {
@@ -1221,10 +1252,14 @@ public class WebRegisterController(
             var version = request.TryGetProperty("version", out var v) ? v.GetString() : null;
 
             if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(version))
+            {
                 return new { success = false, message = "email 和 version 不能为空" };
+            }
 
             if (IsEmailRegistered(email))
+            {
                 return new { success = false, message = "该邮箱已完成注册，无法再添加预注册" };
+            }
 
             var registrations = LoadPreRegistrations();
             registrations[email] = version;
@@ -1243,18 +1278,24 @@ public class WebRegisterController(
     [HttpDelete("admin/preregistrations")]
     public object AdminDeletePreRegistration([FromBody] System.Text.Json.JsonElement request, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
+        {
             return new { success = false, message = "未授权" };
+        }
 
         try
         {
             var email = request.TryGetProperty("email", out var e) ? e.GetString()?.ToLowerInvariant() : null;
             if (string.IsNullOrEmpty(email))
+            {
                 return new { success = false, message = "email 不能为空" };
+            }
 
             var registrations = LoadPreRegistrations();
             if (!registrations.Remove(email))
+            {
                 return new { success = false, message = "未找到该预注册记录" };
+            }
 
             SavePreRegistrations(registrations);
             return new { success = true };
@@ -1269,16 +1310,14 @@ public class WebRegisterController(
     // 私有辅助方法
     // ==============================
 
-    // internal：供同程序集的 BattlePass 管理端复用同一 admin 鉴权域（X-Admin-Token / Portal SSO）。
-    internal static bool IsAdminAuthorized(string? token) =>
-        !string.IsNullOrEmpty(token) && AdminTokens.ContainsKey(token);
-
     private Dictionary<string, string> LoadPreRegistrations()
     {
         try
         {
             if (!File.Exists(PreRegisteredFilePath))
+            {
                 return new Dictionary<string, string>();
+            }
 
             var content = File.ReadAllText(PreRegisteredFilePath);
             using var doc = JsonDocument.Parse(content);
@@ -1286,7 +1325,9 @@ public class WebRegisterController(
             if (doc.RootElement.TryGetProperty("registrations", out var regs))
             {
                 foreach (var prop in regs.EnumerateObject())
+                {
                     result[prop.Name] = prop.Value.GetString()!;
+                }
             }
             return result;
         }
@@ -1301,7 +1342,11 @@ public class WebRegisterController(
         try
         {
             var dir = Path.GetDirectoryName(PreRegisteredFilePath)!;
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
             var json = JsonSerializer.Serialize(new { registrations = data }, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(PreRegisteredFilePath, json);
         }
@@ -1316,7 +1361,9 @@ public class WebRegisterController(
         try
         {
             if (!File.Exists(AdminConfigFilePath))
+            {
                 return new List<string>();
+            }
 
             var content = File.ReadAllText(AdminConfigFilePath);
             using var doc = JsonDocument.Parse(content);
@@ -1326,7 +1373,10 @@ public class WebRegisterController(
                 foreach (var item in arr.EnumerateArray())
                 {
                     var v = item.GetString();
-                    if (!string.IsNullOrEmpty(v)) result.Add(v);
+                    if (!string.IsNullOrEmpty(v))
+                    {
+                        result.Add(v);
+                    }
                 }
             }
             return result;
@@ -1342,7 +1392,11 @@ public class WebRegisterController(
         try
         {
             var dir = Path.GetDirectoryName(AdminConfigFilePath)!;
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
             var json = JsonSerializer.Serialize(new { allowedVersions = versions }, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(AdminConfigFilePath, json);
         }
@@ -1396,16 +1450,16 @@ public class WebRegisterController(
     [HttpGet("admin/accounts")]
     public object AdminSearchAccounts([FromQuery] string? query, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
 
         var q = query?.Trim() ?? string.Empty;
         var results = new List<object>();
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        foreach (var (sessionId, profileInfo) in saveServer.GetProfileInfoSnapshot())
         {
-            var username = profile.ProfileInfo?.Username ?? string.Empty;
+            var username = profileInfo.Username ?? string.Empty;
             var email = GetEmailByUsername(username) ?? string.Empty;
             var idString = sessionId.ToString();
 
@@ -1426,8 +1480,8 @@ public class WebRegisterController(
                     profileId = idString,
                     username,
                     email,
-                    edition = profile.ProfileInfo?.Edition,
-                    lastLogin = lastLogin.HasValue ? DateTimeOffset.FromUnixTimeSeconds(lastLogin.Value).UtcDateTime : (DateTime?)null,
+                    edition = profileInfo.Edition,
+                    lastLogin = lastLogin.HasValue ? DateTimeOffset.FromUnixTimeSeconds(lastLogin.Value).UtcDateTime : (DateTime?) null,
                 }
             );
         }
@@ -1437,12 +1491,12 @@ public class WebRegisterController(
 
     private object HardResetAccount(MongoId sessionId, string profileId)
     {
-        if (!saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
+        if (!saveServer.ProfileExists(sessionId))
         {
             return new { success = false, message = "账号不存在" };
         }
 
-        var username = profile.ProfileInfo?.Username ?? string.Empty;
+        var username = saveServer.GetUsernameBySessionId(sessionId) ?? string.Empty;
         var email = GetEmailByUsername(username);
 
         // 删除存档（内存 + 两种命名的磁盘文件）和登录凭据；force 确保软重置开启时也是真删除。
@@ -1476,7 +1530,7 @@ public class WebRegisterController(
     [HttpPost("admin/accounts/{profileId}/hard-reset")]
     public object AdminHardResetAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1492,29 +1546,13 @@ public class WebRegisterController(
     /// <summary>
     /// 兼容旧后台调用的删除账号接口；行为与硬重置一致。
     /// </summary>
-    [HttpDelete("admin/accounts/{profileId}")]
-    public object AdminDeleteAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
-    {
-        if (!IsAdminAuthorized(adminToken))
-        {
-            return new { success = false, message = "未授权" };
-        }
-
-        if (!MongoId.IsValidMongoId(profileId))
-        {
-            return new { success = false, message = "profileId 无效" };
-        }
-
-        return HardResetAccount(new MongoId(profileId), profileId);
-    }
-
     /// <summary>
     /// 管理员软重置指定账号：仅擦除游戏进度，保留账号身份与注册邮箱（与删除账号的硬重置相对）。
     /// </summary>
     [HttpPost("admin/accounts/{profileId}/soft-reset")]
     public object AdminSoftResetAccount(string profileId, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1525,17 +1563,18 @@ public class WebRegisterController(
         }
 
         var sessionId = new MongoId(profileId);
-        if (!saveServer.GetProfiles().TryGetValue(sessionId, out var profile))
+        if (!saveServer.ProfileExists(sessionId))
         {
             return new { success = false, message = "账号不存在" };
         }
+
+        var username = saveServer.GetUsernameBySessionId(sessionId) ?? string.Empty;
 
         if (!saveServer.SoftResetProfile(sessionId))
         {
             return new { success = false, message = "软重置失败" };
         }
 
-        var username = profile.ProfileInfo?.Username ?? string.Empty;
         logger.Warning($"[WebRegister] 管理员软重置账号: {username} profileId={profileId}");
         return new { success = true, message = $"账号 {username} 的游戏进度已重置（账号与邮箱保留）" };
     }
@@ -1549,7 +1588,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1560,7 +1599,7 @@ public class WebRegisterController(
             return new { success = false, message = "缺少二次确认 confirm=true" };
         }
 
-        var ids = saveServer.GetProfiles().Keys.ToList();
+        var ids = saveServer.GetProfileIdsSnapshot();
         var done = 0;
         foreach (var id in ids)
         {
@@ -1579,7 +1618,7 @@ public class WebRegisterController(
     [HttpGet("admin/activation-codes")]
     public object AdminListActivationCodes([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1593,7 +1632,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1619,7 +1658,7 @@ public class WebRegisterController(
     [HttpDelete("admin/activation-codes/{code}")]
     public object AdminRevokeActivationCode(string code, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1632,7 +1671,7 @@ public class WebRegisterController(
     [HttpDelete("admin/activation-codes/{code}/record")]
     public object AdminDeleteActivationCode(string code, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1645,7 +1684,7 @@ public class WebRegisterController(
     [HttpGet("admin/activation-codes/logs")]
     public object AdminGetActivationLogs([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1661,7 +1700,7 @@ public class WebRegisterController(
     [HttpGet("admin/activation-codes/logs/export")]
     public IActionResult AdminExportActivationLogs([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new UnauthorizedResult();
         }
@@ -1679,7 +1718,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1695,7 +1734,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1711,7 +1750,7 @@ public class WebRegisterController(
     [HttpGet("admin/upgrade/editions")]
     public object AdminUpgradeListEditions([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1723,7 +1762,7 @@ public class WebRegisterController(
     [HttpGet("admin/upgrade/aliases")]
     public object AdminUpgradeListAliases([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1737,7 +1776,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1760,7 +1799,7 @@ public class WebRegisterController(
     [HttpDelete("admin/upgrade/aliases/{from}")]
     public object AdminUpgradeRemoveAlias(string from, [FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1773,7 +1812,7 @@ public class WebRegisterController(
     [HttpGet("admin/upgrade/config")]
     public object AdminUpgradeGetConfig([FromHeader(Name = "X-Admin-Token")] string? adminToken = null)
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1787,7 +1826,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1804,7 +1843,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }
@@ -1852,7 +1891,7 @@ public class WebRegisterController(
             stashBonusAdditions = preview.StashBonusAdditions.Select(b => new { templateId = b.TemplateId.ToString() }).ToList(),
             hideoutAreaLevelChanges = preview.HideoutAreaLevelChanges.Select(c => new
             {
-                areaType = (int)c.AreaType,
+                areaType = (int) c.AreaType,
                 areaName = c.AreaType.ToString(),
                 oldLevel = c.OldLevel,
                 newLevel = c.NewLevel,
@@ -1870,7 +1909,7 @@ public class WebRegisterController(
         [FromHeader(Name = "X-Admin-Token")] string? adminToken = null
     )
     {
-        if (!IsAdminAuthorized(adminToken))
+        if (!adminTokenService.IsAdminAuthorized(adminToken))
         {
             return new { success = false, message = "未授权" };
         }

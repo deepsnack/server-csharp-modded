@@ -51,7 +51,7 @@ public class DialogueController(
     {
         // 懒加载时只扫已加载档（每个心跳都会跑，不得触发全量物化）；
         // 未加载档的过期对话物品在其物化后的下个心跳清理
-        var profiles = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var profiles = profileHelper.GetActiveProfilesSnapshot();
         foreach (var (sessionId, _) in profiles)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))
@@ -296,6 +296,7 @@ public class DialogueController(
             New = 0,
             Type = request.Type,
         };
+        saveServer.MarkProfileDirty(profile.ProfileInfo!.ProfileId!.Value);
 
         if (request.Type != MessageType.UserMessage)
         {
@@ -468,6 +469,10 @@ public class DialogueController(
         {
             logger.Error(serverLocalisationService.GetText("dialogue-unable_to_find_in_profile", new { sessionId, dialogueId }));
         }
+        else
+        {
+            saveServer.MarkProfileDirty(sessionId);
+        }
     }
 
     /// <summary>
@@ -487,6 +492,7 @@ public class DialogueController(
         }
 
         dialog.Pinned = shouldPin;
+        saveServer.MarkProfileDirty(sessionId);
     }
 
     /// <summary>
@@ -516,6 +522,8 @@ public class DialogueController(
         {
             dialogs[dialogId].New = 0;
         }
+
+        saveServer.MarkProfileDirty(sessionId);
     }
 
     /// <summary>
@@ -556,6 +564,7 @@ public class DialogueController(
     public virtual async ValueTask<string> SendMessage(MongoId sessionId, SendMessageRequest request)
     {
         mailSendService.SendPlayerMessageToNpc(sessionId, request.DialogId, request.Text);
+        saveServer.MarkProfileDirty(sessionId);
 
         var chatBot = DialogueChatBots.FirstOrDefault(cb => cb.GetChatBot().Id == request.DialogId);
 
@@ -609,10 +618,17 @@ public class DialogueController(
             return;
         }
 
+        var removedAny = false;
         foreach (var message in dialog.Messages.Where(MessageHasExpired))
         {
             // Reset expired message items data
             message.Items = new();
+            removedAny = true;
+        }
+
+        if (removedAny)
+        {
+            saveServer.MarkProfileDirty(sessionId);
         }
     }
 
@@ -649,9 +665,11 @@ public class DialogueController(
         // Only add the profile to the friends list if it doesn't already exist
         var profile = saveServer.GetProfile(sessionID);
         profile.FriendProfileIds.Add(request.To.Value);
+        saveServer.MarkProfileDirty(sessionID);
 
         // We need to delay this so that the friend request gets properly added to the clientside list before we accept it
-        _ = new Timer(
+        // ponytail: 原 `new Timer(...)` 未持引用会被 GC 且 FromMicroseconds(1000) 实为 1ms（注释意图 1 秒）；Task.Delay 无泄漏无 GC 风险
+        _ = Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(
             _ =>
             {
                 var notification = new WsFriendsListAccept
@@ -661,9 +679,7 @@ public class DialogueController(
                 };
                 notificationSendHelper.SendMessage(sessionID, notification);
             },
-            null,
-            TimeSpan.FromMicroseconds(1000),
-            Timeout.InfiniteTimeSpan // This should mean it does this callback once after 1 second and then stops
+            TaskScheduler.Default
         );
 
         return new FriendRequestSendResponse
@@ -682,7 +698,10 @@ public class DialogueController(
     public virtual void DeleteFriend(MongoId sessionID, DeleteFriendRequest request)
     {
         var profile = saveServer.GetProfile(sessionID);
-        profile?.FriendProfileIds?.Remove(request.FriendId);
+        if (profile?.FriendProfileIds?.Remove(request.FriendId) == true)
+        {
+            saveServer.MarkProfileDirty(sessionID);
+        }
     }
 
     /// <summary>
@@ -701,5 +720,6 @@ public class DialogueController(
         }
 
         dialogToClear.Messages?.Clear();
+        saveServer.MarkProfileDirty(sessionId);
     }
 }

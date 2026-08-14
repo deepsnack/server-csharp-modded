@@ -31,7 +31,61 @@ public class ProfileController(
     /// <returns></returns>
     public virtual List<MiniProfile> GetMiniProfiles()
     {
+        if (saveServer.LazyEnabled)
+        {
+            var loadedProfiles = saveServer.GetLoadedProfilesSnapshot();
+            return saveServer
+                .GetLazyHeaders()
+                .Select(kvp =>
+                    loadedProfiles.ContainsKey(kvp.Key) ? GetMiniProfile(kvp.Key) : GetMiniProfileFromHeader(kvp.Key, kvp.Value)
+                )
+                .ToList();
+        }
+
         return saveServer.GetProfiles().Select(kvp => GetMiniProfile(kvp.Key)).ToList();
+    }
+
+    /// <summary>从轻量头构造启动器档案条目，不触发整档物化。</summary>
+    internal MiniProfile GetMiniProfileFromHeader(MongoId sessionId, LazyProfileHeader header)
+    {
+        var maxLevel = profileHelper.GetMaxLevel();
+        if (header.Level is null)
+        {
+            return new MiniProfile
+            {
+                Username = header.ProfileInfo.Username ?? string.Empty,
+                Nickname = "unknown",
+                Side = "unknown",
+                CurrentLevel = 0,
+                CurrentExperience = 0,
+                PreviousExperience = 0,
+                NextLevel = profileHelper.GetExperience(2),
+                MaxLevel = maxLevel,
+                Edition = header.ProfileInfo.Edition ?? string.Empty,
+                ProfileId = sessionId.ToString(),
+                Wipe = header.ProfileInfo.IsWiped,
+                InvalidOrUnloadableProfile = header.ProfileInfo.InvalidOrUnloadableProfile,
+                SptData = header.SptData ?? profileHelper.GetDefaultSptDataObject(),
+            };
+        }
+
+        var level = header.Level.Value;
+        return new MiniProfile
+        {
+            Username = header.ProfileInfo.Username,
+            Nickname = header.Nickname,
+            Side = header.Side,
+            CurrentLevel = level,
+            CurrentExperience = header.Experience ?? 0,
+            PreviousExperience = level == 0 ? 0 : profileHelper.GetExperience(level),
+            NextLevel = profileHelper.GetExperience(level + 1),
+            MaxLevel = maxLevel,
+            Edition = header.ProfileInfo.Edition ?? string.Empty,
+            ProfileId = sessionId.ToString(),
+            Wipe = header.ProfileInfo.IsWiped,
+            InvalidOrUnloadableProfile = header.ProfileInfo.InvalidOrUnloadableProfile,
+            SptData = header.SptData,
+        };
     }
 
     /// <summary>
@@ -208,10 +262,18 @@ public class ProfileController(
     {
         var result = new List<SearchFriendResponse>();
 
-        // Find any profiles with a nickname containing the entered name
-        var allProfiles = saveServer.GetProfiles().Values;
+        if (saveServer.LazyEnabled)
+        {
+            return saveServer
+                .GetLazyHeaders()
+                .Values.Where(header => header.Nickname?.Contains(request.Nickname, StringComparison.OrdinalIgnoreCase) == true)
+                .Select(profileHelper.GetChatRoomMemberFromProfileHeader)
+                .OfType<SearchFriendResponse>()
+                .ToList();
+        }
 
-        foreach (var profile in allProfiles)
+        // Find any profiles with a nickname containing the entered name
+        foreach (var profile in saveServer.GetProfiles().Values)
         {
             var pmcProfile = profile?.CharacterData?.PmcData;
             if (!pmcProfile?.Info?.LowerNickname?.Contains(request.Nickname.ToLowerInvariant()) ?? false)
@@ -305,7 +367,7 @@ public class ProfileController(
                 Nickname = profileToViewPmc.Info.Nickname,
                 Side = profileToViewPmc.Info.Side,
                 Experience = profileToViewPmc.Info.Experience,
-                MemberCategory = (int)(profileToViewPmc.Info.MemberCategory ?? MemberCategory.Default),
+                MemberCategory = (int) (profileToViewPmc.Info.MemberCategory ?? MemberCategory.Default),
                 BannedState = profileToViewPmc.Info.BannedState,
                 BannedUntil = profileToViewPmc.Info.BannedUntil,
                 RegistrationDate = profileToViewPmc.Info.RegistrationDate,

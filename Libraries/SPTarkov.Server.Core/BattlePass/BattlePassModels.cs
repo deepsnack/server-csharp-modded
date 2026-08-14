@@ -130,7 +130,13 @@ public record BpSeason
 
     /// <summary>循环每轮实际所需经验（CycleXp 为正则用之，否则回退 BaseXp）。</summary>
     [JsonIgnore]
-    public int CycleXpEffective => CycleXp > 0 ? CycleXp : BaseXp;
+    public int CycleXpEffective
+    {
+        get
+        {
+            return CycleXp > 0 ? CycleXp : BaseXp;
+        }
+    }
 
     // ===== 任务系统全局设置（管理员可调）=====
 
@@ -357,8 +363,8 @@ public record BpTaskTemplate
     public bool SingleRaid { get; set; }
 
     /// <summary>
-    ///     是否要求「一命完成」：所有进度必须来自同一战局，且只有最终状态为 Survived 才能结算。
-    ///     与旧 <see cref="SingleRaid"/> 分离，保证旧单局任务仍保持原有结算语义。
+    ///     是否要求「一命完成」：进度可跨正常撤离累计，只有战局内死亡才清零；达到目标后需 Survived 才结算。
+    ///     与 <see cref="SingleRaid"/> 分离，后者仍要求单局一次达标。
     /// </summary>
     [JsonPropertyName("oneLife")]
     public bool OneLife { get; set; }
@@ -1233,6 +1239,16 @@ public record BpQuestObjective
 
     [JsonPropertyName("width")]
     public BpQuestValueCompare? Width { get; set; }
+
+    /// <summary>
+    ///     中文目标文本。注入以编译后 condition id 为键的 locale；为空时由服务端生成不暴露 tpl 的安全描述。
+    /// </summary>
+    [JsonPropertyName("textZh")]
+    public string? TextZh { get; set; }
+
+    /// <summary>英文目标文本；为空时回退中文文本，再回退服务端自动描述。</summary>
+    [JsonPropertyName("textEn")]
+    public string? TextEn { get; set; }
 
     /// <summary>目标描述（仅后台展示，可空；本地化名由任务名/描述承载）。</summary>
     [JsonPropertyName("note")]

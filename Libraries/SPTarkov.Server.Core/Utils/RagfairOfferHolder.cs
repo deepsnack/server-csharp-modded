@@ -394,28 +394,24 @@ public class RagfairOfferHolder(
     {
         lock (_processExpiredOffersLock)
         {
-            var offers = GetOffers();
-            Parallel.ForEach(
-                offers,
-                offer =>
+            foreach (var offer in _offersById.Values)
+            {
+                if (_expiredOfferIds.ContainsKey(offer.Id) || offer.IsTraderOffer())
                 {
-                    if (_expiredOfferIds.ContainsKey(offer.Id) || offer.IsTraderOffer())
-                    {
-                        // Already flagged or trader offer (handled separately), skip
-                        return;
-                    }
-
-                    if (!offer.IsStale(timestamp))
-                    {
-                        return;
-                    }
-
-                    if (!_expiredOfferIds.TryAdd(offer.Id, 0))
-                    {
-                        logger.Warning($"Unable to add offer: {offer.Id} to expired offers as it already exists");
-                    }
+                    // Already flagged or trader offer (handled separately), skip
+                    continue;
                 }
-            );
+
+                if (!offer.IsStale(timestamp))
+                {
+                    continue;
+                }
+
+                if (!_expiredOfferIds.TryAdd(offer.Id, 0))
+                {
+                    logger.Warning($"Unable to add offer: {offer.Id} to expired offers as it already exists");
+                }
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ using SPTarkov.Server.Core.Controllers;
 using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
+using SPTarkov.Server.Core.Services;
 
 namespace SPTarkov.Server.Core.Services.Portal;
 
@@ -21,7 +22,7 @@ namespace SPTarkov.Server.Core.Services.Portal;
 /// </para>
 /// </summary>
 [Injectable(InjectionType.Singleton)]
-public class PortalBridgeService(ISptLogger<PortalBridgeService> logger, ConfigServer configServer) : IDisposable
+public class PortalBridgeService(ISptLogger<PortalBridgeService> logger, ConfigServer configServer, IAdminTokenService adminTokenService) : IDisposable
 {
     private const string PortalAudience = "webregister";
     private const string PortalDisplayName = "网页注册管理";
@@ -155,9 +156,9 @@ public class PortalBridgeService(ISptLogger<PortalBridgeService> logger, ConfigS
         if (payload is null) { await WriteJson(res, 401, new { error = "token 无效或已过期" }); return; }
         if (!_replayGuard.TryAccept(payload.Jti)) { await WriteJson(res, 401, new { error = "token 重放" }); return; }
 
-        // 通过 → 签发 WebRegister 自己的 admin token（与控制器同进程共享 AdminTokens），
+        // 通过 → 签发 WebRegister 自己的 admin token（IAdminTokenService 与控制器共享同一鉴权域），
         // 经 URL fragment 注入 admin 页（fragment 不进服务器日志、不发往服务端），admin JS 读取后存入 sessionStorage。
-        var adminToken = WebRegisterController.IssueAdminToken();
+        var adminToken = adminTokenService.IssueAdminToken();
 
         var adminPath = !string.IsNullOrEmpty(ret) && ret.StartsWith("/register/", StringComparison.Ordinal)
             ? ret

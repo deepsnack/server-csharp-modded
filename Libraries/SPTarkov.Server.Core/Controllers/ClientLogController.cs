@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Logging;
 using SPTarkov.Server.Core.Models.Spt.Logging;
@@ -9,7 +10,7 @@ namespace SPTarkov.Server.Core.Controllers;
 [Injectable]
 public class ClientLogController(ISptLogger<ClientLogController> logger)
 {
-    private readonly Dictionary<string, int> _forwardedWarningRepeats = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _forwardedWarningRepeats = new(StringComparer.Ordinal);
     private int _suppressedForwardedWarnings;
 
     /// <summary>
@@ -40,16 +41,12 @@ public class ClientLogController(ISptLogger<ClientLogController> logger)
         }
 
         var key = $"{logRequest.Source}\u001f{level}\u001f{logRequest.Message}";
-        lock (_forwardedWarningRepeats)
+        // 首次出现返回 false（放行），重复出现计数并抑制；ConcurrentDictionary 无锁路径，
+        // 避免多客户端高频 client/log 在全局锁上串行。
+        if (!_forwardedWarningRepeats.TryAdd(key, 1))
         {
-            if (!_forwardedWarningRepeats.TryGetValue(key, out var count))
-            {
-                _forwardedWarningRepeats[key] = 1;
-                return false;
-            }
-
-            _forwardedWarningRepeats[key] = count + 1;
-            _suppressedForwardedWarnings++;
+            _forwardedWarningRepeats.AddOrUpdate(key, 1, (_, count) => count + 1);
+            Interlocked.Increment(ref _suppressedForwardedWarnings);
             if (_suppressedForwardedWarnings % 100 == 0)
             {
                 var samples = string.Join(
@@ -63,6 +60,8 @@ public class ClientLogController(ISptLogger<ClientLogController> logger)
 
             return true;
         }
+
+        return false;
     }
 
     private static string SampleKey(string key)

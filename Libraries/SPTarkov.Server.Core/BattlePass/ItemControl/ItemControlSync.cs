@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Models.Common;
@@ -82,7 +83,7 @@ public class ItemControlSync(
                 continue;
             }
 
-            var rootId = DeterministicId($"{ov.TraderId}:{ov.Tpl}", "bp-itemctrl-trader");
+            var rootId = BattlePassSnapshotCodec.DeterministicId($"{ov.TraderId}:{ov.Tpl}", "bp-itemctrl-trader");
             (desired.TryGetValue(traderId, out var map) ? map : desired[traderId] = new())[rootId] = ov;
         }
 
@@ -180,7 +181,7 @@ public class ItemControlSync(
                 continue;
             }
 
-            var rewardId = DeterministicId($"{ov.QuestId}:{ov.RewardGroup}:{ov.Tpl}", "bp-itemctrl-quest");
+            var rewardId = BattlePassSnapshotCodec.DeterministicId($"{ov.QuestId}:{ov.RewardGroup}:{ov.Tpl}", "bp-itemctrl-quest");
             (desired.TryGetValue(questId, out var map) ? map : desired[questId] = new())[rewardId] = (ov, tpl);
         }
 
@@ -227,7 +228,7 @@ public class ItemControlSync(
             return; // 幂等
         }
 
-        var itemId = DeterministicId($"{rewardId}:item", "bp-itemctrl-qitem");
+        var itemId = BattlePassSnapshotCodec.DeterministicId($"{rewardId}:item", "bp-itemctrl-qitem");
         rewards.Add(new Reward
         {
             Id = rewardId,
@@ -273,7 +274,7 @@ public class ItemControlSync(
             }
             else if (ov.Role != "ingredient")
             {
-                desiredRecipes[DeterministicId($"{ov.Tpl}", "bp-itemctrl-recipe")] = ov;
+                desiredRecipes[BattlePassSnapshotCodec.DeterministicId($"{ov.Tpl}", "bp-itemctrl-recipe")] = ov;
             }
         }
 
@@ -499,12 +500,5 @@ public class ItemControlSync(
         }
 
         return result;
-    }
-
-    private static MongoId DeterministicId(string seed, string salt)
-    {
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(salt + ":" + seed));
-        return new MongoId(Convert.ToHexString(bytes).ToLowerInvariant()[..24]);
     }
 }

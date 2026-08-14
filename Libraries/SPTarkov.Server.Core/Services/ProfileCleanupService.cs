@@ -85,7 +85,7 @@ public class ProfileCleanupService(
         // 懒加载时用头索引判断活跃度（不物化整档）；否则用内存 profile 表
         var candidates = saveServer.LazyEnabled
             ? saveServer.GetLazyHeaders().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo.Username, kv.Value.FilePath))
-            : saveServer.GetProfiles().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo?.Username, FilePath: (string?)null));
+            : saveServer.GetProfiles().Select(kv => (Id: kv.Key, kv.Value.ProfileInfo?.Username, FilePath: (string?) null));
 
         foreach (var (sessionId, username, headerPath) in candidates)
         {
@@ -168,6 +168,11 @@ public class ProfileCleanupService(
 
         if (removed > 0)
         {
+            if (saveServer.LazyEnabled)
+            {
+                saveServer.RebuildLazyProfileHeaders();
+            }
+
             logger.Success($"[ProfileCleanup] profile file dedupe: removed {removed} stale file(s).");
         }
     }

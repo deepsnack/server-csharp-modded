@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.Server.Core.BattlePass.ItemControl;
 using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Extensions;
@@ -143,7 +144,7 @@ public class QuestSync(
 
             start.Add(new QuestCondition
             {
-                Id = DeterministicId($"{id}:start:{pre.QuestId}", "bp-quest-cond"),
+                Id = BattlePassSnapshotCodec.DeterministicId($"{id}:start:{pre.QuestId}", "bp-quest-cond"),
                 ConditionType = "Quest",
                 DynamicLocale = false,
                 Target = new ListOrT<string>(new List<string> { preId.ToString() }, null),
@@ -174,6 +175,10 @@ public class QuestSync(
             ["Fail"] = new(),
         };
 
+        // 依据完成目标推断原版任务类型：击杀/地图转移 → Elimination/Completion，上交/找物 → PickUp，
+        // 原版任务 type 参与客户端任务分类与图标（QuestType），与硬编码 Completion 不同。
+        var questType = InferQuestType(finish);
+
         return new Quest
         {
             Id = id,
@@ -182,7 +187,7 @@ public class QuestSync(
             TraderId = traderId,
             Location = string.IsNullOrWhiteSpace(cq.Location) ? "any" : cq.Location,
             Image = "",
-            Type = QuestTypeEnum.Completion,
+            Type = questType,
             Restartable = false,
             Side = "Pmc",
             Name = string.IsNullOrWhiteSpace(cq.NameZh) ? cq.QuestName : cq.NameZh,
@@ -191,6 +196,14 @@ public class QuestSync(
             DeclinePlayerMessage = $"{id} declinePlayerMessage",
             CompletePlayerMessage = $"{id} completePlayerMessage",
             AcceptanceAndFinishingSource = "eft",
+            // 与原版任务模板保持一致：status 即客户端 AppearStatus（Locked=0），
+            // 缺失字段在 JSON 反序列化时默认等价，但显式补齐避免客户端模板解析差异。
+            Status = 0,
+            StartedMessageText = $"{id} startedMessageText",
+            SuccessMessageText = $"{id} successMessageText",
+            FailMessageText = $"{id} failMessageText",
+            Note = $"{id} note",
+            ChangeQuestMessageText = $"{id} changeQuestMessageText",
             Conditions = new QuestConditionTypes
             {
                 Started = new List<QuestCondition>(),
@@ -203,10 +216,23 @@ public class QuestSync(
         };
     }
 
+    /// <summary>依据完成目标推断原版任务类型（参与客户端任务分类/图标）。击杀与转移→Elimination，其余→Completion。</summary>
+    private static QuestTypeEnum InferQuestType(IReadOnlyList<QuestCondition> finish)
+    {
+        if (finish.Any(c =>
+                string.Equals(c.ConditionType, "CounterCreator", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(c.Type, "Elimination", StringComparison.OrdinalIgnoreCase)))
+        {
+            return QuestTypeEnum.Elimination;
+        }
+
+        return QuestTypeEnum.Completion;
+    }
+
     /// <summary>把本地目标编译成原版 AvailableForFinish 条件。</summary>
     private QuestCondition? CompileObjective(MongoId questId, BpQuestObjective obj, int index, MongoId? previousConditionId)
     {
-        var condId = DeterministicId($"{questId}:obj:{index}:{obj.Type}:{obj.Tpl}:{obj.Target}", "bp-quest-obj");
+        var condId = ObjectiveConditionId(questId, obj, index);
         var count = Math.Max(1, obj.Count);
         QuestCondition? result = null;
 
@@ -271,7 +297,7 @@ public class QuestSync(
 
             var killCond = new QuestConditionCounterCondition
             {
-                Id = DeterministicId($"{condId}:kill", "bp-quest-killcond"),
+                Id = BattlePassSnapshotCodec.DeterministicId($"{condId}:kill", "bp-quest-killcond"),
                 ConditionType = "Kills",
                 DynamicLocale = false,
                 Target = CompileTarget(targets, "Any"),
@@ -314,7 +340,7 @@ public class QuestSync(
                 DoNotResetIfCounterCompleted = false,
                 Counter = new QuestConditionCounter
                 {
-                    Id = DeterministicId($"{condId}:counter", "bp-quest-counter").ToString(),
+                    Id = BattlePassSnapshotCodec.DeterministicId($"{condId}:counter", "bp-quest-counter").ToString(),
                     Conditions = nested,
                 },
             };
@@ -325,7 +351,7 @@ public class QuestSync(
             {
                 new()
                 {
-                    Id = DeterministicId($"{condId}:transit", "bp-quest-transitcond"),
+                    Id = BattlePassSnapshotCodec.DeterministicId($"{condId}:transit", "bp-quest-transitcond"),
                     DynamicLocale = false,
                     ConditionType = "ExitStatus",
                     Status = ["Transit"],
@@ -347,7 +373,7 @@ public class QuestSync(
                 DoNotResetIfCounterCompleted = false,
                 Counter = new QuestConditionCounter
                 {
-                    Id = DeterministicId($"{condId}:counter", "bp-quest-counter").ToString(),
+                    Id = BattlePassSnapshotCodec.DeterministicId($"{condId}:counter", "bp-quest-counter").ToString(),
                     Conditions = nested,
                 },
             };
@@ -359,7 +385,7 @@ public class QuestSync(
             [
                 new VisibilityCondition
                 {
-                    Id = DeterministicId($"{condId}:visibility:{previousConditionId}", "bp-quest-visible").ToString(),
+                    Id = BattlePassSnapshotCodec.DeterministicId($"{condId}:visibility:{previousConditionId}", "bp-quest-visible").ToString(),
                     Target = previousConditionId.Value.ToString(),
                     ConditionType = "CompleteCondition",
                     DynamicLocale = false,
@@ -370,7 +396,13 @@ public class QuestSync(
         return result;
     }
 
-    private static void AddLocationCondition(
+    /// <summary>
+    ///     追加 Location 子条件。地图 id 必须用客户端权威值 <see cref="LocationBase.Id"/>
+    ///     （如 "Labyrinth"/"Woods"，首字母大写），否则客户端 GClass4045 用大小写敏感的
+    ///     <c>List.Contains</c> 匹配 <c>GameWorld.LocationId</c> 失败 → 击杀 counter 永不累计。
+    ///     后台配置可能填目录名（小写 "labyrinth"），编译时按 base.Id 规范化；未知/mod 地图保留原值。
+    /// </summary>
+    private void AddLocationCondition(
         ICollection<QuestConditionCounterCondition> nested,
         MongoId conditionId,
         IReadOnlyCollection<string> locations)
@@ -380,13 +412,34 @@ public class QuestSync(
             return;
         }
 
+        var canonical = locations.Select(CanonicalLocationId).Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        if (canonical.Count == 0)
+        {
+            return;
+        }
+
         nested.Add(new QuestConditionCounterCondition
         {
-            Id = DeterministicId($"{conditionId}:location:{string.Join(',', locations)}", "bp-quest-locationcond"),
+            Id = BattlePassSnapshotCodec.DeterministicId($"{conditionId}:location:{string.Join(',', canonical)}", "bp-quest-locationcond"),
             DynamicLocale = false,
             ConditionType = "Location",
-            Target = new ListOrT<string>(locations.ToList(), null),
+            Target = new ListOrT<string>(canonical, null),
         });
+    }
+
+    /// <summary>把目录名/任意大小写的地图 id 规范化为客户端权威 <see cref="LocationBase.Id"/>；未知返回原值。</summary>
+    private string CanonicalLocationId(string locationId)
+    {
+        foreach (var (_, location) in databaseService.GetLocations().GetDictionary())
+        {
+            if (location?.Base is not null
+                && string.Equals(location.Base.Id, locationId, StringComparison.OrdinalIgnoreCase))
+            {
+                return location.Base.Id;
+            }
+        }
+
+        return locationId;
     }
 
     private static ListOrT<string> CompileTarget(IReadOnlyList<string> targets, string fallback)
@@ -476,13 +529,13 @@ public class QuestSync(
     }
 
     /// <summary>把 mod 本地奖励列表编译成原版 <see cref="Reward"/>。</summary>
-    private List<Reward> CompileRewards(MongoId questId, string bucket, List<BpQuestReward> src)
+    internal List<Reward> CompileRewards(MongoId questId, string bucket, List<BpQuestReward> src)
     {
         var result = new List<Reward>();
         var index = 0;
         foreach (var r in src)
         {
-            var rewardId = DeterministicId(
+            var rewardId = BattlePassSnapshotCodec.DeterministicId(
                 $"{questId}:{bucket}:{index}:{r.Type}:{r.Tpl}:{r.TraderId}:{r.OfferId}:{r.RecipeId}",
                 "bp-quest-reward");
             var type = (r.Type ?? "item").ToLowerInvariant();
@@ -495,6 +548,7 @@ public class QuestSync(
                 }
 
                 var count = Math.Max(1, r.Count);
+                var rewardItemId = BattlePassSnapshotCodec.DeterministicId($"{rewardId}:item", "bp-quest-ritem");
                 result.Add(new Reward
                 {
                     Id = rewardId,
@@ -502,11 +556,12 @@ public class QuestSync(
                     Index = index++,
                     Value = count,
                     FindInRaid = r.FoundInRaid,
+                    Target = rewardItemId.ToString(),
                     Items = new List<Item>
                     {
                         new()
                         {
-                            Id = DeterministicId($"{rewardId}:item", "bp-quest-ritem"),
+                            Id = rewardItemId,
                             Template = tpl,
                             ParentId = null,
                             Upd = new Upd { StackObjectsCount = count },
@@ -596,7 +651,7 @@ public class QuestSync(
                     continue;
                 }
 
-                var rewardItemId = DeterministicId($"{rewardId}:production-item", "bp-quest-production-item");
+                var rewardItemId = BattlePassSnapshotCodec.DeterministicId($"{rewardId}:production-item", "bp-quest-production-item");
                 var count = Math.Max(1, recipe.Count ?? 1);
                 result.Add(new Reward
                 {
@@ -788,7 +843,7 @@ public class QuestSync(
 
                 foreach (var cq in BattlePassStore.GetCustomQuests())
                 {
-                    if (string.IsNullOrWhiteSpace(cq.Id))
+                    if (!MongoIdEx.TryParse(cq.Id, out var questId))
                     {
                         continue;
                     }
@@ -803,6 +858,18 @@ public class QuestSync(
                     localeData[$"{cq.Id} acceptPlayerMessage"] = name;
                     localeData[$"{cq.Id} declinePlayerMessage"] = name;
                     localeData[$"{cq.Id} completePlayerMessage"] = name;
+
+                    // 本地 Mod 物品可能没有把名称写入所有语言表。只补缺失键，不覆盖物品 Mod 自带翻译；
+                    // 即使客户端无法解析图标，Started/Success 奖励仍能显示后台选择时保存的名称。
+                    AddRewardItemNameFallbacks(localeData, cq.StartedRewards);
+                    AddRewardItemNameFallbacks(localeData, cq.Rewards);
+
+                    for (var index = 0; index < cq.Objectives.Count; index++)
+                    {
+                        var objective = cq.Objectives[index];
+                        var conditionId = ObjectiveConditionId(questId, objective, index);
+                        localeData[conditionId.ToString()] = ObjectiveLocaleText(objective, isEn, localeData);
+                    }
                 }
 
                 return localeData;
@@ -812,10 +879,99 @@ public class QuestSync(
         _localeHooked = true;
     }
 
-    private static MongoId DeterministicId(string seed, string salt)
+    internal static MongoId ObjectiveConditionId(MongoId questId, BpQuestObjective objective, int index)
     {
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(salt + ":" + seed));
-        return new MongoId(Convert.ToHexString(bytes).ToLowerInvariant()[..24]);
+        return BattlePassSnapshotCodec.DeterministicId(
+            $"{questId}:obj:{index}:{objective.Type}:{objective.Tpl}:{objective.Target}",
+            "bp-quest-obj");
+    }
+
+    internal static string ObjectiveLocaleText(
+        BpQuestObjective objective,
+        bool isEnglish,
+        IReadOnlyDictionary<string, string> localeData)
+    {
+        var configured = isEnglish
+            ? FirstNonBlank(objective.TextEn, objective.TextZh, objective.Note)
+            : FirstNonBlank(objective.TextZh, objective.Note);
+        if (configured is not null)
+        {
+            return configured;
+        }
+
+        var count = Math.Max(1, objective.Count);
+        var itemName = ResolveItemDisplayName(objective.Tpl, isEnglish, localeData);
+        return (objective.Type ?? "").ToLowerInvariant() switch
+        {
+            "handoveritem" => isEnglish
+                ? $"Hand over {itemName} ×{count}"
+                : $"上交{itemName} ×{count}",
+            "weaponassembly" => isEnglish
+                ? $"Hand over a matching {itemName} ×{count}"
+                : $"上交符合要求的{itemName} ×{count}",
+            "kills" => isEnglish
+                ? $"Eliminate the specified target ×{count}"
+                : $"击杀指定目标 ×{count}",
+            "transit" => isEnglish
+                ? $"Complete the specified transit ×{count}"
+                : $"完成指定地图转移 ×{count}",
+            _ => isEnglish
+                ? $"Complete the specified objective ×{count}"
+                : $"完成指定目标 ×{count}",
+        };
+    }
+
+    internal static void AddRewardItemNameFallbacks(
+        IDictionary<string, string> localeData,
+        IEnumerable<BpQuestReward> rewards)
+    {
+        foreach (var reward in rewards)
+        {
+            if (!string.Equals(reward.Type, "item", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(reward.Tpl)
+                || string.IsNullOrWhiteSpace(reward.Name))
+            {
+                continue;
+            }
+
+            var name = reward.Name.Trim();
+            var nameKey = $"{reward.Tpl} Name";
+            var shortNameKey = $"{reward.Tpl} ShortName";
+            if (!localeData.ContainsKey(nameKey))
+            {
+                localeData[nameKey] = name;
+            }
+
+            if (!localeData.ContainsKey(shortNameKey))
+            {
+                localeData[shortNameKey] = name;
+            }
+        }
+    }
+
+    private static string ResolveItemDisplayName(
+        string? tpl,
+        bool isEnglish,
+        IReadOnlyDictionary<string, string> localeData)
+    {
+        if (!string.IsNullOrWhiteSpace(tpl))
+        {
+            foreach (var suffix in new[] { " Name", " ShortName" })
+            {
+                if (localeData.TryGetValue($"{tpl}{suffix}", out var value)
+                    && !string.IsNullOrWhiteSpace(value)
+                    && !string.Equals(value, tpl, StringComparison.OrdinalIgnoreCase))
+                {
+                    return value.Trim();
+                }
+            }
+        }
+
+        return isEnglish ? "specified item" : "指定物品";
+    }
+
+    private static string? FirstNonBlank(params string?[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
     }
 }

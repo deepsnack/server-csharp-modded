@@ -13,7 +13,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 ///     <see cref="BattlePassTraderSync.Sync"/> 热重注入。商人元信息/头像属商人级配置与文件上传，
 ///     不走审核（仅管理员），故不在此处理。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class TraderChangeHandler(
     BattlePassTraderSync traderSync,
     ISptLogger<TraderChangeHandler> logger

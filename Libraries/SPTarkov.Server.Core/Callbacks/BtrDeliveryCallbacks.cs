@@ -1,6 +1,7 @@
-﻿using SPTarkov.DI.Annotations;
+using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Extensions;
+using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Profile;
 using SPTarkov.Server.Core.Models.Spt.Config;
@@ -18,7 +19,8 @@ public class BtrDeliveryCallbacks(
     BtrDeliveryService btrDeliveryService,
     TimeUtil timeUtil,
     ConfigServer configServer,
-    SaveServer saveServer
+    SaveServer saveServer,
+    ProfileHelper profileHelper
 ) : IOnUpdate
 {
     protected readonly BtrDeliveryConfig BtrDeliveryConfig = configServer.GetConfig<BtrDeliveryConfig>();
@@ -42,7 +44,7 @@ public class BtrDeliveryCallbacks(
     {
         // Process each installed profile.
         // 懒加载时只扫已加载档：BTR 送货邮件只有玩家在线才可见，未加载档物化后由下个周期补发
-        var profilesToProcess = saveServer.LazyEnabled ? saveServer.GetLoadedProfilesSnapshot() : saveServer.GetProfiles();
+        var profilesToProcess = profileHelper.GetActiveProfilesSnapshot();
         foreach (var (sessionId, _) in profilesToProcess)
         {
             if (saveServer.IsProfileInvalidOrUnloadable(sessionId))

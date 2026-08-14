@@ -17,6 +17,7 @@ public sealed class ProfileRepairSummary(MongoId sessionId, string reason)
     public int StackCountsFixed { get; set; }
     public int TagsSanitized { get; set; }
     public int CustomizationsRestored { get; set; }
+    public int InvalidOffersRemoved { get; set; }
 
     public bool Changed =>
         EmptyIdsRemapped > 0
@@ -28,7 +29,8 @@ public sealed class ProfileRepairSummary(MongoId sessionId, string reason)
         || BrokenReferencesRemoved > 0
         || StackCountsFixed > 0
         || TagsSanitized > 0
-        || CustomizationsRestored > 0;
+        || CustomizationsRestored > 0
+        || InvalidOffersRemoved > 0;
 
     public string Describe()
     {
@@ -43,6 +45,7 @@ public sealed class ProfileRepairSummary(MongoId sessionId, string reason)
         AddPart(parts, "stack counts fixed", StackCountsFixed);
         AddPart(parts, "tags sanitized", TagsSanitized);
         AddPart(parts, "customizations restored", CustomizationsRestored);
+        AddPart(parts, "invalid ragfair offers removed", InvalidOffersRemoved);
 
         return parts.Count == 0 ? "no changes" : string.Join(", ", parts);
     }

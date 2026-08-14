@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using SPTarkov.Server.Core.BattlePass.Administration;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
+using SPTarkov.Server.Core.Models.Eft.Profile;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Routers;
@@ -31,8 +33,9 @@ public class BattlePassTraderSync(
     TraderHelper traderHelper,
     BattlePassItemBuilder itemBuilder,
     SaveServer saveServer,
+    ProfileHelper profileHelper,
     ISptLogger<BattlePassTraderSync> logger
-)
+) : IBattlePassTraderProvider
 {
     /// <summary>通行证商人固定 id。</summary>
     public const string TraderIdHex = "66f1b2c3d4e5a6b7c8d90011";
@@ -42,13 +45,20 @@ public class BattlePassTraderSync(
 
     private bool _localeHooked;
 
-    public static MongoId TraderId => new(TraderIdHex);
+    /// <summary>通行证商人 id（实例属性，经 <see cref="IBattlePassTraderProvider"/> 供 Core 侧消费）。</summary>
+    public MongoId TraderId => new(TraderIdHex);
 
     /// <summary>旧版购买权虚拟任务 id；仅用于重置时清理历史存档残留。</summary>
-    public static MongoId UnlockQuestId(string offerId) => DeterministicId(offerId, "bp-offer-unlock");
+    public static MongoId UnlockQuestId(string offerId)
+    {
+        return BattlePassSnapshotCodec.DeterministicId(offerId, "bp-offer-unlock");
+    }
 
     /// <summary>某 offer 在货架里的根 item id（确定性，questassort/barter 据此挂钩）。</summary>
-    public static MongoId OfferRootItemId(string offerId) => DeterministicId(offerId, "bp-offer-root");
+    public static MongoId OfferRootItemId(string offerId)
+    {
+        return BattlePassSnapshotCodec.DeterministicId(offerId, "bp-offer-root");
+    }
 
     /// <summary>构建并注入（或重注入）通行证商人到 DB。OnLoad 及后台保存后调用。</summary>
     public void Sync(bool resetPurchaseState = false)
@@ -98,7 +108,7 @@ public class BattlePassTraderSync(
         {
             var offers = BattlePassStore.GetOffers();
             trader.Assort = BuildAssort(offers);
-            trader.Base.NextResupply = (int)traderHelper.GetNextUpdateTimestamp(TraderId);
+            trader.Base.NextResupply = (int) traderHelper.GetNextUpdateTimestamp(TraderId);
             trader.Base.RefreshTraderRagfairOffers = true;
             traderAssortHelper.InvalidateQuestAssortCache();
             ResetPurchaseState(offers);
@@ -113,7 +123,7 @@ public class BattlePassTraderSync(
     private TraderBase BuildBase(BpTraderConfig cfg)
     {
         var currency = Enum.TryParse<CurrencyType>(cfg.Currency, true, out var c) ? c : CurrencyType.RUB;
-        var resupply = (int)DateTimeOffset.UtcNow.AddSeconds(Math.Max(60, cfg.ResupplySeconds)).ToUnixTimeSeconds();
+        var resupply = (int) DateTimeOffset.UtcNow.AddSeconds(Math.Max(60, cfg.ResupplySeconds)).ToUnixTimeSeconds();
         var hasAvatar = TryResolveAvatarFile(cfg, out var avatarPath);
         var avatarUrl = hasAvatar
             ? $"/files/trader/avatar/{TraderIdHex}{Path.GetExtension(avatarPath).ToLowerInvariant()}"
@@ -333,7 +343,7 @@ public class BattlePassTraderSync(
 
     private void ResetPurchaseState(List<BpTraderOffer> offers)
     {
-        var nativeProfiles = ResetNativeTraderPurchasesForAllProfiles();
+        var nativeProfiles = ResetNativeTraderPurchasesForProfiles();
         var shopStateKeys = ResetLegacyTraderShopState(offers);
         var progressProfiles = ResetLegacyTraderPurchaseProgress();
 
@@ -345,12 +355,13 @@ public class BattlePassTraderSync(
         }
     }
 
-    private int ResetNativeTraderPurchasesForAllProfiles()
+    private int ResetNativeTraderPurchasesForProfiles()
     {
         var resetProfiles = 0;
-        foreach (var (sessionId, profile) in saveServer.GetProfiles())
+        var profiles = profileHelper.GetActiveProfilesSnapshot();
+        foreach (var (sessionId, profile) in profiles)
         {
-            if (profile.TraderPurchases?.Remove(TraderId) != true)
+            if (!ResetNativeTraderPurchase(profile))
             {
                 continue;
             }
@@ -367,6 +378,15 @@ public class BattlePassTraderSync(
         }
 
         return resetProfiles;
+    }
+
+    /// <summary>
+    ///     Remove the native purchase record from one materialized profile. Lazy profiles use this from a
+    ///     SaveLoadRouter so offline profiles do not need to be loaded during startup or trader refresh.
+    /// </summary>
+    internal static bool ResetNativeTraderPurchase(SptProfile profile)
+    {
+        return profile.TraderPurchases?.Remove(new MongoId(TraderIdHex)) == true;
     }
 
     private static int ResetLegacyTraderShopState(List<BpTraderOffer> offers)
@@ -431,12 +451,5 @@ public class BattlePassTraderSync(
             .Select(offer => offer.Id?.Trim())
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => $"trader:{id}");
-    }
-
-    private static MongoId DeterministicId(string seed, string salt)
-    {
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(salt + ":" + seed));
-        return new MongoId(Convert.ToHexString(bytes).ToLowerInvariant()[..24]);
     }
 }

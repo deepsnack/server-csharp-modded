@@ -34,7 +34,7 @@ public class QuestHelper(
     SeasonalEventService seasonalEventService,
     MailSendService mailSendService,
     ConfigServer configServer,
-    BattlePass.QuestClientMaskService questMaskService,
+    IQuestClientMaskService questMaskService,
     ICloner cloner
 )
 {
@@ -1115,6 +1115,7 @@ public class QuestHelper(
     public List<Quest> GetClientQuests(MongoId sessionID)
     {
         List<Quest> questsToShowPlayer = [];
+        Dictionary<MongoId, QuestStatusEnum> statusOverrides = [];
         var profile = profileHelper.GetPmcProfile(sessionID);
         if (profile is null)
         {
@@ -1136,7 +1137,7 @@ public class QuestHelper(
             var questInProfile = profile.Quests.FirstOrDefault(x => x.QId == quest.Id);
             if (questInProfile is not null)
             {
-                quest.SptStatus = questInProfile.Status;
+                statusOverrides[quest.Id] = questInProfile.Status;
                 questsToShowPlayer.Add(quest);
                 continue;
             }
@@ -1176,7 +1177,7 @@ public class QuestHelper(
             // Quest has no conditions, standing or loyalty conditions, add to visible quest list
             if (questRequirements.Count == 0 && loyaltyRequirements.Count == 0 && standingRequirements.Count == 0)
             {
-                quest.SptStatus = QuestStatusEnum.AvailableForStart;
+                statusOverrides[quest.Id] = QuestStatusEnum.AvailableForStart;
                 questsToShowPlayer.Add(quest);
                 continue;
             }
@@ -1250,12 +1251,21 @@ public class QuestHelper(
 
             if (haveCompletedPreviousQuest && passesLoyaltyRequirements && passesStandingRequirements)
             {
-                quest.SptStatus = QuestStatusEnum.AvailableForStart;
+                statusOverrides[quest.Id] = QuestStatusEnum.AvailableForStart;
                 questsToShowPlayer.Add(quest);
             }
         }
 
-        return UpdateQuestsForGameEdition(cloner.Clone(questsToShowPlayer), profile.Info.GameVersion);
+        var clonedQuests = cloner.Clone(questsToShowPlayer);
+        foreach (var quest in clonedQuests)
+        {
+            if (statusOverrides.TryGetValue(quest.Id, out var status))
+            {
+                quest.SptStatus = status;
+            }
+        }
+
+        return UpdateQuestsForGameEdition(clonedQuests, profile.Info.GameVersion);
     }
 
     /// <summary>

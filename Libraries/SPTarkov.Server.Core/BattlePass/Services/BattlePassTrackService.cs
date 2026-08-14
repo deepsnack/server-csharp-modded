@@ -321,8 +321,8 @@ public class BattlePassTrackService(
             }
             else
             {
-            // 客户端补充上报切到新战局：归档旧局 id，重置本场已应用计数。
-            // 服务端权威收尾即便 raidId 不同，也先保留当前基准，兼容旧版客户端已预先入账的同类进度。
+                // 客户端补充上报切到新战局：归档旧局 id，重置本场已应用计数。
+                // 服务端权威收尾即便 raidId 不同，也先保留当前基准，兼容旧版客户端已预先入账的同类进度。
                 if (!authoritative)
                 {
                     ArchiveRaid(prog, prog.CurrentRaidId);
@@ -356,28 +356,10 @@ public class BattlePassTrackService(
             var fullDelta = ComputeDelta(tpl, payload); // 本场累计快照换算出的「本场至今总量」
             var target = Math.Max(1, tpl.Count);
             var prevApplied = prog.CurrentRaidApplied.TryGetValue(active.TaskId, out var p) ? p : 0;
-            bool advanced;
-
-            if (tpl.SingleRaid || tpl.OneLife)
+            var advanced = ApplyProgressSnapshot(active, tpl, fullDelta, prevApplied);
+            if (tpl.SingleRaid || fullDelta > prevApplied)
             {
-                // 单局/一命任务：进度即本场累计值（不跨局累加；切局时本值自然从小重新计）
-                advanced = active.Progress != fullDelta;
-                active.Progress = fullDelta;
                 prog.CurrentRaidApplied[active.TaskId] = fullDelta;
-            }
-            else
-            {
-                var inc = fullDelta - prevApplied; // 自上次快照以来的新增量
-                advanced = inc > 0;
-                if (advanced)
-                {
-                    active.Progress += inc; // 跨局累计
-                }
-
-                if (fullDelta > prevApplied)
-                {
-                    prog.CurrentRaidApplied[active.TaskId] = fullDelta; // 刷新本场已应用基准（乱序变小不回退）
-                }
             }
 
             // 一命任务必须等权威战后结果确认 Survived；实时补充上报只能展示本局进度，绝不提前发奖。
@@ -443,7 +425,6 @@ public class BattlePassTrackService(
         RaidTrackPayload payload,
         RaidTrackResult result)
     {
-        var survived = string.Equals(payload.ExitStatus, "Survived", StringComparison.OrdinalIgnoreCase);
         foreach (var active in prog.ActiveTasks)
         {
             if (active.CreditedXp
@@ -454,7 +435,8 @@ public class BattlePassTrackService(
             }
 
             var target = Math.Max(1, tpl.Count);
-            if (survived && active.Progress >= target)
+            var resolution = ResolveOneLifeProgress(payload.ExitStatus, active.Progress, target);
+            if (resolution == OneLifeProgressResolution.Complete)
             {
                 var xp = battlePassService.CreditTaskCompletion(profileId, prog, season, tpl);
                 active.CreditedXp = true;
@@ -463,12 +445,47 @@ public class BattlePassTrackService(
                 result.Credited.Add(new RaidTrackCredit { TaskId = active.TaskId, GainedXp = xp, Done = true });
                 logger.Info($"[SPT-BattlePass] 一命任务达成 profile={profileId} task={active.TaskId} +{xp}xp (raid={payload.RaidId})");
             }
-            else
+            else if (resolution == OneLifeProgressResolution.Reset)
             {
                 active.Progress = 0;
                 result.Credited.RemoveAll(credit => credit.TaskId == active.TaskId && !credit.Done);
             }
         }
+    }
+
+    /// <summary>
+    ///     Apply one cumulative snapshot. Only single-raid tasks replace their progress; one-life tasks accumulate
+    ///     across successful extractions and are reset separately when a death result is finalized.
+    /// </summary>
+    internal static bool ApplyProgressSnapshot(BpActiveTask active, BpTaskTemplate template, int fullDelta, int previousApplied)
+    {
+        if (template.SingleRaid)
+        {
+            var advanced = active.Progress != fullDelta;
+            active.Progress = fullDelta;
+            return advanced;
+        }
+
+        var increment = fullDelta - previousApplied;
+        if (increment <= 0)
+        {
+            return false;
+        }
+
+        active.Progress += increment;
+        return true;
+    }
+
+    internal static OneLifeProgressResolution ResolveOneLifeProgress(string? exitStatus, int progress, int target)
+    {
+        if (string.Equals(exitStatus, "Killed", StringComparison.OrdinalIgnoreCase))
+        {
+            return OneLifeProgressResolution.Reset;
+        }
+
+        return string.Equals(exitStatus, "Survived", StringComparison.OrdinalIgnoreCase) && progress >= target
+            ? OneLifeProgressResolution.Complete
+            : OneLifeProgressResolution.Preserve;
     }
 
     private static bool TaskSourceCanProcess(BpTaskTemplate tpl, RaidTrackSource source)
@@ -800,6 +817,13 @@ public class BattlePassTrackService(
     {
         return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     }
+}
+
+internal enum OneLifeProgressResolution
+{
+    Preserve,
+    Reset,
+    Complete,
 }
 
 /// <summary>一次 <see cref="BattlePassTrackService.ApplyRaidTrack"/> 的结算结果（回传客户端/前端展示）。</summary>

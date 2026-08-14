@@ -20,7 +20,7 @@ public class BattlePassTraderAccessService(ISptLogger<BattlePassTraderAccessServ
 
     public TraderAssort Filter(MongoId sessionId, MongoId traderId, TraderAssort assort, bool isFlea)
     {
-        if (traderId != BattlePassTraderSync.TraderId)
+        if (traderId != new MongoId(BattlePassTraderSync.TraderIdHex))
         {
             return assort;
         }

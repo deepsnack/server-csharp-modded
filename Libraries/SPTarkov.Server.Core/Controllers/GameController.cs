@@ -33,7 +33,8 @@ public class GameController(
     SeasonalEventService seasonalEventService,
     GiftService giftService,
     RaidTimeAdjustmentService raidTimeAdjustmentService,
-    ProfileActivityService profileActivityService
+    ProfileActivityService profileActivityService,
+    SaveServer saveServer
 )
 {
     protected readonly BotConfig BotConfig = configServer.GetConfig<BotConfig>();
@@ -70,6 +71,7 @@ public class GameController(
         }
 
         fullProfile.FriendProfileIds ??= [];
+        saveServer.MarkProfileDirty(sessionId);
 
         if (fullProfile.ProfileInfo?.IsWiped is not null && fullProfile.ProfileInfo.IsWiped.Value)
         {

@@ -14,7 +14,7 @@ namespace SPTarkov.Server.Core.BattlePass.Administration;
 ///     <see cref="ItemControlSync.Sync"/> 即时重放对账（内存 DB 增删即时生效，无需重启）。
 ///     全局物品封禁（bans）与快捷跳蚤黑名单属独立操作，不在此处理。</para>
 /// </summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class ItemsChangeHandler(
     ItemControlSync controlSync,
     ISptLogger<ItemsChangeHandler> logger

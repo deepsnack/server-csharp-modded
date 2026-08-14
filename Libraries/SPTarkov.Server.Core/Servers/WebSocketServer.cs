@@ -1,4 +1,4 @@
-﻿using System.Net.WebSockets;
+using System.Net.WebSockets;
 using Microsoft.AspNetCore.Http;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Models.Utils;
@@ -52,7 +52,10 @@ public class WebSocketServer(IEnumerable<IWebSocketConnectionHandler> webSocketC
             logger.Debug($"[WS] Starting read loop for websocket reference {webSocketIdContext}");
         }
 
-        var thread = Task.Factory.StartNew(
+        // 读循环是纯 async（99% 时间 await ReceiveAsync），无需 LongRunning 专用线程：
+        // 原 Task.Factory.StartNew(..., LongRunning) 每个连接占用一个专用线程（notifier 多客户端时线程数暴涨），
+        // Task.Run 改为线程池异步任务，await 期间零线程占用；Task.Run 自动 unwrap async lambda。
+        var thread = Task.Run(
             async () =>
             {
                 var messageBuffer = new List<byte>();
@@ -121,9 +124,13 @@ public class WebSocketServer(IEnumerable<IWebSocketConnectionHandler> webSocketC
                     }
                 }
             },
-            wsToken,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default
+            wsToken
+        );
+
+        // 读循环异常兜底（Task.Run unwrap 后异常会传播到 thread，避免静默丢失）
+        _ = thread.ContinueWith(
+            t => logger.Error($"[WS] read loop for websocket reference {webSocketIdContext} faulted: {t.Exception}"),
+            TaskContinuationOptions.OnlyOnFaulted
         );
 
         var counter = 0;
@@ -141,8 +148,8 @@ public class WebSocketServer(IEnumerable<IWebSocketConnectionHandler> webSocketC
                 counter++;
             }
 
-            // Keep this thread sleeping unless this status changes.
-            Thread.Sleep(1000);
+            // Keep the request thread free while waiting for the next keep-alive check.
+            await Task.Delay(1000);
         }
 
         if (logger.IsLogEnabled(LogLevel.Debug))

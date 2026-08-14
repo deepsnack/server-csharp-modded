@@ -8,7 +8,7 @@ using SPTarkov.Server.Core.Models.Utils;
 namespace SPTarkov.Server.Core.BattlePass.Administration;
 
 /// <summary>商店模块命令处理器：商品新增/编辑/删除、刷新周期修改。</summary>
-[Injectable]
+[Injectable(InjectionType.Singleton)]
 public class ShopChangeHandler(
     ISptLogger<ShopChangeHandler> logger
 ) : IBattlePassChangeHandler

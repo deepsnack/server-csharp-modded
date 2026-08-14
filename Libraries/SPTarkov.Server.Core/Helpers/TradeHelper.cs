@@ -244,6 +244,18 @@ public class TradeHelper(
 
         // 购买后该 session 的库存/限购变化 → 只清该 session 的商人缓存（原 TradeBuyInvalidatePatch 内联）
         fleaTraderCache.InvalidateTraderForSession(sessionID.ToString());
+
+        // 商人购买会改 assort 实时库存/限购（flea search 响应内嵌其快照）→ 精准清 search 桶（不动全局价格缓存）
+        fleaTraderCache.InvalidateFleaSearch();
+    }
+
+    /// <summary>
+    ///     Invalidate flea read responses after the caller has completed an offer-pool mutation.
+    ///     Kept on TradeHelper so TradeController's established constructor remains binary compatible.
+    /// </summary>
+    public void InvalidateFleaCache()
+    {
+        fleaTraderCache.InvalidateFlea();
     }
 
     /// <summary>

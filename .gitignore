@@ -429,3 +429,13 @@ Libraries/SPTarkov.Server.Core/Utils/ProgramStatics.Generated.cs
 
 # Not necessary to be included in the repo
 Testing/**/Properties/launchSettings.json
+
+# Ephemeral working notes / planning scratch (not source)
+/findings.md
+/progress.md
+/task_plan.md
+/.planning/
+# Agent working logs / build artifacts (not source)
+*.codex.log
+/dist/
+/write-test.tmp

@@ -75,7 +75,7 @@ public class LauncherController(
     /// <returns>Account information</returns>
     public Info? Find(MongoId sessionId)
     {
-        return saveServer.GetProfiles().TryGetValue(sessionId, out var profile) ? profile.ProfileInfo : null;
+        return saveServer.GetProfileInfoBySessionId(sessionId);
     }
 
     /// <summary>
@@ -140,14 +140,13 @@ public class LauncherController(
     public async Task<MongoId> Register(RegisterData info)
     {
         if (!CoreConfig.Features.AllowRegistration)
-            return MongoId.Empty();
-
-        foreach (var (_, profile) in saveServer.GetProfiles())
         {
-            if (info.Username == profile.ProfileInfo?.Username)
-            {
-                return MongoId.Empty();
-            }
+            return MongoId.Empty();
+        }
+
+        if (saveServer.GetSessionIdByUsername(info.Username) is not null)
+        {
+            return MongoId.Empty();
         }
 
         return await CreateAccount(info);
@@ -161,7 +160,7 @@ public class LauncherController(
     {
         var profileId = new MongoId();
         var scavId = new MongoId();
-        
+
         var newProfileDetails = new Info
         {
             ProfileId = profileId,
@@ -196,6 +195,7 @@ public class LauncherController(
         if (!sessionID.IsEmpty)
         {
             saveServer.GetProfile(sessionID).ProfileInfo!.Username = info.Change;
+            saveServer.MarkProfileDirty(sessionID);
         }
 
         return sessionID;
@@ -238,6 +238,7 @@ public class LauncherController(
 
             // Clear any data modders may have stored
             profileDataService.ClearProfileData(sessionId);
+            saveServer.MarkProfileDirty(sessionId);
             await saveServer.SaveAsync();
         }
 

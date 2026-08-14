@@ -51,9 +51,7 @@ public class BattlePassReviewController(
         var principal = Auth();
         if (principal is null) return new { success = false, message = "未授权" };
 
-        // 协管只能看自己的提交
-        var queryActor = principal.IsCollaborator ? principal.ActorId : actor;
-        var items = changeStore.QueryChanges(module, status, queryActor, Math.Clamp(limit, 1, 200));
+        var items = reviewService.Query(principal, module, status, actor, limit);
         return new { success = true, items };
     }
 
@@ -88,12 +86,8 @@ public class BattlePassReviewController(
         var principal = Auth();
         if (principal is null) return new { success = false, message = "未授权" };
 
-        var change = changeStore.GetChange(id);
+        var change = reviewService.Get(principal, id);
         if (change is null) return new { success = false, message = "不存在" };
-
-        // 协管只能看自己的
-        if (principal.IsCollaborator && !string.Equals(change.Actor.ActorId, principal.ActorId, StringComparison.OrdinalIgnoreCase))
-            return new { success = false, message = "无权查看" };
 
         // 解析 payload 中引用的物品 tpl → 中文名，供审核页显示物品名而非裸 MongoId。
         // 批量解析：三张 locale 表一次性物化后复用（勿在循环里单发 ResolveItemNameZh，

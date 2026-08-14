@@ -74,14 +74,13 @@ public class LauncherV2Controller(
     public async Task<bool> Register(RegisterData info)
     {
         if (!CoreConfig.Features.AllowRegistration)
-            return false;
-
-        foreach (var (_, profile) in saveServer.GetProfiles())
         {
-            if (info.Username == profile.ProfileInfo!.Username)
-            {
-                return false;
-            }
+            return false;
+        }
+
+        if (saveServer.GetSessionIdByUsername(info.Username) is not null)
+        {
+            return false;
         }
 
         return !(await CreateAccount(info)).IsEmpty;
